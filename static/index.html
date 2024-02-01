@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Dispatcher Service</title>
+  <script>
+    // AJAX를 사용하여 dispatcher2.py의 서비스를 호출하는 함수
+    function callDispatcherService() {
+      // 질문을 입력받는다
+      var answer = document.getElementById('answer').value;
+      // XMLHttpRequest 객체 생성
+      var xhr = new XMLHttpRequest();
+      // 요청을 초기화
+      xhr.open("POST", "/complete/invoke", true);
+      // 요청의 타입을 JSON으로 설정
+      xhr.setRequestHeader("Content-Type", "application/json");
+      // 응답이 도착했을 때의 처리
+      xhr.onreadystatechange = function () {
+        // 요청이 완료되고, 응답이 성공적으로 도착했을 때
+        if (xhr.readyState == 4 && xhr.status == 200) {
+          // 응답을 파싱하여 결과를 출력
+          document.getElementById('result').innerText = xhr.responseText;
+        }
+      };
+      // 요청을 전송 (질문 데이터를 JSON 문자열로 변환하여 전송)
+      xhr.send(JSON.stringify({input: {answer: answer}}));
+    }
+  </script>
+</head>
+<body>
+  <h1>Dispatcher Service</h1>
+  <input type="text" id="answer" placeholder="Enter your question here">
+  <button onclick="callDispatcherService()">Ask</button>
+  <p id="result"></p>
+</body>
+</html>
+

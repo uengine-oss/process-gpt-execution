@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Dispatcher Service</title>
+  <script>
+    // 비동기 함수를 사용하여 dispatcher2.py의 서비스를 호출하고, 결과를 스트림으로 출력하는 함수
+    async function callDispatcherService() {
+      // 질문을 입력받는다
+      const question = document.getElementById('question').value;
+      // Fetch API를 사용하여 비동기 요청을 보낸다
+      try {
+        const response = await fetch("/question/stream", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({input: {question: question}})
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        // 응답을 스트림으로 처리
+        const reader = response.body.getReader();
+        const stream = new ReadableStream({
+          async start(controller) {
+            while (true) {
+              const {done, value} = await reader.read();
+              if (done) {
+                break;
+              }
+              // TextDecoder를 사용하여 Uint8Array를 문자열로 변환
+              const chunk = new TextDecoder("utf-8").decode(value);
+              controller.enqueue(chunk);
+            }
+            controller.close();
+            reader.releaseLock();
+          }
+        });
+        // 스트림을 텍스트로 변환하여 결과를 출력
+        new Response(stream).text().then((result) => {
+          document.getElementById('result').innerText = result;
+        });
+      } catch (e) {
+        console.error("Error:", e);
+        document.getElementById('result').innerText = 'Error: ' + e.message;
+      }
+    }
+  </script>
+</head>
+<body>
+  <h1>Dispatcher Service</h1>
+  <input type="text" id="question" placeholder="Enter your question here">
+  <button onclick="callDispatcherService()">Ask</button>
+  <p id="result"></p>
+</body>
+</html>
+
