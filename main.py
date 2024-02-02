@@ -232,9 +232,9 @@ if __name__ == "__main__":
 """
 
 # try this: 
-INST_ID=$(http :8000/complete/invoke input[process_instance_id]="new" input[process_definition_id]="company-enterance" input[activity_id]="start" | python3 -c "import sys, json; print(json.loads(json.loads(sys.stdin.read())['output'])['instanceId'])")
+INST_ID=$(http :8000/complete/invoke input[process_instance_id]="new" input[process_definition_id]="company-enterance" | python3 -c "import sys, json; print(json.loads(json.loads(sys.stdin.read())['output'])['instanceId'])")
 echo $INST_ID
-http :8000/complete/invoke input[answer]="지원분야는 SW engineer" input[process_instance_id]="$INST_ID" input[activity_id]="configure" # 400  error
+http :8000/complete/invoke input[answer]="지원분야는 SW engineer" input[process_instance_id]="$INST_ID" input[activity_id]="congrate" # 400  error
 http :8000/complete/invoke input[answer]="지원분야는 SW engineer" input[process_instance_id]="invalid instance id" input[activity_id]="registration"  # 404 error
 http :8000/complete/invoke input[answer]="지원분야는 SW engineer" input[process_instance_id]="$INST_ID" input[activity_id]="registration"  | python3 -c "import sys, json; print(json.loads(json.loads(sys.stdin.read())['output'])['nextActivities'])" 
 # next activity id should be 'nextMail'
