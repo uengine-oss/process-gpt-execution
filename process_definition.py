@@ -1,48 +1,58 @@
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, Optional
+from pydantic import BaseModel, Field
 
+class DataSource(BaseModel):
+    type: str
+    sql: Optional[str] = None
 
+class Variable(BaseModel):
+    name: str
+    description: str
+    type: str
+    dataSource: Optional[DataSource] = None
 
-class ProcessData:
-    def __init__(self, data: Dict[str, str]):
-        self.name = data.get("name")
-        self.description = data.get("description")
-        self.type = data.get("type")
+class ProcessData(BaseModel):
+    name: str
+    description: str
+    type: str
+    dataSource: Optional[DataSource] = None
 
-class ProcessRole:
-    def __init__(self, role: Dict[str, str]):
-        self.name = role.get("name")
-        self.resolutionRule = role.get("resolutionRule")
+class ProcessRole(BaseModel):
+    name: str
+    resolutionRule: str
 
-class ProcessActivity:
-    def __init__(self, activity: Dict[str, Union[str, List[str]]]):
-        self.name = activity.get("name")
-        self.id = activity.get("id")
-        self.type = activity.get("type")
-        self.description = activity.get("description")
-        self.instruction = activity.get("instruction")
-        self.role = activity.get("role")
-        self.inputData = activity.get("inputData", [])
-        self.outputData = activity.get("outputData", [])
-        self.checkpoints = activity.get("checkpoints", [])
-        self.py_code = activity.get("pythonCode", [])
+class DataField(BaseModel):
+    mandatory: Optional[bool] = None
+    type: Optional[str] = None
+    value: Optional[Union[str, bool]] = None
 
-class ProcessSequence:
-    def __init__(self, sequence: Dict[str, str]):
-        self.source = sequence.get("source")
-        self.target = sequence.get("target")
-        
-class ProcessDefinition:
-    def __init__(self, definition: Dict[str, Any]):
-        self.name = definition.get("processDefinitionName")
-        self.id = definition.get("processDefinitionId")
-        self.description = definition.get("description")
-        self.data = [ProcessData(data) for data in definition.get("data", [])]
-        self.roles = [ProcessRole(role) for role in definition.get("roles", [])]
-        self.activities = [ProcessActivity(activity) for activity in definition.get("activities", [])]
-        self.sequences = [ProcessSequence(sequence) for sequence in definition.get("sequences", [])]
+class ProcessActivity(BaseModel):
+    name: str
+    id: str
+    type: str
+    description: str
+    instruction: Optional[str] = None
+    role: str
+    inputData: List[Dict[str, DataField]] = Field(default_factory=list)
+    outputData: List[Dict[str, DataField]] = Field(default_factory=list)
+    checkpoints: List[str] = []
+    pythonCode: Optional[str] = None
 
+class ProcessSequence(BaseModel):
+    source: str
+    target: str
+    condition: Optional[str] = None
+
+class ProcessDefinition(BaseModel):
+    processDefinitionName: str
+    processDefinitionId: str
+    description: str
+    data: List[ProcessData] = []
+    roles: List[ProcessRole] = []
+    activities: List[ProcessActivity] = []
+    sequences: List[ProcessSequence] = []
 
     def is_starting_activity(self, activity_id: str) -> bool:
         """
@@ -59,7 +69,6 @@ class ProcessDefinition:
                 return False
         return True
 
-    from typing import Optional
     def find_initial_activity(self) -> Optional[ProcessActivity]:
         """
         Finds and returns the initial activity of the process, which is the one with no incoming sequences.
@@ -91,15 +100,20 @@ class ProcessDefinition:
         next_activities_ids = [sequence.target for sequence in self.sequences if sequence.source == current_activity_id]
         return [activity for activity in self.activities if activity.id in next_activities_ids]
 
-def load_process_definition(json_str: str) -> ProcessDefinition:
-    definition = json.loads(json_str)
-    return ProcessDefinition(definition)
+    def find_activity_by_id(self, activity_id: str) -> Optional[ProcessActivity]:
+        for activity in self.activities:
+            if activity.id == activity_id:
+                return activity
+        return None
 
+def load_process_definition(definition_str: str) -> ProcessDefinition:
+    definition_json = json.loads(definition_str)
+    return ProcessDefinition(**definition_json)
 # Example usage
 if __name__ == "__main__":
-    json_str = '{"processDefinitionName": "Example Process", "processDefinitionId": "example_process", "description": "예제 프로세스 설명", "data": [{"name": "example data", "description": "example data description", "type": "Text"}], "roles": [{"name": "example role", "resolutionRule": "example rule"}], "activities": [{"name": "example activity", "id": "example_activity", "type": "ScriptActivity", "description": "activity description", "instruction": "activity instruction", "role": "example role", "inputData": [{"name": "example input data"}], "outputData": [{"name": "example output data"}], "checkpoints":["checkpoint 1"], "pythonCode": "import smtplib\\nfrom email.mime.multipart import MIMEMultipart\\nfrom email.mime.text import MIMEText\\n\\nsmtp = smtplib.SMTP(\'smtp.gmail.com\', 587)\\nsmtp.starttls()\\nsmtp.login(\'jinyoungj@gmail.com\', \'raqw nmmn xuuc bsyi\')\\n\\nmsg = MIMEMultipart()\\nmsg[\'Subject\'] = \'Test mail\'\\nmsg.attach(MIMEText(\'This is a test mail.\'))\\n\\nsmtp.sendmail(\'jinyoungj@gmail.com\', \'jyjang@uengine.org\', msg.as_string())\\nsmtp.quit()"}], "sequences": [{"source": "activity_id_1", "target": "activity_id_2"}]}'
+    json_str = '{"processDefinitionName": "Example Process", "processDefinitionId": "example_process", "description": "제 프로세스 설명", "data": [{"name": "example data", "description": "example data description", "type": "Text"}], "roles": [{"name": "example role", "resolutionRule": "example rule"}], "activities": [{"name": "example activity", "id": "example_activity", "type": "ScriptActivity", "description": "activity description", "instruction": "activity instruction", "role": "example role", "inputData": [{"name": "example input data"}], "outputData": [{"name": "example output data"}], "checkpoints":["checkpoint 1"], "pythonCode": "import smtplib\\nfrom email.mime.multipart import MIMEMultipart\\nfrom email.mime.text import MIMEText\\n\\nsmtp = smtplib.SMTP(\'smtp.gmail.com\', 587)\\nsmtp.starttls()\\nsmtp.login(\'jinyoungj@gmail.com\', \'raqw nmmn xuuc bsyi\')\\n\\nmsg = MIMEMultipart()\\nmsg[\'Subject\'] = \'Test mail\'\\nmsg.attach(MIMEText(\'This is a test mail.\'))\\n\\nsmtp.sendmail(\'jinyoungj@gmail.com\', \'jyjang@uengine.org\', msg.as_string())\\nsmtp.quit()"}], "sequences": [{"source": "activity_id_1", "target": "activity_id_2"}]}'
     process_definition = load_process_definition(json_str)
-    print(process_definition.name)
+    print(process_definition.processDefinitionName)
 
     current_dir = Path(__file__).parent
 
@@ -108,7 +122,7 @@ if __name__ == "__main__":
     for activity in process_definition.activities:
         if activity.type == "ScriptActivity":
             print(activity)
-            execute_python_code(activity.py_code, current_dir)
-            output = execute_python_code(activity.py_code, current_dir)
+            execute_python_code(activity.pythonCode, current_dir)
+            output = execute_python_code(activity.pythonCode, current_dir)
             print(output)
     # End Generation Here

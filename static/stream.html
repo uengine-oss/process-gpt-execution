@@ -1,57 +1,89 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Dispatcher Service</title>
-  <script>
-    // 비동기 함수를 사용하여 dispatcher2.py의 서비스를 호출하고, 결과를 스트림으로 출력하는 함수
-    async function callDispatcherService() {
-      // 질문을 입력받는다
-      const question = document.getElementById('question').value;
-      // Fetch API를 사용하여 비동기 요청을 보낸다
-      try {
-        const response = await fetch("/question/stream", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({input: {question: question}})
-        });
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LangServe Process Starter with Image</title>
+    <script>
+        let ws;
+
+        function connectToStream(endpoint, params) {
+            ws = new WebSocket(endpoint);
+
+            ws.onopen = function() {
+                console.log("Connected to the stream");
+                ws.send(JSON.stringify(params));
+            };
+
+            ws.onmessage = function(event) {
+                console.log("Message received: ", event.data);
+                displayMessage(event.data);
+            };
+
+            ws.onerror = function(error) {
+                console.error("WebSocket error: ", error);
+            };
+
+            ws.onclose = function() {
+                console.log("WebSocket connection closed");
+            };
         }
-        // 응답을 스트림으로 처리
-        const reader = response.body.getReader();
-        const stream = new ReadableStream({
-          async start(controller) {
-            while (true) {
-              const {done, value} = await reader.read();
-              if (done) {
-                break;
-              }
-              // TextDecoder를 사용하여 Uint8Array를 문자열로 변환
-              const chunk = new TextDecoder("utf-8").decode(value);
-              controller.enqueue(chunk);
+
+        function displayMessage(message) {
+            const messagesDiv = document.getElementById("messages");
+            const msgElement = document.createElement("p");
+            msgElement.textContent = message;
+            messagesDiv.appendChild(msgElement);
+        }
+
+        function submitForm() {
+            const processType = document.querySelector('input[name="processType"]:checked').value;
+            const answer = document.getElementById("answer").value;
+            const processDefinitionId = document.getElementById("processDefinitionId").value;
+            const activityId = document.getElementById("activityId").value;
+            const imageFile = document.getElementById("imageFile").files[0];
+
+            let params = {
+                input: {
+                    answer: answer,
+                    activity_id: activityId,
+                    process_instance_id: processType === "start" ? "new" : "",
+                    process_definition_id: processType === "start" ? processDefinitionId : ""
+                }
+            };
+
+            if (imageFile) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    params.input.image = e.target.result;
+                    connectToStream("ws://localhost:8000/vision-complete/stream", params);
+                };
+                reader.readAsDataURL(imageFile);
+            } else {
+                connectToStream("ws://localhost:8000/complete/stream", params);
             }
-            controller.close();
-            reader.releaseLock();
-          }
-        });
-        // 스트림을 텍스트로 변환하여 결과를 출력
-        new Response(stream).text().then((result) => {
-          document.getElementById('result').innerText = result;
-        });
-      } catch (e) {
-        console.error("Error:", e);
-        document.getElementById('result').innerText = 'Error: ' + e.message;
-      }
-    }
-  </script>
+        }
+    </script>
 </head>
 <body>
-  <h1>Dispatcher Service</h1>
-  <input type="text" id="question" placeholder="Enter your question here">
-  <button onclick="callDispatcherService()">Ask</button>
-  <p id="result"></p>
+    <h1>LangServe Process Starter with Image</h1>
+    <form onsubmit="event.preventDefault(); submitForm();">
+        <div>
+            <input type="radio" id="startProcess" name="processType" value="start" checked>
+            <label for="startProcess">Start Process</label>
+            <input type="radio" id="continueProcess" name="processType" value="continue">
+            <label for="continueProcess">Continue Process</label>
+        </div>
+        <label for="answer">Answer:</label>
+        <input type="text" id="answer" name="answer" required>
+        <label for="processDefinitionId">Process Definition ID:</label>
+        <input type="text" id="processDefinitionId" name="processDefinitionId">
+        <label for="activityId">Activity ID:</label>
+        <input type="text" id="activityId" name="activityId" required>
+        <label for="imageFile">Image File:</label>
+        <input type="file" id="imageFile" name="imageFile">
+        <button type="submit">Connect and Send</button>
+    </form>
+    <div id="messages"></div>
 </body>
 </html>
-

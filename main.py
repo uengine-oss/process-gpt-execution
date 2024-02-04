@@ -5,13 +5,19 @@ from langserve import add_routes
 from fastapi.staticfiles import StaticFiles
 from langchain.output_parsers.json import SimpleJsonOutputParser  # JsonOutputParser 임포트
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from code_executor import execute_python_code
 from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables import ConfigurableField, RunnablePassthrough
+
+
 from database import upsert_process_instance
 from database import ProcessInstance
 import uuid
 import json
+import os
+
+os.environ["PYTHONIOENCODING"] = "utf-8"
 
 app = FastAPI(
     title="LangChain Server",
@@ -25,7 +31,11 @@ import os
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
 # 1. OpenAI Chat Model 생성
-model = ChatOpenAI(openai_api_key=openai_api_key)
+# ChatOpenAI 객체 생성
+model = ChatOpenAI(model="gpt-3.5-turbo")
+vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096)
+
+# ConfigurableField를 사용하여 모델 선택 구성
 
 parser = SimpleJsonOutputParser()
 
@@ -69,7 +79,9 @@ prompt = PromptTemplate.from_template(
 
     
     Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
-    The data changes and role binding changes should be derived from the user submitted data.
+    The data changes and role binding changes should be derived from the user submitted data or attached image OCR. 
+    At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
+    If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
     Return the result with the following description in markdown (three backticks):
     ```
     {{
@@ -91,6 +103,12 @@ prompt = PromptTemplate.from_template(
         [{{
             "nextActivityId": "the id of next activity id",
             "nextUserEmail": "the email address of next activity’s role"
+        }}],
+
+        "cannotProceedErrors":   // return errors if cannot proceed to next activity 
+        [{{
+            "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" 
+            "reason": "explanation for the error"
         }}]
 
     }}
@@ -104,7 +122,7 @@ prompt = PromptTemplate.from_template(
 # Pydantic model for process execution
 class Activity(BaseModel):
     nextActivityId: str
-    nextUserEmail: str
+    nextUserEmail: Optional[str] = None
 
 class RoleBindingChange(BaseModel):
     roleName: str
@@ -112,7 +130,7 @@ class RoleBindingChange(BaseModel):
 
 class DataChange(BaseModel):
     key: str
-    value: str
+    value: Any
 
 class ProcessResult(BaseModel):
     instanceId: str
@@ -127,14 +145,19 @@ def execute_next_activity(process_result_json: dict) -> str:
     process_instance = None
 
     if process_result.instanceId == "new":
-        process_instance = ProcessInstance(id=str(uuid.uuid4()), def_id=process_result.processDefinitionId, data={}, role_bindings={}, current_activity_ids=[])
+        process_instance = ProcessInstance(
+            proc_inst_id=f"{process_result.processDefinitionId}.{str(uuid.uuid4())}",
+            proc_inst_name="please name me",
+            role_bindings={},
+            current_activity_ids=[]
+        )
     else:
         process_instance = fetch_process_instance(process_result.instanceId)
 
-    process_definition = load_process_definition(fetch_process_definition(process_instance.def_id))
+    process_definition = process_instance.process_definition
 
     for data_change in process_result.dataChanges or []:
-        process_instance.data[data_change.key] = data_change.value
+        setattr(process_instance, data_change.key, data_change.value)
 
     if process_result.nextActivities:
         process_instance.current_activity_ids = [activity.nextActivityId for activity in process_result.nextActivities]
@@ -142,16 +165,10 @@ def execute_next_activity(process_result_json: dict) -> str:
     result = None
 
     for activity in process_result.nextActivities:
-        def find_activity_by_id(activity_id):
-            for activity in process_definition.activities:
-                if activity.id == activity_id:
-                    return activity
-            return None
-
-        activity_obj = find_activity_by_id(activity.nextActivityId)
+        activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
         if activity_obj and activity_obj.type == "ScriptActivity":
-            env_vars = {key.upper(): value for key, value in process_instance.data.items()}
-            result = execute_python_code(activity_obj.py_code, env_vars=env_vars)
+            env_vars = {key.upper(): value for key, value in process_instance.get_data().items()}
+            result = execute_python_code(activity_obj.pythonCode, env_vars=env_vars)
 
             process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
         else:
@@ -161,18 +178,52 @@ def execute_next_activity(process_result_json: dict) -> str:
 
     
     # Updating process_result_json with the latest process instance details and execution result
-    process_result_json["instanceId"] = process_instance.id
+    process_result_json["instanceId"] = process_instance.proc_inst_id
     process_result_json["nextActivities"] = process_instance.current_activity_ids
     process_result_json["result"] = result
 
     return json.dumps(process_result_json)
 
+import base64
+from langchain.schema.messages import HumanMessage, AIMessage
+
+# 이미지 인코딩 함수
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+image = encode_image("./resume_real.png")
+
+def vision_model_chain(input):
+    formatted_prompt = prompt.format(**input)
+    
+    msg = vision_model.invoke(
+        [   AIMessage(
+                content=formatted_prompt
+            ),
+            HumanMessage(
+                content=[
+                    {"type": "text", "text": input['answer']},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+#                            "url": input['image'],
+                            "url": f"data:image/png;base64,{image}",
+                            'detail': 'high'
+                        },
+                    },
+                ]
+            )
+        ]
+    )
+    return msg
 
 def combine_input_with_process_definition(input):
     # 프로세스 인스턴스를 DB에서 검색
     
     process_instance_id = input.get('process_instance_id')  # 'process_instance_id' 키에 대한 접근 추가
     activity_id = input.get('activity_id') 
+    image = input.get("image")
 
     processDefinitionJson = None
     
@@ -185,23 +236,24 @@ def combine_input_with_process_definition(input):
         if activity_id not in process_instance.current_activity_ids:
             raise HTTPException(status_code=400, detail=f"Activity ID {activity_id} is not among the currently executing activities.")
     
-        processDefinitionJson = fetch_process_definition(process_instance.def_id)
+        processDefinitionJson = fetch_process_definition(process_instance.get_def_id())
 
         return {
             "answer": input['answer'],  
-            "instance_id": process_instance.id,
+            "instance_id": process_instance.proc_inst_id,
             "role_bindings": process_instance.role_bindings,
-            "data": process_instance.data,
-            "current_activity_ids": ", ".join(process_instance.current_activity_ids),
+            "data": process_instance.model_dump_json(),
+            "current_activity_ids": process_instance.current_activity_ids,
             "processDefinitionJson": processDefinitionJson,
-            "process_definition_id": process_instance.def_id,
-            "activity_id": activity_id
+            "process_definition_id": process_instance.get_def_id(),
+            "activity_id": activity_id,
+            "image": image
         }
     else:
         process_definition_id = input.get('process_definition_id')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
 
         if not process_definition_id:
-            raise ValueError("Neither process definition ID nor process instance ID was provided. Cannot start or proceed with the process.")
+            raise HTTPException(status_code=404, detail="Neither process definition ID nor process instance ID was provided. Cannot start or proceed with the process.")
         
         processDefinitionJson = fetch_process_definition(process_definition_id)
         processDefinition = load_process_definition(processDefinitionJson)
@@ -214,7 +266,8 @@ def combine_input_with_process_definition(input):
             "current_activity_ids": "there's no currently running activities",
             "processDefinitionJson": processDefinitionJson,
             "process_definition_id": process_definition_id,
-            "activity_id": processDefinition.find_initial_activity().id
+            "activity_id": processDefinition.find_initial_activity().id,
+            "image": image
         }
 
 combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with_process_definition)
@@ -225,6 +278,12 @@ add_routes(
     path="/complete",
 )
 
+add_routes(
+    app,
+    combine_input_with_process_definition_lambda | vision_model_chain | parser | execute_next_activity,
+    path="/vision-complete",
+)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="localhost", port=8000)
@@ -232,13 +291,32 @@ if __name__ == "__main__":
 """
 
 # try this: 
-INST_ID=$(http :8000/complete/invoke input[process_instance_id]="new" input[process_definition_id]="company-enterance" | python3 -c "import sys, json; print(json.loads(json.loads(sys.stdin.read())['output'])['instanceId'])")
+INST_ID=$(http :8000/complete/invoke input[process_instance_id]="new" input[process_definition_id]="company_entrance" | python3 -c "import sys, json; print(json.loads(json.loads(sys.stdin.read())['output'])['instanceId'])")
 echo $INST_ID
 http :8000/complete/invoke input[answer]="지원분야는 SW engineer" input[process_instance_id]="$INST_ID" input[activity_id]="congrate" # 400  error
 http :8000/complete/invoke input[answer]="지원분야는 SW engineer" input[process_instance_id]="invalid instance id" input[activity_id]="registration"  # 404 error
 http :8000/complete/invoke input[answer]="지원분야는 SW engineer" input[process_instance_id]="$INST_ID" input[activity_id]="registration"  | python3 -c "import sys, json; print(json.loads(json.loads(sys.stdin.read())['output'])['nextActivities'])" 
 # next activity id should be 'nextMail'
 http :8000/complete/invoke input[answer]="no comment" input[process_instance_id]="$INST_ID" input[activity_id]="nextMail"
+
+
+# 입사지원2: 입사 지원서 이미지 파일을 기반으로한: 
+INST_ID=$(http :8000/complete/invoke input[process_instance_id]="new" input[process_definition_id]="company_entrance" | python3 -c "import sys, json; print(json.loads(json.loads(sys.stdin.read())['output'])['instanceId'])")
+echo $INST_ID
+
+http :8000/vision-complete/invoke input[answer]="지원분야는 SW engineer" input[process_instance_id]="$INST_ID" input[activity_id]="registration" 
+
+
+# vacation use process
+INST_ID=$(http :8000/complete/invoke input[process_instance_id]="new" input[process_definition_id]="vacation_request" input[answer]="The total number of vacation days requested is 5, starting from February 5, 2024, to February 10, 2024, for the reason of travel" | python3 -c "import sys, json; print(json.loads(json.loads(sys.stdin.read())['output'])['instanceId'])")
+echo $INST_ID
+http :8000/complete/invoke input[answer]="승인합니다" input[process_instance_id]="$INST_ID" input[activity_id]="manager_approval" # 400  error
+
+# vacation addition process
+INST_ID=$(http :8000/complete/invoke input[process_instance_id]="new" input[process_definition_id]="vacation_addition" input[answer]="5일간 휴가를 추가합니다" | python3 -c "import sys, json; print(json.loads(json.loads(sys.stdin.read())['output'])['instanceId'])")
+echo $INST_ID
+http :8000/complete/invoke input[answer]="승인합니다" input[process_instance_id]="$INST_ID" input[activity_id]="manager_approval" # 400  error
+
 
 
 # TO-DO

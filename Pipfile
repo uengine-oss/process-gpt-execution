@@ -12,6 +12,7 @@ fastapi = "*"
 sse-starlette = "*"
 uvicorn = "*"
 supabase = "*"
+psycopg2-binary = "*"
 
 [dev-packages]
 

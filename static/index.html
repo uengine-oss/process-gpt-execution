@@ -1,36 +1,116 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Dispatcher Service</title>
-  <script>
-    // AJAX를 사용하여 dispatcher2.py의 서비스를 호출하는 함수
-    function callDispatcherService() {
-      // 질문을 입력받는다
-      var answer = document.getElementById('answer').value;
-      // XMLHttpRequest 객체 생성
-      var xhr = new XMLHttpRequest();
-      // 요청을 초기화
-      xhr.open("POST", "/complete/invoke", true);
-      // 요청의 타입을 JSON으로 설정
-      xhr.setRequestHeader("Content-Type", "application/json");
-      // 응답이 도착했을 때의 처리
-      xhr.onreadystatechange = function () {
-        // 요청이 완료되고, 응답이 성공적으로 도착했을 때
-        if (xhr.readyState == 4 && xhr.status == 200) {
-          // 응답을 파싱하여 결과를 출력
-          document.getElementById('result').innerText = xhr.responseText;
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LangServe Process Starter with Image</title>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 초기 상태 설정
+            toggleFields();
+
+            //디오 버튼 상태 변경에른 이트 리스 추가
+            document.querySelectorAll('input[name="processType"]').forEach(radio => {
+                radio.addEventListener('change', toggleFields);
+            });
+        });
+
+        function toggleFields() {
+            const processType = document.querySelector('input[name="processType"]:checked').value;
+            const answer = document.getElementById("answer");
+            const processDefinitionId = document.getElementById("processDefinitionId");
+            const activityIdField = document.getElementById("activityIdField");
+            const processInstanceIdField = document.getElementById("processInstanceIdField");
+
+            if (processType === "start") {
+                activityIdField.style.display = "none";
+                processInstanceIdField.style.display = "block";
+            } else {
+                activityIdField.style.display = "block";
+                processInstanceIdField.style.display = "none";
+            }
         }
-      };
-      // 요청을 전송 (질문 데이터를 JSON 문자열로 변환하여 전송)
-      xhr.send(JSON.stringify({input: {answer: answer}}));
-    }
-  </script>
+
+        function submitForm() {
+            const processType = document.querySelector('input[name="processType"]:checked').value;
+            const answer = document.getElementById("answer").value;
+            const processDefinitionId = document.getElementById("processDefinitionId").value;
+            const activityId = document.getElementById("activityId").value;
+            const processInstanceId = document.getElementById("processInstanceId").value;
+            const imageFile = document.getElementById("imageFile").files[0];
+
+            let params = {
+                input: {
+                    answer: answer,
+                    activity_id: activityId,
+                    process_instance_id: processType === "start" ? "new": processInstanceId,
+                    process_definition_id: processType === "start" ? processDefinitionId : ""
+                }
+            };
+
+            if (imageFile) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    params.input.image = e.target.result;
+                    invokeProcess("http://localhost:8000/complete/invoke", params);
+                };
+                reader.readAsDataURL(imageFile);
+            } else {
+                invokeProcess("http://localhost:8000/complete/invoke", params);
+            }
+        }
+
+        function invokeProcess(url, params) {
+            fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(params),
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Success:', data);
+                displayMessage(JSON.stringify(data));
+            })
+            .catch((error) => {
+                console.error('Error:', error);
+            });
+        }
+
+        function displayMessage(message) {
+            const messagesDiv = document.getElementById("messages");
+            const msgElement = document.createElement("p");
+            msgElement.textContent = message;
+            messagesDiv.appendChild(msgElement);
+        }
+    </script>
 </head>
 <body>
-  <h1>Dispatcher Service</h1>
-  <input type="text" id="answer" placeholder="Enter your question here">
-  <button onclick="callDispatcherService()">Ask</button>
-  <p id="result"></p>
+    <h1>LangServe Process Starter with Image</h1>
+    <form onsubmit="event.preventDefault(); submitForm();">
+        <div>
+            <input type="radio" id="startProcess" name="processType" value="start" checked>
+            <label for="startProcess">Start Process</label>
+            <input type="radio" id="continueProcess" name="processType" value="continue">
+            <label for="continueProcess">Continue Process</label>
+        </div>
+        <label for="answer">Answer:</label>
+        <input type="text" id="answer" name="answer" required>
+        <label for="processDefinitionId">Process Definition ID:</label>
+        <input type="text" id="processDefinitionId" name="processDefinitionId">
+        <label for="activityId">Activity ID:</label>
+        <div id="activityIdField">
+            <input type="text" id="activityId" name="activityId">
+        </div>
+        <label for="processInstanceId">Process Instance ID:</label>
+        <div id="processInstanceIdField" style="display:none;">
+            <input type="text" id="processInstanceId" name="processInstanceId">
+        </div>
+        <label for="imageFile">Image File:</label>
+        <input type="file" id="imageFile" name="imageFile">
+        <button type="submit">Connect and Send</button>
+    </form>
+    <div id="messages"></div>
 </body>
 </html>
-
