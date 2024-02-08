@@ -13,6 +13,7 @@ sse-starlette = "*"
 uvicorn = "*"
 supabase = "*"
 psycopg2-binary = "*"
+python-multipart = "*"
 
 [dev-packages]
 

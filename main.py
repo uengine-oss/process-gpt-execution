@@ -32,7 +32,7 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 
 # 1. OpenAI Chat Model 생성
 # ChatOpenAI 객체 생성
-model = ChatOpenAI(model="gpt-3.5-turbo")
+model = ChatOpenAI(model="gpt-4")
 vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096)
 
 # ConfigurableField를 사용하여 모델 선택 구성
@@ -192,7 +192,7 @@ def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-image = encode_image("./resume_real.png")
+#image = encode_image("./resume_real.png")
 
 def vision_model_chain(input):
     formatted_prompt = prompt.format(**input)
@@ -207,8 +207,8 @@ def vision_model_chain(input):
                     {
                         "type": "image_url",
                         "image_url": {
-#                            "url": input['image'],
-                            "url": f"data:image/png;base64,{image}",
+                            "url": input['image'],
+#                            "url": f"data:image/png;base64,{image}",
                             'detail': 'high'
                         },
                     },
@@ -304,7 +304,7 @@ http :8000/complete/invoke input[answer]="no comment" input[process_instance_id]
 INST_ID=$(http :8000/complete/invoke input[process_instance_id]="new" input[process_definition_id]="company_entrance" | python3 -c "import sys, json; print(json.loads(json.loads(sys.stdin.read())['output'])['instanceId'])")
 echo $INST_ID
 
-http :8000/vision-complete/invoke input[answer]="지원분야는 SW engineer" input[process_instance_id]="$INST_ID" input[activity_id]="registration" 
+http :8000/vision-complete/invoke input[answer]="세부 지원사항은 지원서에 확인해주십시오" input[process_instance_id]="$INST_ID" input[activity_id]="registration" 
 
 
 # vacation use process

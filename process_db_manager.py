@@ -30,8 +30,10 @@ model = ChatOpenAI(openai_api_key=openai_api_key)
 prompt = PromptTemplate.from_template(
     """
   You are a database administrator. Generate the DDL to store the following process definition's data value in a supabase's postgres DB. 
-  Write the DDL in such a way that it modifies the table if it already exists, and creates it if it does not.
+  Write the DDL in such a way that it modifies the table (ALTER statement) if it already exists, and creates it if it does not.
   DO NOT create any other objects like triggers and functions except table.
+  DO USE the same name for table with the process definition id.
+
 
     For example, if there is the following process:
 
@@ -54,7 +56,6 @@ prompt = PromptTemplate.from_template(
     create table vacation_request(
         -- fixed parts 
 
-        proc_inst_id text primary key,  
         proc_inst_id text primary key,
         proc_inst_name text,
         current_activity_ids text array,
@@ -62,9 +63,7 @@ prompt = PromptTemplate.from_template(
         
         -- fields for the process variables defined in this process definition    
 
-        reason text,
-        start_date date,
-        return_date date
+        reason text
     )
 
 

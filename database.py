@@ -164,6 +164,16 @@ supabase.table('proc_def').upsert(
                 "name": "application_field",
                 "description": "application area",
                 "type": "Text"
+            },
+            {
+                "name": "applicant_name",
+                "description": "name of the applicant",
+                "type": "Text"
+            },
+            {
+                "name": "applicant_birthyear",
+                "description": "birth year of the applicant",
+                "type": "Number"
             }
         ],
         "roles": [
