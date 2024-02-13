@@ -66,6 +66,33 @@ def execute_sql(sql_query):
         if connection:
             connection.close()
 
+
+
+def fetch_all_process_definition_ids():
+    try:
+        # Establish a connection to the database
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
+        
+        # Execute the SQL query to fetch all process definition ids
+        cursor.execute("SELECT id FROM proc_def")
+        
+        # Fetch all rows
+        rows = cursor.fetchall()
+        
+        # Extract the ids from the rows
+        process_definition_ids = [row['id'] for row in rows]
+        
+        return process_definition_ids
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching process definition ids: {e}")
+    
+    finally:
+        # Close the cursor and connection to clean up
+        if connection:
+            connection.close()
+
 def generate_create_statement_for_table(table_name):
     """
     Generates a CREATE TABLE statement for the given table name by fetching its current schema.
