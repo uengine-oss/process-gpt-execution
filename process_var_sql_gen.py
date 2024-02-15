@@ -114,7 +114,7 @@ def clean_html_string(html_string):
     # \n 제거
     cleaned_string = html_string.replace("\n", "")
     # \"를 "로 변환
-    cleaned_string = cleaned_string.replace('\"', '"')
+    cleaned_string = cleaned_string.replace('\\"', '"')
     return cleaned_string
 
 draw_table_prompt = PromptTemplate.from_template(
