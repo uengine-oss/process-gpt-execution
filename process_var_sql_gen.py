@@ -10,6 +10,7 @@ import json
 from decimal import Decimal
 from langchain.schema.output_parser import StrOutputParser
 from datetime import date
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="LangChain Server",
@@ -109,9 +110,16 @@ def extract_html_table(markdown_text):
         return markdown_text[start + 7:end].strip()
     return markdown_text
 
+def clean_html_string(html_string):
+    # \n 제거
+    cleaned_string = html_string.replace("\n", "")
+    # \"를 "로 변환
+    cleaned_string = cleaned_string.replace('\"', '"')
+    return cleaned_string
+
 draw_table_prompt = PromptTemplate.from_template(
     """
-        Please create a html table with this data (<table> element only. DO NOT include '\n'):
+        Please create a html table with this data (<table> element only. DO NOT use escape characters like '\"' or '\n'):
         {result}                                         
     """
     )
@@ -125,7 +133,7 @@ add_routes(
 
 add_routes(
     app,
-    combine_input_with_process_definition_lambda | prompt | model | extract_markdown_code_blocks | runsql | draw_table_prompt | model | StrOutputParser() | extract_html_table,
+    combine_input_with_process_definition_lambda | prompt | model | extract_markdown_code_blocks | runsql | draw_table_prompt | model | StrOutputParser() | extract_html_table | clean_html_string,
     path="/process-data-query",
 )
 
