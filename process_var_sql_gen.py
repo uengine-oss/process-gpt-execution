@@ -6,9 +6,10 @@ from fastapi.staticfiles import StaticFiles
 from langchain_core.runnables import RunnableLambda
 from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table
 import re
-from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI()
+import json
+from decimal import Decimal
+from langchain.schema.output_parser import StrOutputParser
+from datetime import date
 
 app = FastAPI(
     title="LangChain Server",
@@ -89,6 +90,31 @@ def extract_markdown_code_blocks(markdown_text):
     single_string_result = "\n".join(code_blocks)
     return single_string_result
 
+def default(obj):
+    if isinstance(obj, Decimal):
+        return str(obj)  # 또는 float(obj)로 변환
+    if isinstance(obj, date):
+        return obj.isoformat()  # date 객체를 ISO 포맷 문자열로 변환
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+def runsql(sql):
+    result = execute_sql(sql)
+    return {"result": json.dumps(result, default=default)}
+
+def extract_html_table(markdown_text):
+    # Extract HTML table code block from markdown text
+    start = markdown_text.find("```html")
+    end = markdown_text.find("```", start + 1)
+    if start != -1 and end != -1:
+        return markdown_text[start + 7:end].strip()
+    return markdown_text
+
+draw_table_prompt = PromptTemplate.from_template(
+    """
+        Please create a html table with this data (<table> element only. DO NOT include '\n'):
+        {result}                                         
+    """
+    )
 
 
 add_routes(
@@ -97,29 +123,17 @@ add_routes(
     path="/process-var-sql",
 )
 
-from fastapi import APIRouter
-
-router = APIRouter()
-
-@router.post("/execute-sql")  # API 경로 설정
-async def execute_sql_api(query: dict = Body(...)):
-    sql_query = query.get("sql_query", "")  # 'sql_query' 키로부터 SQL 쿼리 문자열 추출
-    try:
-        result = execute_sql(sql_query)  # database.py의 execute_sql 함수 사용
-        return {"success": True, "data": result}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-app.include_router(router)  # 앱에 라우터 포함
-
-# 호출 예시
-# http POST :8001/execute-sql sql_query="SELECT * FROM table_name"
-# http POST :8001/execute-sql Content-Type:application/json sql_query="SELECT * FROM table_name"
+add_routes(
+    app,
+    combine_input_with_process_definition_lambda | prompt | model | extract_markdown_code_blocks | runsql | draw_table_prompt | model | StrOutputParser() | extract_html_table,
+    path="/process-data-query",
+)
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="localhost", port=8001)
 
 """
+http :8001/process-data-query/invoke input[var_name]="sw분야 지원한 입사지원자 목록" 
 http :8001/process-var-sql/invoke input[var_name]="total_vacation_days_remains" input[resolution_rule]="vacation_addition 테이블의 전체 휴가일수에서 vacation_request 의 사용일수를 제외함. 그리고 10일은 기본적으로 추가"
 """
