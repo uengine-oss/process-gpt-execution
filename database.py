@@ -485,25 +485,6 @@ supabase.table('proc_def').upsert(
 ).execute()
 
 
-# data, count = supabase.table('countries').upsert({'id': 1, 'name': 'Austrailia'}).execute()
-
-response = supabase.table('proc_inst').select("*").execute()
-print(response)
-
-data, count = supabase.table('proc_inst').update(
-    {'data': {'application_field': 'marketing'}}
-).eq(
-    'id', 1
-).execute()
-
-# following is not allowed:
-# data, count = supabase.table('proc_inst').update( {'data["application_field"]: 'marketing'}).eq('id', 1).execute()
-
-
-response = supabase.table('proc_inst').select("*").execute()
-print(response)
-
-
 def fetch_process_definition(def_id):
     """
     Fetches the process definition from the 'proc_def' table based on the given definition ID.

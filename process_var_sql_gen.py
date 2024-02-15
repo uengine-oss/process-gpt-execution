@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from langchain.prompts import PromptTemplate
 from langchain.chat_models import ChatOpenAI
 from langserve import add_routes
@@ -6,14 +6,23 @@ from fastapi.staticfiles import StaticFiles
 from langchain_core.runnables import RunnableLambda
 from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table
 import re
+from fastapi.middleware.cors import CORSMiddleware
 
-
-
+app = FastAPI()
 
 app = FastAPI(
     title="LangChain Server",
     version="1.0",
     description="A simple api server using Langchain's Runnable interfaces",
+)
+
+# CORS 미들웨어 추가
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 모든 출처 허용
+    allow_credentials=True,
+    allow_methods=["*"],  # 모든 HTTP 메서드 허용
+    allow_headers=["*"],  # 모든 HTTP 헤더 허용
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -87,6 +96,25 @@ add_routes(
     combine_input_with_process_definition_lambda | prompt | model | extract_markdown_code_blocks,
     path="/process-var-sql",
 )
+
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.post("/execute-sql")  # API 경로 설정
+async def execute_sql_api(query: dict = Body(...)):
+    sql_query = query.get("sql_query", "")  # 'sql_query' 키로부터 SQL 쿼리 문자열 추출
+    try:
+        result = execute_sql(sql_query)  # database.py의 execute_sql 함수 사용
+        return {"success": True, "data": result}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+app.include_router(router)  # 앱에 라우터 포함
+
+# 호출 예시
+# http POST :8001/execute-sql sql_query="SELECT * FROM table_name"
+# http POST :8001/execute-sql Content-Type:application/json sql_query="SELECT * FROM table_name"
 
 if __name__ == "__main__":
     import uvicorn
