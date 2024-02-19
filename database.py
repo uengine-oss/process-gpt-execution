@@ -7,6 +7,7 @@ from process_definition import ProcessDefinition, load_process_definition
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from fastapi import HTTPException
+from decimal import Decimal
 
 url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
@@ -587,7 +588,19 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
 def upsert_process_instance(process_instance: ProcessInstance) -> (bool, ProcessInstance):
     process_name = process_instance.proc_inst_id.split('.')[0]  # 프로세스 정의명만 추출
     process_instance_data = process_instance.dict(exclude={'process_definition'})  # Pydantic 모을 dict로 변환
-    response = supabase.table(process_name).upsert(process_instance_data).execute()
-
+    process_instance_data = convert_decimal(process_instance_data)
+    try:
+        response = supabase.table(process_name).upsert(process_instance_data).execute()
+    except Exception as e:
+        # Check if the table exists in the database
+        raise HTTPException(status_code=404, detail=f"The table '{process_name}' does not exist in the database.") from e
+        
     success = bool(response.data)
     return success, process_instance
+
+def convert_decimal(data):
+    for key, value in data.items():
+        if isinstance(value, Decimal):
+            data[key] = float(value)
+
+    return data
