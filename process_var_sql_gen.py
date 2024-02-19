@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from langchain.prompts import PromptTemplate
 from langchain.chat_models import ChatOpenAI
 from langserve import add_routes
@@ -6,14 +6,25 @@ from fastapi.staticfiles import StaticFiles
 from langchain_core.runnables import RunnableLambda
 from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table
 import re
-
-
-
+import json
+from decimal import Decimal
+from langchain.schema.output_parser import StrOutputParser
+from datetime import date
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="LangChain Server",
     version="1.0",
     description="A simple api server using Langchain's Runnable interfaces",
+)
+
+# CORS 미들웨어 추가
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 모든 출처 허용
+    allow_credentials=True,
+    allow_methods=["*"],  # 모든 HTTP 메서드 허용
+    allow_headers=["*"],  # 모든 HTTP 헤더 허용
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -80,6 +91,38 @@ def extract_markdown_code_blocks(markdown_text):
     single_string_result = "\n".join(code_blocks)
     return single_string_result
 
+def default(obj):
+    if isinstance(obj, Decimal):
+        return str(obj)  # 또는 float(obj)로 변환
+    if isinstance(obj, date):
+        return obj.isoformat()  # date 객체를 ISO 포맷 문자열로 변환
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+def runsql(sql):
+    result = execute_sql(sql)
+    return {"result": json.dumps(result, default=default)}
+
+def extract_html_table(markdown_text):
+    # Extract HTML table code block from markdown text
+    start = markdown_text.find("```html")
+    end = markdown_text.find("```", start + 1)
+    if start != -1 and end != -1:
+        return markdown_text[start + 7:end].strip()
+    return markdown_text
+
+def clean_html_string(html_string):
+    # \n 제거
+    cleaned_string = html_string.replace("\n", "")
+    # \"를 "로 변환
+    cleaned_string = cleaned_string.replace('\\"', '"')
+    return cleaned_string
+
+draw_table_prompt = PromptTemplate.from_template(
+    """
+        Please create a html table with this data (<table> element only. DO NOT use escape characters like '\"' or '\n'):
+        {result}                                         
+    """
+    )
 
 
 add_routes(
@@ -88,10 +131,17 @@ add_routes(
     path="/process-var-sql",
 )
 
+add_routes(
+    app,
+    combine_input_with_process_definition_lambda | prompt | model | extract_markdown_code_blocks | runsql | draw_table_prompt | model | StrOutputParser() | extract_html_table | clean_html_string,
+    path="/process-data-query",
+)
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="localhost", port=8001)
 
 """
+http :8001/process-data-query/invoke input[var_name]="sw분야 지원한 입사지원자 목록" 
 http :8001/process-var-sql/invoke input[var_name]="total_vacation_days_remains" input[resolution_rule]="vacation_addition 테이블의 전체 휴가일수에서 vacation_request 의 사용일수를 제외함. 그리고 10일은 기본적으로 추가"
 """
