@@ -76,7 +76,7 @@ def fetch_all_process_definition_ids():
         cursor = connection.cursor(cursor_factory=RealDictCursor)
         
         # Execute the SQL query to fetch all process definition ids
-        cursor.execute("SELECT id FROM proc_def")
+        cursor.execute("SELECT id FROM definitions")
         
         # Fetch all rows
         rows = cursor.fetchall()
@@ -488,7 +488,7 @@ supabase.table('proc_def').upsert(
 
 def fetch_process_definition(def_id):
     """
-    Fetches the process definition from the 'proc_def' table based on the given definition ID.
+    Fetches the process definition from the 'definitions' table based on the given definition ID.
     
     Args:
         def_id (str): The ID of the process definition to fetch.
@@ -496,12 +496,12 @@ def fetch_process_definition(def_id):
     Returns:
         dict: The process definition as a JSON object if found, else None.
     """
-    response = supabase.table('proc_def').select('definition').eq('id', def_id).execute()
+    response = supabase.table('definitions').select('*').eq('id', def_id).execute()
     
     # Check if the response contains data
     if response.data:
         # Assuming the first match is the desired one since ID should be unique
-        process_definition = response.data[0].get('definition', None)
+        process_definition = response.data[0].get('model', None)
         return process_definition
     else:
         return None
@@ -585,3 +585,14 @@ def convert_decimal(data):
             data[key] = float(value)
 
     return data
+
+def fetch_organization_chart():
+    response = supabase.table("organization").select("*").eq('id', 1).execute()
+    
+    # Check if the response contains data
+    if response.data:
+        # Assuming the first match is the desired one since ID should be unique
+        organization_chart = response.data[0].get('organization_chart', None)
+        return organization_chart
+    else:
+        return None
