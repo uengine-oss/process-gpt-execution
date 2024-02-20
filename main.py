@@ -9,6 +9,7 @@ from typing import List, Dict, Optional, Any
 from code_executor import execute_python_code
 from langchain_core.runnables import RunnableLambda
 from langchain_core.runnables import ConfigurableField, RunnablePassthrough
+from datetime import datetime
 
 
 from database import upsert_process_instance
@@ -43,6 +44,7 @@ parser = SimpleJsonOutputParser()
 from process_definition import load_process_definition
 from database import fetch_process_definition
 from database import fetch_process_instance
+from database import fetch_organization_chart
 
 # process_instance = fetch_process_instance(1)
 # processDefinitionJson = fetch_process_definition(process_instance.def_id)
@@ -60,9 +62,21 @@ prompt = PromptTemplate.from_template(
     {processDefinitionJson}
 
     - Process Instance Id: {instance_id}
+    
+    - Process Instance Naming Rules:
+    1. Write in Korean without spaces
+    2. Include process definition name: Name that indicates which instance of the process definition it is
+    3. Include user's name: The name of the person who execute the process instance
+    4. Date included: When the process executed (current date: {formattedDate})
 
     - Process Data:
     {data}
+    
+    - Organization Chart:
+    {organizationChart}
+    
+    - User Information:
+    {user_info}
     
     - Role Bindings:
     {role_bindings}
@@ -73,7 +87,7 @@ prompt = PromptTemplate.from_template(
     - Received Message From Current Step:
     
       activityId: "{activity_id}",
-      user: "jyjang@uengine.org",
+      user: "example@company.com",
       submitted data: {answer}
     
 
@@ -81,11 +95,13 @@ prompt = PromptTemplate.from_template(
     Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
     The data changes and role binding changes should be derived from the user submitted data or attached image OCR. 
     At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
+    The nextUserEmail included in the nextActivities should be found in the Organization chart.
     If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
     Return the result with the following description in markdown (three backticks):
     ```
     {{
         "instanceId": "{instance_id}",
+        "instanceName": "process instance name",
         "processDefinitionId": "{process_definition_id}",
         "dataChanges":
         [{{
@@ -109,12 +125,14 @@ prompt = PromptTemplate.from_template(
         [{{
             "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" 
             "reason": "explanation for the error"
-        }}]
+        }}],
+        
+        "description": "description of completed and next activities to be executed in Korean"
 
     }}
     
     ```
-                                 
+
                                       
     """)
 
@@ -132,13 +150,20 @@ class DataChange(BaseModel):
     key: str
     value: Any
 
+class ProceedError(BaseModel):
+    type: str
+    reason: Any
+
 class ProcessResult(BaseModel):
     instanceId: str
+    instanceName: str
     dataChanges: Optional[List[DataChange]] = None
     roleBindingChanges: Optional[List[RoleBindingChange]] = None
     nextActivities: List[Activity]
     processDefinitionId: str
     result: Optional[str] = None
+    cannotProceedErrors: List[ProceedError]
+    description: str
 
 def execute_next_activity(process_result_json: dict) -> str:
     process_result = ProcessResult(**process_result_json)
@@ -147,7 +172,7 @@ def execute_next_activity(process_result_json: dict) -> str:
     if process_result.instanceId == "new":
         process_instance = ProcessInstance(
             proc_inst_id=f"{process_result.processDefinitionId}.{str(uuid.uuid4())}",
-            proc_inst_name="please name me",
+            proc_inst_name=f"{process_result.instanceName}",
             role_bindings={},
             current_activity_ids=[]
         )
@@ -179,6 +204,7 @@ def execute_next_activity(process_result_json: dict) -> str:
     
     # Updating process_result_json with the latest process instance details and execution result
     process_result_json["instanceId"] = process_instance.proc_inst_id
+    process_result_json["instanceName"] = process_instance.proc_inst_name
     process_result_json["nextActivities"] = process_instance.current_activity_ids
     process_result_json["result"] = result
 
@@ -192,7 +218,7 @@ def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-#image = encode_image("./resume_real.png")
+image = encode_image("./resume_real.png")
 
 def vision_model_chain(input):
     formatted_prompt = prompt.format(**input)
@@ -207,8 +233,8 @@ def vision_model_chain(input):
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": input['image'],
-#                            "url": f"data:image/png;base64,{image}",
+#                            "url": input['image'],
+                            "url": f"data:image/png;base64,{image}",
                             'detail': 'high'
                         },
                     },
@@ -224,6 +250,14 @@ def combine_input_with_process_definition(input):
     process_instance_id = input.get('process_instance_id')  # 'process_instance_id' 키에 대한 접근 추가
     activity_id = input.get('activity_id') 
     image = input.get("image")
+    if image:
+        image = base64.b64encode(image.encode()).decode('utf-8')
+    user_info = input.get('userInfo')
+    
+    now = datetime.now()
+    formattedDate = now.date()
+    
+    organizationChart = fetch_organization_chart()
 
     processDefinitionJson = None
     
@@ -239,15 +273,19 @@ def combine_input_with_process_definition(input):
         processDefinitionJson = fetch_process_definition(process_instance.get_def_id())
 
         return {
-            "answer": input['answer'],  
+            "answer": input['answer'],
             "instance_id": process_instance.proc_inst_id,
+            "instance_name": process_instance.proc_inst_name,
             "role_bindings": process_instance.role_bindings,
             "data": process_instance.model_dump_json(),
             "current_activity_ids": process_instance.current_activity_ids,
             "processDefinitionJson": processDefinitionJson,
             "process_definition_id": process_instance.get_def_id(),
             "activity_id": activity_id,
-            "image": image
+            "image": image,
+            "user_info": user_info,
+            "formattedDate": formattedDate,
+            "organizationChart": organizationChart
         }
     else:
         process_definition_id = input.get('process_definition_id')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
@@ -261,13 +299,17 @@ def combine_input_with_process_definition(input):
         return {
             "answer": input['answer'],  
             "instance_id": "new",
+            "instance_name": "",
             "role_bindings": "no bindings",
             "data": "no data",
             "current_activity_ids": "there's no currently running activities",
             "processDefinitionJson": processDefinitionJson,
             "process_definition_id": process_definition_id,
             "activity_id": processDefinition.find_initial_activity().id,
-            "image": image
+            "image": image,
+            "user_info": user_info,
+            "formattedDate": formattedDate,
+            "organizationChart": organizationChart
         }
 
 combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with_process_definition)
