@@ -139,9 +139,10 @@ add_routes(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="localhost", port=8001)
+    uvicorn.run(app, host="localhost", port=8006)
 
 """
+http :8006/process-data-query/invoke input[var_name]="모든 입사 지원자를 출력해줘"
 http :8001/process-data-query/invoke input[var_name]="sw분야 지원한 입사지원자 목록" 
 http :8001/process-var-sql/invoke input[var_name]="total_vacation_days_remains" input[resolution_rule]="vacation_addition 테이블의 전체 휴가일수에서 vacation_request 의 사용일수를 제외함. 그리고 10일은 기본적으로 추가"
 """
