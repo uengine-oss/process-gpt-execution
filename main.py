@@ -205,7 +205,7 @@ def execute_next_activity(process_result_json: dict) -> str:
     # Updating process_result_json with the latest process instance details and execution result
     process_result_json["instanceId"] = process_instance.proc_inst_id
     process_result_json["instanceName"] = process_instance.proc_inst_name
-    process_result_json["currentActivities"] = process_instance.current_activity_ids
+    process_result_json["nextActivities"] = process_instance.current_activity_ids
     process_result_json["result"] = result
 
     return json.dumps(process_result_json)

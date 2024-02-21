@@ -209,8 +209,8 @@ create table calendar (
 """
 
 
-supabase.table('definitions').upsert(
-    {'id': 'company_entrance', 'name': '입사 관리', 'model': 
+supabase.table('proc_def').upsert(
+    {'id': 'company_entrance', 'name': '입사 관리', 'definition': 
 """
 
     {
@@ -320,8 +320,8 @@ supabase.table('definitions').upsert(
 }
 ).execute()
 
-supabase.table('definitions').upsert(
-    {'id': 'vacation_request', 'name': '휴가 신청', 'model': 
+supabase.table('proc_def').upsert(
+    {'id': 'vacation_request', 'name': '휴가 신청', 'definition': 
 """
     {
         "processDefinitionName": "Vacation Request Process",
@@ -449,8 +449,8 @@ supabase.table('definitions').upsert(
 }
 ).execute()
 
-supabase.table('definitions').upsert(
-    {'id': 'vacation_addition', 'name': '휴가 추가 프로세스', 'model': 
+supabase.table('proc_def').upsert(
+    {'id': 'vacation_addition', 'name': '휴가 추가 프로세스', 'definition': 
 """
     {
         "processDefinitionName": "Vacation Addition Process",
