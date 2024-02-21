@@ -195,6 +195,17 @@ create table vacation_request(
 
 )
 
+create table chats (
+  uid text primary key,
+  id text,
+  messages jsonb
+);
+
+create table calendar (
+  uid text primary key,
+  data jsonb
+);
+
 """
 
 
