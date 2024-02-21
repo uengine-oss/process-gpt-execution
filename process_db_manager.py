@@ -4,6 +4,7 @@ from langchain.chat_models import ChatOpenAI
 from langserve import add_routes
 from fastapi.staticfiles import StaticFiles
 from langchain_core.runnables import RunnableLambda
+from fastapi.middleware.cors import CORSMiddleware
 from database import fetch_process_definition, execute_sql, generate_create_statement_for_table
 import re
 
@@ -15,6 +16,14 @@ app = FastAPI(
     title="LangChain Server",
     version="1.0",
     description="A simple api server using Langchain's Runnable interfaces",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 모든 출처 허용
+    allow_credentials=True,
+    allow_methods=["*"],  # 모든 HTTP 메서드 허용
+    allow_headers=["*"],  # 모든 HTTP 헤더 허용
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
