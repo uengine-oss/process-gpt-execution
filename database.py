@@ -142,6 +142,17 @@ def generate_create_statement_for_table(table_name):
 
 
 """
+drop table todolist;
+
+create table todolist (
+    id text primary key,
+    proc_inst_id text,
+    proc_def_id text,
+    activity_id text,
+    start_date timestamp,
+    end_date timestamp,
+    status text
+);
 
 drop table public.users;
 
