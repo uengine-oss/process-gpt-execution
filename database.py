@@ -142,10 +142,21 @@ def generate_create_statement_for_table(table_name):
 
 
 """
+drop table configuration;
+
+create table configuration (
+  key text primary key,
+  value jsonb
+);
+
+insert into configuration (key, value)
+values ('proc_map', null)
+
 drop table todolist;
 
 create table todolist (
-    id text primary key,
+    id uuid primary key,
+    user_id text,
     proc_inst_id text,
     proc_def_id text,
     activity_id text,
