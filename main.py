@@ -84,6 +84,9 @@ prompt = PromptTemplate.from_template(
     - Currently Running Activities: 
     {current_activity_ids}
 
+    - Users Currently Running Activities: :
+    {current_user_ids}
+    
     - Received Message From Current Step:
     
       activityId: "{activity_id}",
@@ -95,7 +98,7 @@ prompt = PromptTemplate.from_template(
     Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
     The data changes and role binding changes should be derived from the user submitted data or attached image OCR. 
     At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
-    The nextUserEmail included in the nextActivities should be found in the Organization chart.
+    The nextUserEmail included in nextActivities must be found in the Organization chart and returned.
     If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
     Return the result with the following description in markdown (three backticks):
     ```
@@ -127,7 +130,12 @@ prompt = PromptTemplate.from_template(
             "reason": "explanation for the error"
         }}],
         
-        "description": "description of completed and next activities to be executed in Korean"
+        "description": "description of the completed activities and the next activities and what the user who will perform the task should do in Korean",
+        
+        "completedActivities": [{{
+            "completedActivityId": "the id of completed activity id",
+            "result": "TODO | IN_PROGRESS | PENDING | DONE" // The result of the completed activity
+        }}]
 
     }}
     
@@ -139,7 +147,7 @@ prompt = PromptTemplate.from_template(
 
 # Pydantic model for process execution
 class Activity(BaseModel):
-    nextActivityId: str
+    nextActivityId: Optional[str] = None
     nextUserEmail: Optional[str] = None
 
 class RoleBindingChange(BaseModel):
@@ -174,7 +182,8 @@ def execute_next_activity(process_result_json: dict) -> str:
             proc_inst_id=f"{process_result.processDefinitionId}.{str(uuid.uuid4())}",
             proc_inst_name=f"{process_result.instanceName}",
             role_bindings={},
-            current_activity_ids=[]
+            current_activity_ids=[],
+            current_user_ids=[]
         )
     else:
         process_instance = fetch_process_instance(process_result.instanceId)
@@ -186,6 +195,7 @@ def execute_next_activity(process_result_json: dict) -> str:
 
     if process_result.nextActivities:
         process_instance.current_activity_ids = [activity.nextActivityId for activity in process_result.nextActivities]
+        process_instance.current_user_ids = [activity.nextUserEmail for activity in process_result.nextActivities]
 
     result = None
 
@@ -205,7 +215,6 @@ def execute_next_activity(process_result_json: dict) -> str:
     # Updating process_result_json with the latest process instance details and execution result
     process_result_json["instanceId"] = process_instance.proc_inst_id
     process_result_json["instanceName"] = process_instance.proc_inst_name
-    process_result_json["nextActivities"] = process_instance.current_activity_ids
     process_result_json["result"] = result
 
     return json.dumps(process_result_json)
@@ -218,7 +227,7 @@ def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
-image = encode_image("./resume_real.png")
+# image = encode_image("./resume_real.png")
 
 def vision_model_chain(input):
     formatted_prompt = prompt.format(**input)
@@ -233,8 +242,8 @@ def vision_model_chain(input):
                     {
                         "type": "image_url",
                         "image_url": {
-#                            "url": input['image'],
-                            "url": f"data:image/png;base64,{image}",
+                           "url": input['image'],
+                            # "url": f"data:image/png;base64,{image}",
                             'detail': 'high'
                         },
                     },
@@ -250,8 +259,6 @@ def combine_input_with_process_definition(input):
     process_instance_id = input.get('process_instance_id')  # 'process_instance_id' 키에 대한 접근 추가
     activity_id = input.get('activity_id') 
     image = input.get("image")
-    if image:
-        image = base64.b64encode(image.encode()).decode('utf-8')
     user_info = input.get('userInfo')
     
     now = datetime.now()
@@ -279,6 +286,7 @@ def combine_input_with_process_definition(input):
             "role_bindings": process_instance.role_bindings,
             "data": process_instance.model_dump_json(),
             "current_activity_ids": process_instance.current_activity_ids,
+            "current_user_ids": process_instance.current_user_ids,
             "processDefinitionJson": processDefinitionJson,
             "process_definition_id": process_instance.get_def_id(),
             "activity_id": activity_id,
@@ -303,6 +311,7 @@ def combine_input_with_process_definition(input):
             "role_bindings": "no bindings",
             "data": "no data",
             "current_activity_ids": "there's no currently running activities",
+            "current_user_ids": "there's no user currently running activities",
             "processDefinitionJson": processDefinitionJson,
             "process_definition_id": process_definition_id,
             "activity_id": processDefinition.find_initial_activity().id,
