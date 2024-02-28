@@ -244,6 +244,18 @@ create table
     constraint calendar_pkey primary key (uid)
   ) tablespace pg_default;
 
+create table
+  public.chat_rooms (
+    id text not null,
+    participants jsonb not null,
+    message jsonb null,
+    name text null,
+    status text null,
+    recent boolean null,
+    thumb text null,
+    constraint chat_rooms_pkey primary key (id)
+  ) tablespace pg_default;
+
 """
 
 
