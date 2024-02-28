@@ -168,7 +168,7 @@ create table todolist (
 drop table public.users;
 
 create table public.users (
-    id uuid not null,
+    id uuid not null primary key,
     username text null,
     profile text null,
     email text null
