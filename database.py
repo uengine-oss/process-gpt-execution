@@ -176,16 +176,20 @@ create table vacation_request(
 
 )
 
-create table chats (
-  uid text primary key,
-  id text,
-  messages jsonb
-);
+create table
+  public.chats (
+    uid text not null,
+    id text not null,
+    messages jsonb null,
+    constraint chats_pkey primary key (uid)
+  ) tablespace pg_default;
 
-create table calendar (
-  uid text primary key,
-  data jsonb
-);
+create table
+  public.calendar (
+    uid text not null,
+    data jsonb null,
+    constraint calendar_pkey primary key (uid)
+  ) tablespace pg_default;
 
 """
 
