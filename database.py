@@ -162,7 +162,8 @@ create table todolist (
     activity_id text,
     start_date timestamp,
     end_date timestamp,
-    status text
+    status text,
+    description text
 );
 
 drop table public.users;
