@@ -169,7 +169,7 @@ create table todolist (
 drop table public.users;
 
 create table public.users (
-    id uuid not null,
+    id uuid not null primary key,
     username text null,
     profile text null,
     email text null
@@ -230,16 +230,32 @@ create table vacation_request(
 
 )
 
-create table chats (
-  uid text primary key,
-  id text,
-  messages jsonb
-);
+create table
+  public.chats (
+    uid text not null,
+    id text not null,
+    messages jsonb null,
+    constraint chats_pkey primary key (uid)
+  ) tablespace pg_default;
 
-create table calendar (
-  uid text primary key,
-  data jsonb
-);
+create table
+  public.calendar (
+    uid text not null,
+    data jsonb null,
+    constraint calendar_pkey primary key (uid)
+  ) tablespace pg_default;
+
+create table
+  public.chat_rooms (
+    id text not null,
+    participants jsonb not null,
+    message jsonb null,
+    name text null,
+    status text null,
+    recent boolean null,
+    thumb text null,
+    constraint chat_rooms_pkey primary key (id)
+  ) tablespace pg_default;
 
 """
 
