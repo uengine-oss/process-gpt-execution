@@ -201,13 +201,14 @@ create table organization (
 
 drop table proc_def;
 
-drop table proc_inst;
-
 create table proc_def (
   id text primary key,
   name text,
-  definition jsonb
+  definition jsonb,
+  bpmn text
 );
+
+drop table proc_inst;
 
 
 create table proc_inst (
