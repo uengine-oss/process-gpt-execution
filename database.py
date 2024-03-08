@@ -252,7 +252,6 @@ create table
     participants jsonb not null,
     message jsonb null,
     name text null,
-    thumb text null,
     constraint chat_rooms_pkey primary key (id)
   ) tablespace pg_default;
   
