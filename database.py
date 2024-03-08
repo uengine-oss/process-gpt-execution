@@ -233,10 +233,10 @@ create table vacation_request(
 
 create table
   public.chats (
-    uid text not null,
+    uuid text not null,
     id text not null,
     messages jsonb null,
-    constraint chats_pkey primary key (uid)
+    constraint chats_pkey primary key (uuid)
   ) tablespace pg_default;
 
 create table
