@@ -254,6 +254,15 @@ create table
     name text null,
     constraint chat_rooms_pkey primary key (id)
   ) tablespace pg_default;
+
+create table
+  public.tokens (
+    type text not null,
+    token text null,
+    constraint tokens_pkey primary key (
+      type
+    )
+  ) tablespace pg_default;
   
 """
 
