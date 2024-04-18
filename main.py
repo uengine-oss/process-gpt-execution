@@ -134,7 +134,7 @@ prompt = PromptTemplate.from_template(
         
         "completedActivities": [{{
             "completedActivityId": "the id of completed activity id",
-            "result": "todo | running | pending | complete" // The result of the completed activity
+            "result": "TODO | IN_PROGRESS | PENDING | DONE" // The result of the completed activity
         }}]
 
     }}
