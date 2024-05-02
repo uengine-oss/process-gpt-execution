@@ -160,3 +160,4 @@ cython_debug/
 #.idea/
 Pipfile.lock
 test.html
+.langchain.db
