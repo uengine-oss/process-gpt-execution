@@ -129,11 +129,39 @@ def extract_markdown_code_blocks(markdown_text):
     return single_string_result
 
 
+# Drop Table SQL 생성 함수
+def generate_drop_table_sql(input):
+    process_definition_id = input.get('process_definition_id')
+    if not process_definition_id:
+        raise HTTPException(status_code=404, detail="No process definition ID was provided.")
+    
+    drop_table_sql = f"DROP TABLE IF EXISTS {process_definition_id};"
+    return {"drop_table_sql": drop_table_sql}
+
+generate_drop_table_sql_lambda = RunnableLambda(generate_drop_table_sql)
+
+# Drop Table SQL 실행 함수
+def execute_drop_table_sql(input):
+    drop_table_sql = input.get('drop_table_sql')
+    if not drop_table_sql:
+        raise HTTPException(status_code=400, detail="No SQL command to execute.")
+    
+    execute_sql(drop_table_sql)
+    return {"status": "success", "message": f"Table {input.get('process_definition_id')} dropped successfully."}
+
+execute_drop_table_sql_lambda = RunnableLambda(execute_drop_table_sql)
+
 
 add_routes(
     app,
     combine_input_with_process_definition_lambda | prompt | model | extract_markdown_code_blocks | execute_sql,
     path="/process-db-schema",
+)
+
+add_routes(
+    app,
+    generate_drop_table_sql_lambda | execute_drop_table_sql_lambda,
+    path="/drop-process-table",
 )
 
 if __name__ == "__main__":
@@ -144,4 +172,7 @@ if __name__ == "__main__":
 http :8001/process-db-schema/invoke input[process_definition_id]="company_entrance"
 http :8001/process-db-schema/invoke input[process_definition_id]="vacation_request"
 http :8001/process-db-schema/invoke input[process_definition_id]="vacation_addition"
+
+http :8001/drop-process-table/invoke input[process_definition_id]="issue_management_process"
+
 """

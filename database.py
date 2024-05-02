@@ -1,6 +1,6 @@
 import os
 from supabase import create_client, Client
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from typing import Any, Dict, List, Optional
 import uuid
 from process_definition import ProcessDefinition, load_process_definition
@@ -8,6 +8,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from fastapi import HTTPException
 from decimal import Decimal
+from datetime import datetime
 
 url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
@@ -307,6 +308,31 @@ class ProcessInstance(BaseModel):
             variable_map[variable_name] = getattr(self, variable_name, None)
         return variable_map
     
+class WorkItem(BaseModel):
+    id: str
+    user_id: Optional[str]
+    proc_inst_id: Optional[str] = None
+    proc_def_id: Optional[str] = None
+    activity_id: str
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    status: str
+    description: Optional[str] = None
+    
+    @validator('start_date', 'end_date', pre=True)
+    def parse_datetime(cls, value):
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        return value
+
+    class Config:
+        json_encoders = {
+            datetime: lambda dt: dt.strftime("%Y-%m-%d %H:%M:%S")
+        }
+
 def fetch_and_apply_system_data_sources(process_instance: ProcessInstance) -> None:
     # 프로세스 정의에서 데이터스가 'system'인 변수를 처리
     for variable in process_instance.process_definition.data:
@@ -344,6 +370,11 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
     process_instance_data = process_instance.dict(exclude={'process_definition'})  # Pydantic 모을 dict로 변환
     process_instance_data = convert_decimal(process_instance_data)
     try:
+        supabase.table('proc_inst').upsert({
+            'id': process_instance.proc_inst_id,
+            'name': process_instance.proc_inst_name,
+            'user_ids': process_instance.current_user_ids,
+        }).execute()
         response = supabase.table(process_name).upsert(process_instance_data).execute()
     except Exception as e:
         # Check if the table exists in the database
@@ -370,3 +401,71 @@ def fetch_organization_chart():
         return organization_chart
     else:
         return None
+
+def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str) -> Optional[WorkItem]:
+    response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('activity_id', activity_id).execute()
+    if response.data:
+        return WorkItem(**response.data[0])
+    else:
+        return None
+
+def upsert_completed_workitem(prcess_instance_data, process_result_data):
+    if not process_result_data['completedActivities']:
+        return
+    
+    if process_result_data['instanceId'] != "new":
+        workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], process_result_data['completedActivities'][0]['completedActivityId'])
+    else:
+        workitem = WorkItem(
+            id=f"{str(uuid.uuid4())}",
+            proc_inst_id=prcess_instance_data['proc_inst_id'],
+            proc_def_id=process_result_data['processDefinitionId'],
+            activity_id=process_result_data['completedActivities'][0]['completedActivityId'],
+            user_id=process_result_data['completedActivities'][0]['completedUserEmail'],
+            status=process_result_data['completedActivities'][0]['result'],
+            start_date=datetime.now(),
+            end_date=datetime.now()
+        )
+        
+    if not workitem:
+        workitem = WorkItem(
+            id=f"{str(uuid.uuid4())}",
+            proc_inst_id=prcess_instance_data['proc_inst_id'],
+            proc_def_id=process_result_data['processDefinitionId'],
+            activity_id=process_result_data['completedActivities'][0]['completedActivityId'],
+            user_id=process_result_data['completedActivities'][0]['completedUserEmail'],
+            status=process_result_data['completedActivities'][0]['result'],
+            end_date=datetime.now()
+        )
+    try:
+        workitem_dict = workitem.dict()
+        workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
+        workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
+        supabase.table('todolist').upsert(workitem_dict).execute()
+    except Exception as e:
+        # Check if the table exists in the database
+        raise HTTPException(status_code=404, detail=str(e)) from e
+        
+def upsert_next_workitem(prcess_instance_data, process_result_data):
+    if not process_result_data['nextActivities']:
+        return
+    
+    workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], process_result_data['nextActivities'][0]['nextActivityId'])
+    if not workitem:
+        workitem = WorkItem(
+            id=f"{str(uuid.uuid4())}",
+            proc_inst_id=prcess_instance_data['proc_inst_id'],
+            proc_def_id=process_result_data['processDefinitionId'],
+            activity_id=process_result_data['nextActivities'][0]['nextActivityId'],
+            user_id=process_result_data['nextActivities'][0]['nextUserEmail'],
+            status=process_result_data['nextActivities'][0]['result'],
+            start_date=datetime.now()
+        )
+    try:
+        workitem_dict = workitem.dict()
+        workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
+        supabase.table('todolist').upsert(workitem_dict).execute()
+    except Exception as e:
+        # Check if the table exists in the database
+        raise HTTPException(status_code=404, detail=e) from e
+        

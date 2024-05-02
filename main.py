@@ -12,7 +12,7 @@ from langchain_core.runnables import ConfigurableField, RunnablePassthrough
 from datetime import datetime
 
 
-from database import upsert_process_instance
+from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitem
 from database import ProcessInstance
 import uuid
 import json
@@ -121,7 +121,8 @@ prompt = PromptTemplate.from_template(
         "nextActivities":
         [{{
             "nextActivityId": "the id of next activity id",
-            "nextUserEmail": "the email address of next activity’s role"
+            "nextUserEmail": "the email address of next activity’s role",
+            "result": "TODO | IN_PROGRESS | PENDING | DONE" // The result of the completed activity
         }}],
 
         "cannotProceedErrors":   // return errors if cannot proceed to next activity 
@@ -134,6 +135,7 @@ prompt = PromptTemplate.from_template(
         
         "completedActivities": [{{
             "completedActivityId": "the id of completed activity id",
+            "completedUserEmail": "the email address of completed activity’s role",
             "result": "TODO | IN_PROGRESS | PENDING | DONE" // The result of the completed activity
         }}]
 
@@ -149,6 +151,12 @@ prompt = PromptTemplate.from_template(
 class Activity(BaseModel):
     nextActivityId: Optional[str] = None
     nextUserEmail: Optional[str] = None
+    result: Optional[str] = None
+
+class CompletedActivity(BaseModel):
+    completedActivityId: Optional[str] = None
+    completedUserEmail: Optional[str] = None
+    result: Optional[str] = None
 
 class RoleBindingChange(BaseModel):
     roleName: str
@@ -168,6 +176,7 @@ class ProcessResult(BaseModel):
     dataChanges: Optional[List[DataChange]] = None
     roleBindingChanges: Optional[List[RoleBindingChange]] = None
     nextActivities: List[Activity]
+    completedActivities: List[CompletedActivity]
     processDefinitionId: str
     result: Optional[str] = None
     cannotProceedErrors: List[ProceedError]
@@ -192,10 +201,14 @@ def execute_next_activity(process_result_json: dict) -> str:
 
     for data_change in process_result.dataChanges or []:
         setattr(process_instance, data_change.key, data_change.value)
-
+        
+    all_user_emails = set()
+    if process_result.completedActivities:
+        all_user_emails.update(activity.completedUserEmail for activity in process_result.completedActivities)
     if process_result.nextActivities:
         process_instance.current_activity_ids = [activity.nextActivityId for activity in process_result.nextActivities]
-        process_instance.current_user_ids = [activity.nextUserEmail for activity in process_result.nextActivities]
+        all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
+    process_instance.current_user_ids = list(all_user_emails)
 
     result = None
 
@@ -210,7 +223,9 @@ def execute_next_activity(process_result_json: dict) -> str:
             result = (f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found.")
   
     _, process_instance = upsert_process_instance(process_instance)
-
+    
+    upsert_completed_workitem(process_instance.dict(), process_result.dict())    
+    upsert_next_workitem(process_instance.dict(), process_result.dict())
     
     # Updating process_result_json with the latest process instance details and execution result
     process_result_json["instanceId"] = process_instance.proc_inst_id
