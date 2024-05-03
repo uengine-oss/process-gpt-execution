@@ -140,10 +140,10 @@ def add_routes_to_app(app) :
     )
 
 """
-http :8001/process-db-schema/invoke input[process_definition_id]="company_entrance"
-http :8001/process-db-schema/invoke input[process_definition_id]="vacation_request"
-http :8001/process-db-schema/invoke input[process_definition_id]="vacation_addition"
+http :8000/process-db-schema/invoke input[process_definition_id]="company_entrance"
+http :8000/process-db-schema/invoke input[process_definition_id]="vacation_request"
+http :8000/process-db-schema/invoke input[process_definition_id]="vacation_addition"
 
-http :8001/drop-process-table/invoke input[process_definition_id]="issue_management_process"
+http :8000/drop-process-table/invoke input[process_definition_id]="issue_management_process"
 
 """
