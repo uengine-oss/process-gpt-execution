@@ -1,39 +1,14 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import HTTPException
 from langchain.prompts import PromptTemplate
 from langchain.chat_models import ChatOpenAI
 from langserve import add_routes
-from fastapi.staticfiles import StaticFiles
 from langchain_core.runnables import RunnableLambda
-from fastapi.middleware.cors import CORSMiddleware
 from database import fetch_process_definition, execute_sql, generate_create_statement_for_table
 import re
-
-import psycopg2
-from psycopg2.extras import RealDictCursor
-
-
-app = FastAPI(
-    title="LangChain Server",
-    version="1.0",
-    description="A simple api server using Langchain's Runnable interfaces",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 모든 출처 허용
-    allow_credentials=True,
-    allow_methods=["*"],  # 모든 HTTP 메서드 허용
-    allow_headers=["*"],  # 모든 HTTP 헤더 허용
-)
-
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
 import os
-openai_api_key = os.getenv("OPENAI_API_KEY")
-
-
 
 # 1. OpenAI Chat Model 생성
+openai_api_key = os.getenv("OPENAI_API_KEY")
 model = ChatOpenAI(openai_api_key=openai_api_key)
 
 prompt = PromptTemplate.from_template(
@@ -151,22 +126,18 @@ def execute_drop_table_sql(input):
 
 execute_drop_table_sql_lambda = RunnableLambda(execute_drop_table_sql)
 
+def add_routes_to_app(app) :
+    add_routes(
+        app,
+        combine_input_with_process_definition_lambda | prompt | model | extract_markdown_code_blocks | execute_sql,
+        path="/process-db-schema",
+    )
 
-add_routes(
-    app,
-    combine_input_with_process_definition_lambda | prompt | model | extract_markdown_code_blocks | execute_sql,
-    path="/process-db-schema",
-)
-
-add_routes(
-    app,
-    generate_drop_table_sql_lambda | execute_drop_table_sql_lambda,
-    path="/drop-process-table",
-)
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="localhost", port=8001)
+    add_routes(
+        app,
+        generate_drop_table_sql_lambda | execute_drop_table_sql_lambda,
+        path="/drop-process-table",
+    )
 
 """
 http :8001/process-db-schema/invoke input[process_definition_id]="company_entrance"
