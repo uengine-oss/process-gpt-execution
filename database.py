@@ -367,6 +367,8 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
 
 def upsert_process_instance(process_instance: ProcessInstance) -> (bool, ProcessInstance):
     process_name = process_instance.proc_inst_id.split('.')[0]  # 프로세스 정의명만 추출
+    if 'END_PROCESS' in process_instance.current_activity_ids:
+        process_instance.current_activity_ids = []
     process_instance_data = process_instance.dict(exclude={'process_definition'})  # Pydantic 모을 dict로 변환
     process_instance_data = convert_decimal(process_instance_data)
     try:
@@ -377,9 +379,9 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
         }).execute()
         response = supabase.table(process_name).upsert(process_instance_data).execute()
     except Exception as e:
-        # Check if the table exists in the database
-        raise HTTPException(status_code=404, detail=f"The table '{process_name}' does not exist in the database.") from e
-        
+        raise HTTPException(status_code=404, detail=e) from e
+        # raise HTTPException(status_code=404, detail=f"The table '{process_name}' does not exist in the database.") from e
+    
     success = bool(response.data)
     return success, process_instance
 
@@ -409,12 +411,15 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
     else:
         return None
 
+# todolist 업데이트
 def upsert_completed_workitem(prcess_instance_data, process_result_data):
     if not process_result_data['completedActivities']:
         return
     
     if process_result_data['instanceId'] != "new":
         workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], process_result_data['completedActivities'][0]['completedActivityId'])
+        workitem.status = process_result_data['completedActivities'][0]['result']
+        workitem.end_date = datetime.now()
     else:
         workitem = WorkItem(
             id=f"{str(uuid.uuid4())}",
@@ -426,32 +431,27 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data):
             start_date=datetime.now(),
             end_date=datetime.now()
         )
-        
-    if not workitem:
-        workitem = WorkItem(
-            id=f"{str(uuid.uuid4())}",
-            proc_inst_id=prcess_instance_data['proc_inst_id'],
-            proc_def_id=process_result_data['processDefinitionId'],
-            activity_id=process_result_data['completedActivities'][0]['completedActivityId'],
-            user_id=process_result_data['completedActivities'][0]['completedUserEmail'],
-            status=process_result_data['completedActivities'][0]['result'],
-            end_date=datetime.now()
-        )
+
     try:
         workitem_dict = workitem.dict()
         workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
         workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
         supabase.table('todolist').upsert(workitem_dict).execute()
     except Exception as e:
-        # Check if the table exists in the database
         raise HTTPException(status_code=404, detail=str(e)) from e
+
         
 def upsert_next_workitem(prcess_instance_data, process_result_data):
     if not process_result_data['nextActivities']:
         return
+    if process_result_data['nextActivities'][0]['nextActivityId'] == "END_PROCESS":
+        return
     
     workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], process_result_data['nextActivities'][0]['nextActivityId'])
-    if not workitem:
+    if workitem:
+        workitem.status = process_result_data['nextActivities'][0]['result']
+        workitem.end_date = datetime.now()
+    else:
         workitem = WorkItem(
             id=f"{str(uuid.uuid4())}",
             proc_inst_id=prcess_instance_data['proc_inst_id'],
@@ -464,8 +464,8 @@ def upsert_next_workitem(prcess_instance_data, process_result_data):
     try:
         workitem_dict = workitem.dict()
         workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
+        workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
         supabase.table('todolist').upsert(workitem_dict).execute()
     except Exception as e:
-        # Check if the table exists in the database
         raise HTTPException(status_code=404, detail=e) from e
         

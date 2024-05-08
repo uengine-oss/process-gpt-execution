@@ -82,6 +82,8 @@ prompt = PromptTemplate.from_template(
     Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
     The data changes and role binding changes should be derived from the user submitted data or attached image OCR. 
     At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
+    Information about completed activities must be returned.
+    The completedUserEmail included in completedActivities must be found in the Organization chart and returned.
     The nextUserEmail included in nextActivities must be found in the Organization chart and returned.
     If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
     Return the result with the following description in markdown (three backticks):
@@ -101,12 +103,19 @@ prompt = PromptTemplate.from_template(
             "roleName": "name of role",
             "userId": "email address for the role"
         }}],
+        
+        "completedActivities":
+        [{{
+            "completedActivityId": "the id of completed activity id",
+            "completedUserEmail": "the email address of completed activity’s role",
+            "result": "PENDING | DONE" // The result of the completed activity
+        }}],
     
         "nextActivities":
         [{{
-            "nextActivityId": "the id of next activity id",
+            "nextActivityId": "the id of next activity id", // Return "END_PROCESS" if all steps have been completed and cannot proceed to the next step
             "nextUserEmail": "the email address of next activity’s role",
-            "result": "TODO | IN_PROGRESS | PENDING | DONE" // The result of the completed activity
+            "result": "TODO | IN_PROGRESS | PENDING | DONE" // The result of the next activity
         }}],
 
         "cannotProceedErrors":   // return errors if cannot proceed to next activity 
@@ -115,13 +124,7 @@ prompt = PromptTemplate.from_template(
             "reason": "explanation for the error"
         }}],
         
-        "description": "description of the completed activities and the next activities and what the user who will perform the task should do in Korean",
-        
-        "completedActivities": [{{
-            "completedActivityId": "the id of completed activity id",
-            "completedUserEmail": "the email address of completed activity’s role",
-            "result": "TODO | IN_PROGRESS | PENDING | DONE" // The result of the completed activity
-        }}]
+        "description": "description of the completed activities and the next activities and what the user who will perform the task should do in Korean"
 
     }}
     
@@ -192,8 +195,12 @@ def execute_next_activity(process_result_json: dict) -> str:
     if process_result.nextActivities:
         process_instance.current_activity_ids = [activity.nextActivityId for activity in process_result.nextActivities]
         all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
-    process_instance.current_user_ids = list(all_user_emails)
-
+    
+    current_user_ids_set = set(process_instance.current_user_ids)
+    updated_user_emails = current_user_ids_set.union(all_user_emails)
+    
+    process_instance.current_user_ids = list(updated_user_emails)
+    
     result = None
 
     for activity in process_result.nextActivities:
