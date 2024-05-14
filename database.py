@@ -368,7 +368,7 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
 
 def upsert_process_instance(process_instance: ProcessInstance) -> (bool, ProcessInstance):
     process_name = process_instance.proc_inst_id.split('.')[0]  # 프로세스 정의명만 추출
-    if 'END_PROCESS' in process_instance.current_activity_ids:
+    if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids:
         process_instance.current_activity_ids = []
     process_instance_data = process_instance.dict(exclude={'process_definition'})  # Pydantic 모을 dict로 변환
     process_instance_data = convert_decimal(process_instance_data)
@@ -379,12 +379,11 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
             'user_ids': process_instance.current_user_ids,
         }).execute()
         response = supabase.table(process_name.lower()).upsert(process_instance_data).execute()
+        success = bool(response.data)
+        return success, process_instance
     except Exception as e:
         raise HTTPException(status_code=404, detail=e) from e
         # raise HTTPException(status_code=404, detail=f"The table '{process_name}' does not exist in the database.") from e
-    
-    success = bool(response.data)
-    return success, process_instance
 
 def convert_decimal(data):
     for key, value in data.items():
@@ -444,9 +443,9 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data):
         
 def upsert_next_workitem(prcess_instance_data, process_result_data)->WorkItem: 
     if not process_result_data['nextActivities']:
-        return
-    if process_result_data['nextActivities'][0]['nextActivityId'] == "END_PROCESS":
-        return
+        return None
+    if process_result_data['nextActivities'][0]['nextActivityId'] == "END_PROCESS" or process_result_data['nextActivities'][0]['nextActivityId'] == "endEvent":
+        return None
     
     workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], process_result_data['nextActivities'][0]['nextActivityId'])
     if workitem:
