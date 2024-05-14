@@ -35,8 +35,8 @@ class ProcessActivity(BaseModel):
     description: str
     instruction: Optional[str] = None
     role: str
-    inputData: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
-    outputData: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    inputData: Optional[List[str]] = Field(default_factory=list)
+    outputData: Optional[List[str]] = Field(default_factory=list)
     checkpoints: Optional[List[str]] = Field(default_factory=list)
     pythonCode: Optional[str] = None
 

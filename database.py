@@ -269,7 +269,7 @@ def fetch_process_definition(def_id):
     Returns:
         dict: The process definition as a JSON object if found, else None.
     """
-    response = supabase.table('proc_def').select('*').eq('id', def_id).execute()
+    response = supabase.table('proc_def').select('*').eq('id', def_id.lower()).execute()
     
     # Check if the response contains data
     if response.data:
@@ -277,7 +277,8 @@ def fetch_process_definition(def_id):
         process_definition = response.data[0].get('definition', None)
         return process_definition
     else:
-        return None
+        raise ValueError(f"No process definition found with ID {def_id}")
+        
 
 class ProcessInstance(BaseModel):
     proc_inst_id: str
@@ -377,7 +378,7 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
             'name': process_instance.proc_inst_name,
             'user_ids': process_instance.current_user_ids,
         }).execute()
-        response = supabase.table(process_name).upsert(process_instance_data).execute()
+        response = supabase.table(process_name.lower()).upsert(process_instance_data).execute()
     except Exception as e:
         raise HTTPException(status_code=404, detail=e) from e
         # raise HTTPException(status_code=404, detail=f"The table '{process_name}' does not exist in the database.") from e
@@ -441,7 +442,7 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data):
         raise HTTPException(status_code=404, detail=str(e)) from e
 
         
-def upsert_next_workitem(prcess_instance_data, process_result_data):
+def upsert_next_workitem(prcess_instance_data, process_result_data)->WorkItem: 
     if not process_result_data['nextActivities']:
         return
     if process_result_data['nextActivities'][0]['nextActivityId'] == "END_PROCESS":
@@ -455,7 +456,7 @@ def upsert_next_workitem(prcess_instance_data, process_result_data):
         workitem = WorkItem(
             id=f"{str(uuid.uuid4())}",
             proc_inst_id=prcess_instance_data['proc_inst_id'],
-            proc_def_id=process_result_data['processDefinitionId'],
+            proc_def_id=process_result_data['processDefinitionId'].lower(),
             activity_id=process_result_data['nextActivities'][0]['nextActivityId'],
             user_id=process_result_data['nextActivities'][0]['nextUserEmail'],
             status=process_result_data['nextActivities'][0]['result'],
@@ -466,6 +467,8 @@ def upsert_next_workitem(prcess_instance_data, process_result_data):
         workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
         workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
         supabase.table('todolist').upsert(workitem_dict).execute()
+
+        return workitem
     except Exception as e:
         raise HTTPException(status_code=404, detail=e) from e
         

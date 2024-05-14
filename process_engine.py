@@ -51,7 +51,7 @@ prompt = PromptTemplate.from_template(
     1. Write in Korean without spaces
     2. Include process definition name: Name that indicates which instance of the process definition it is
     3. Include user's name: The name of the person who execute the process instance
-    4. Date included: When the process executed (current date: {formattedDate})
+    4. Date included: When the process executed (current date: {today})
 
     - Process Data:
     {data}
@@ -77,7 +77,7 @@ prompt = PromptTemplate.from_template(
       user: "example@company.com",
       submitted data: {answer}
     
-
+    - Today is:  {today}
     
     Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
     The data changes and role binding changes should be derived from the user submitted data or attached image OCR. 
@@ -95,7 +95,7 @@ prompt = PromptTemplate.from_template(
         "dataChanges":
         [{{
             "key": "process data name",
-            "value": "value for chaned data"
+            "value": <value for changed data>  // Refer to the data type of this process variable and use JavaScript syntax. For example, if the type of the process variable is Date, calculate and assign today's date.
         }}],
 
         "roleBindingChanges":
@@ -115,7 +115,8 @@ prompt = PromptTemplate.from_template(
         [{{
             "nextActivityId": "the id of next activity id", // Return "END_PROCESS" if all steps have been completed and cannot proceed to the next step
             "nextUserEmail": "the email address of next activity’s role",
-            "result": "TODO | IN_PROGRESS | PENDING | DONE" // The result of the next activity
+            "result": "TODO | IN_PROGRESS | PENDING | DONE", // The result of the next activity
+            "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)"
         }}],
 
         "cannotProceedErrors":   // return errors if cannot proceed to next activity 
@@ -175,7 +176,7 @@ def execute_next_activity(process_result_json: dict) -> str:
 
     if process_result.instanceId == "new":
         process_instance = ProcessInstance(
-            proc_inst_id=f"{process_result.processDefinitionId}.{str(uuid.uuid4())}",
+            proc_inst_id=f"{process_result.processDefinitionId.lower()}.{str(uuid.uuid4())}",
             proc_inst_name=f"{process_result.instanceName}",
             role_bindings={},
             current_activity_ids=[],
@@ -216,12 +217,13 @@ def execute_next_activity(process_result_json: dict) -> str:
     _, process_instance = upsert_process_instance(process_instance)
     
     upsert_completed_workitem(process_instance.dict(), process_result.dict())    
-    upsert_next_workitem(process_instance.dict(), process_result.dict())
+    workitem = upsert_next_workitem(process_instance.dict(), process_result.dict())
     
     # Updating process_result_json with the latest process instance details and execution result
     process_result_json["instanceId"] = process_instance.proc_inst_id
     process_result_json["instanceName"] = process_instance.proc_inst_name
     process_result_json["result"] = result
+    process_result_json["workitemId"] = workitem.id
 
     return json.dumps(process_result_json)
 
@@ -268,7 +270,7 @@ def combine_input_with_process_definition(input):
     user_info = input.get('userInfo')
     
     now = datetime.now()
-    formattedDate = now.date()
+    today = now.date()
     
     organizationChart = fetch_organization_chart()
 
@@ -298,7 +300,7 @@ def combine_input_with_process_definition(input):
             "activity_id": activity_id,
             "image": image,
             "user_info": user_info,
-            "formattedDate": formattedDate,
+            "today": today,
             "organizationChart": organizationChart
         }
     else:
@@ -320,10 +322,10 @@ def combine_input_with_process_definition(input):
             "current_user_ids": "there's no user currently running activities",
             "processDefinitionJson": processDefinitionJson,
             "process_definition_id": process_definition_id,
-            "activity_id": processDefinition.find_initial_activity().id,
+            "activity_id": "id of the start event or start activity", #processDefinition.find_initial_activity().id,
             "image": image,
             "user_info": user_info,
-            "formattedDate": formattedDate,
+            "today": today,
             "organizationChart": organizationChart
         }
 
