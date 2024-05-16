@@ -17,7 +17,7 @@ import json
 
 # 1. OpenAI Chat Model 생성
 # ChatOpenAI 객체 생성
-model = ChatOpenAI(model="gpt-4")
+model = ChatOpenAI(model="gpt-4o")
 vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096)
 
 # ConfigurableField를 사용하여 모델 선택 구성
@@ -218,8 +218,8 @@ def execute_next_activity(process_result_json: dict) -> str:
     
         _, process_instance = upsert_process_instance(process_instance)
         
-        upsert_completed_workitem(process_instance.dict(), process_result.dict())    
-        workitem = upsert_next_workitem(process_instance.dict(), process_result.dict())
+        upsert_completed_workitem(process_instance.dict(), process_result.dict(), process_definition)    
+        workitem = upsert_next_workitem(process_instance.dict(), process_result.dict(), process_definition)
         
         # Updating process_result_json with the latest process instance details and execution result
         process_result_json["instanceId"] = process_instance.proc_inst_id
@@ -233,7 +233,7 @@ def execute_next_activity(process_result_json: dict) -> str:
 
         return json.dumps(process_result_json)
     except Exception as e:
-        raise HTTPException(status_code=404, detail=e) from e
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 import base64
 from langchain.schema.messages import HumanMessage, AIMessage
@@ -301,7 +301,7 @@ def combine_input_with_process_definition(input):
                 "instance_id": process_instance.proc_inst_id,
                 "instance_name": process_instance.proc_inst_name,
                 "role_bindings": process_instance.role_bindings,
-                "data": process_instance.model_dump_json(),
+                "data": process_instance.model_dump_json(),   #TODO 속성 중에 processdefinition 은 불필요한데 들어있어서 사이즈를 차지 하니 제외처리필요
                 "current_activity_ids": process_instance.current_activity_ids,
                 "current_user_ids": process_instance.current_user_ids,
                 "processDefinitionJson": processDefinitionJson,
@@ -340,7 +340,7 @@ def combine_input_with_process_definition(input):
                 "organizationChart": organizationChart
             }
     except Exception as e:
-        raise HTTPException(status_code=404, detail=e) from e
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with_process_definition)
 

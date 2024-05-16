@@ -315,10 +315,12 @@ class WorkItem(BaseModel):
     proc_inst_id: Optional[str] = None
     proc_def_id: Optional[str] = None
     activity_id: str
+    activity_name: str 
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     status: str
     description: Optional[str] = None
+    tool: Optional[str] = None
     
     @validator('start_date', 'end_date', pre=True)
     def parse_datetime(cls, value):
@@ -412,7 +414,7 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
         return None
 
 # todolist 업데이트
-def upsert_completed_workitem(prcess_instance_data, process_result_data):
+def upsert_completed_workitem(prcess_instance_data, process_result_data, process_definition):
     if not process_result_data['completedActivities']:
         return
     
@@ -421,11 +423,15 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data):
         workitem.status = process_result_data['completedActivities'][0]['result']
         workitem.end_date = datetime.now()
     else:
+        activity = process_definition.find_activity_by_id(process_result_data['nextActivities'][0]['nextActivityId'])
+
+
         workitem = WorkItem(
             id=f"{str(uuid.uuid4())}",
             proc_inst_id=prcess_instance_data['proc_inst_id'],
             proc_def_id=process_result_data['processDefinitionId'],
             activity_id=process_result_data['completedActivities'][0]['completedActivityId'],
+            activity_name=activity.name,
             user_id=process_result_data['completedActivities'][0]['completedUserEmail'],
             status=process_result_data['completedActivities'][0]['result'],
             start_date=datetime.now(),
@@ -441,7 +447,7 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data):
         raise HTTPException(status_code=404, detail=str(e)) from e
 
         
-def upsert_next_workitem(prcess_instance_data, process_result_data)->WorkItem: 
+def upsert_next_workitem(prcess_instance_data, process_result_data, process_definition)->WorkItem: 
     if not process_result_data['nextActivities']:
         return None
     if process_result_data['nextActivities'][0]['nextActivityId'] == "END_PROCESS" or process_result_data['nextActivities'][0]['nextActivityId'] == "endEvent":
@@ -452,14 +458,19 @@ def upsert_next_workitem(prcess_instance_data, process_result_data)->WorkItem:
         workitem.status = process_result_data['nextActivities'][0]['result']
         workitem.end_date = datetime.now()
     else:
+        #process_definition = load_process_definition(fetch_process_definition(process_result_data['processDefinitionId'])) #TODO caching 필요.
+        activity = process_definition.find_activity_by_id(process_result_data['nextActivities'][0]['nextActivityId'])
+
         workitem = WorkItem(
             id=f"{str(uuid.uuid4())}",
             proc_inst_id=prcess_instance_data['proc_inst_id'],
             proc_def_id=process_result_data['processDefinitionId'].lower(),
-            activity_id=process_result_data['nextActivities'][0]['nextActivityId'],
+            activity_id=activity.id, #process_result_data['nextActivities'][0]['nextActivityId'],
+            activity_name=activity.name,  #TODO name과 id 둘다 있어야 함. 
             user_id=process_result_data['nextActivities'][0]['nextUserEmail'],
             status=process_result_data['nextActivities'][0]['result'],
-            start_date=datetime.now()
+            start_date=datetime.now(),
+            tool = activity.tool
         )
     try:
         workitem_dict = workitem.dict()
