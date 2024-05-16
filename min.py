@@ -1,4 +1,3 @@
-from fastapi import FastAPI
 from langchain.chat_models import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema.output_parser import StrOutputParser
@@ -63,15 +62,5 @@ def extract_script_activities(process_definition: dict) -> dict:
 # LCEL 체인에 함수 적용
 chain = prompt_template | model | output_parser | extract_script_activities | prompt2 | model | strOutputParser
 
-
-# FastAPI 앱 정의
-app = FastAPI()
-
-# LCEL 체인을 REST API 경로에 연결
-add_routes(app, chain, path="/generate_joke")
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="localhost", port=8000)
-
-
+def add_routes_to_app(app) :
+    add_routes(app, chain, path="/generate_joke")
