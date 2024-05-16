@@ -5,6 +5,7 @@ from process_engine import add_routes_to_app as add_process_routes_to_app
 from process_db_manager import add_routes_to_app as add_db_manager_routes_to_app
 from process_image import add_routes_to_app as add_image_routes_to_app
 from process_var_sql_gen import add_routes_to_app as add_var_sql_gen_routes_to_app
+from audio_input import add_routes_to_app as add_audio_input_routes_to_app
 
 import os
 
@@ -41,6 +42,7 @@ add_process_routes_to_app(app)
 add_db_manager_routes_to_app(app)
 add_image_routes_to_app(app)
 add_var_sql_gen_routes_to_app(app)
+add_audio_input_routes_to_app(app)
 
 
 if __name__ == "__main__":
