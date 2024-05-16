@@ -3,6 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from process_engine import add_routes_to_app as add_process_routes_to_app
 from process_db_manager import add_routes_to_app as add_db_manager_routes_to_app
+from process_image import add_routes_to_app as add_image_routes_to_app
 
 import os
 
@@ -37,6 +38,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 add_process_routes_to_app(app)
 add_db_manager_routes_to_app(app)
+add_image_routes_to_app(app)
 
 
 if __name__ == "__main__":
