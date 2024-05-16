@@ -17,7 +17,7 @@ import json
 
 # 1. OpenAI Chat Model 생성
 # ChatOpenAI 객체 생성
-model = ChatOpenAI(model="gpt-4")
+model = ChatOpenAI(model="gpt-4o")
 vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096)
 
 # ConfigurableField를 사용하여 모델 선택 구성
@@ -51,7 +51,7 @@ prompt = PromptTemplate.from_template(
     1. Write in Korean without spaces
     2. Include process definition name: Name that indicates which instance of the process definition it is
     3. Include user's name: The name of the person who execute the process instance
-    4. Date included: When the process executed (current date: {formattedDate})
+    4. Date included: When the process executed (current date: {today})
 
     - Process Data:
     {data}
@@ -74,16 +74,19 @@ prompt = PromptTemplate.from_template(
     - Received Message From Current Step:
     
       activityId: "{activity_id}",
-      user: "example@company.com",
+      user: "{user_email}",
       submitted data: {answer}
     
-
+    - Today is:  {today}
     
     Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
     The data changes and role binding changes should be derived from the user submitted data or attached image OCR. 
     At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
+    Information about completed activities must be returned.
+    The completedUserEmail included in completedActivities must be found in the Organization chart and returned.
     The nextUserEmail included in nextActivities must be found in the Organization chart and returned.
     If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
+    startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
     Return the result with the following description in markdown (three backticks):
     ```
     {{
@@ -92,8 +95,8 @@ prompt = PromptTemplate.from_template(
         "processDefinitionId": "{process_definition_id}",
         "dataChanges":
         [{{
-            "key": "process data name",
-            "value": "value for chaned data"
+            "key": "process data name", // Replace with _ if there is a space
+            "value": <value for changed data>  // Refer to the data type of this process variable and use JavaScript syntax. For example, if the type of the process variable is Date, calculate and assign today's date.
         }}],
 
         "roleBindingChanges":
@@ -101,12 +104,20 @@ prompt = PromptTemplate.from_template(
             "roleName": "name of role",
             "userId": "email address for the role"
         }}],
+        
+        "completedActivities":
+        [{{
+            "completedActivityId": "the id of completed activity id",
+            "completedUserEmail": "the email address of completed activity’s role",
+            "result": "PENDING | DONE" // The result of the completed activity
+        }}],
     
         "nextActivities":
         [{{
-            "nextActivityId": "the id of next activity id",
+            "nextActivityId": "the id of next activity id", // Return "END_PROCESS" if nextActivityId is "endEvent".
             "nextUserEmail": "the email address of next activity’s role",
-            "result": "TODO | IN_PROGRESS | PENDING | DONE" // The result of the completed activity
+            "result": "TODO | IN_PROGRESS | PENDING | DONE", // The result of the next activity
+            "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)" // Returns a description of the process end if nextActivityId is "endEvent".
         }}],
 
         "cannotProceedErrors":   // return errors if cannot proceed to next activity 
@@ -115,13 +126,7 @@ prompt = PromptTemplate.from_template(
             "reason": "explanation for the error"
         }}],
         
-        "description": "description of the completed activities and the next activities and what the user who will perform the task should do in Korean",
-        
-        "completedActivities": [{{
-            "completedActivityId": "the id of completed activity id",
-            "completedUserEmail": "the email address of completed activity’s role",
-            "result": "TODO | IN_PROGRESS | PENDING | DONE" // The result of the completed activity
-        }}]
+        "description": "description of the completed activities and the next activities and what the user who will perform the task should do in Korean"
 
     }}
     
@@ -167,56 +172,68 @@ class ProcessResult(BaseModel):
     description: str
 
 def execute_next_activity(process_result_json: dict) -> str:
-    process_result = ProcessResult(**process_result_json)
-    process_instance = None
+    try:
+        process_result = ProcessResult(**process_result_json)
+        process_instance = None
 
-    if process_result.instanceId == "new":
-        process_instance = ProcessInstance(
-            proc_inst_id=f"{process_result.processDefinitionId}.{str(uuid.uuid4())}",
-            proc_inst_name=f"{process_result.instanceName}",
-            role_bindings={},
-            current_activity_ids=[],
-            current_user_ids=[]
-        )
-    else:
-        process_instance = fetch_process_instance(process_result.instanceId)
-
-    process_definition = process_instance.process_definition
-
-    for data_change in process_result.dataChanges or []:
-        setattr(process_instance, data_change.key, data_change.value)
-        
-    all_user_emails = set()
-    if process_result.completedActivities:
-        all_user_emails.update(activity.completedUserEmail for activity in process_result.completedActivities)
-    if process_result.nextActivities:
-        process_instance.current_activity_ids = [activity.nextActivityId for activity in process_result.nextActivities]
-        all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
-    process_instance.current_user_ids = list(all_user_emails)
-
-    result = None
-
-    for activity in process_result.nextActivities:
-        activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
-        if activity_obj and activity_obj.type == "ScriptActivity":
-            env_vars = {key.upper(): value for key, value in process_instance.get_data().items()}
-            result = execute_python_code(activity_obj.pythonCode, env_vars=env_vars)
-
-            process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
+        if process_result.instanceId == "new":
+            process_instance = ProcessInstance(
+                proc_inst_id=f"{process_result.processDefinitionId.lower()}.{str(uuid.uuid4())}",
+                proc_inst_name=f"{process_result.instanceName}",
+                role_bindings={},
+                current_activity_ids=[],
+                current_user_ids=[]
+            )
         else:
-            result = (f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found.")
-  
-    _, process_instance = upsert_process_instance(process_instance)
-    
-    upsert_completed_workitem(process_instance.dict(), process_result.dict())    
-    upsert_next_workitem(process_instance.dict(), process_result.dict())
-    
-    # Updating process_result_json with the latest process instance details and execution result
-    process_result_json["instanceId"] = process_instance.proc_inst_id
-    process_result_json["instanceName"] = process_instance.proc_inst_name
-    process_result_json["result"] = result
+            process_instance = fetch_process_instance(process_result.instanceId)
 
-    return json.dumps(process_result_json)
+        process_definition = process_instance.process_definition
+
+        for data_change in process_result.dataChanges or []:
+            setattr(process_instance, data_change.key, data_change.value)
+            
+        all_user_emails = set()
+        if process_result.completedActivities:
+            all_user_emails.update(activity.completedUserEmail for activity in process_result.completedActivities)
+        if process_result.nextActivities:
+            process_instance.current_activity_ids = [activity.nextActivityId for activity in process_result.nextActivities]
+            all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
+        
+        current_user_ids_set = set(process_instance.current_user_ids)
+        updated_user_emails = current_user_ids_set.union(all_user_emails)
+        
+        process_instance.current_user_ids = list(updated_user_emails)
+        
+        result = None
+
+        for activity in process_result.nextActivities:
+            activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
+            if activity_obj and activity_obj.type == "ScriptActivity":
+                env_vars = {key.upper(): value for key, value in process_instance.get_data().items()}
+                result = execute_python_code(activity_obj.pythonCode, env_vars=env_vars)
+
+                process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
+            else:
+                result = (f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found.")
+    
+        _, process_instance = upsert_process_instance(process_instance)
+        
+        upsert_completed_workitem(process_instance.dict(), process_result.dict(), process_definition)    
+        workitem = upsert_next_workitem(process_instance.dict(), process_result.dict(), process_definition)
+        
+        # Updating process_result_json with the latest process instance details and execution result
+        process_result_json["instanceId"] = process_instance.proc_inst_id
+        process_result_json["instanceName"] = process_instance.proc_inst_name
+        process_result_json["result"] = result
+        # Ensure workitem is not None before accessing its id
+        if workitem is not None:
+            process_result_json["workitemId"] = workitem.id
+        else:
+            process_result_json["workitemId"] = None  # or handle it in another appropriate way
+
+        return json.dumps(process_result_json)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 import base64
 from langchain.schema.messages import HumanMessage, AIMessage
@@ -254,71 +271,76 @@ def vision_model_chain(input):
 
 def combine_input_with_process_definition(input):
     # 프로세스 인스턴스를 DB에서 검색
-    
-    process_instance_id = input.get('process_instance_id')  # 'process_instance_id' 키에 대한 접근 추가
-    activity_id = input.get('activity_id') 
-    image = input.get("image")
-    user_info = input.get('userInfo')
-    
-    now = datetime.now()
-    formattedDate = now.date()
-    
-    organizationChart = fetch_organization_chart()
-
-    processDefinitionJson = None
-    
-    if process_instance_id!="new":
-        process_instance = fetch_process_instance(process_instance_id)
-
-        if not process_instance:
-            raise HTTPException(status_code=404, detail=f"Process instance with ID {process_instance_id} not found.")
-
-        if activity_id not in process_instance.current_activity_ids:
-            raise HTTPException(status_code=400, detail=f"Activity ID {activity_id} is not among the currently executing activities.")
-    
-        processDefinitionJson = fetch_process_definition(process_instance.get_def_id())
-
-        return {
-            "answer": input['answer'],
-            "instance_id": process_instance.proc_inst_id,
-            "instance_name": process_instance.proc_inst_name,
-            "role_bindings": process_instance.role_bindings,
-            "data": process_instance.model_dump_json(),
-            "current_activity_ids": process_instance.current_activity_ids,
-            "current_user_ids": process_instance.current_user_ids,
-            "processDefinitionJson": processDefinitionJson,
-            "process_definition_id": process_instance.get_def_id(),
-            "activity_id": activity_id,
-            "image": image,
-            "user_info": user_info,
-            "formattedDate": formattedDate,
-            "organizationChart": organizationChart
-        }
-    else:
-        process_definition_id = input.get('process_definition_id')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
-
-        if not process_definition_id:
-            raise HTTPException(status_code=404, detail="Neither process definition ID nor process instance ID was provided. Cannot start or proceed with the process.")
+    try:
+        process_instance_id = input.get('process_instance_id')  # 'process_instance_id' 키에 대한 접근 추가
+        activity_id = input.get('activity_id') 
+        image = input.get("image")
+        user_info = input.get('userInfo')
+        user_email = user_info.get('email')
         
-        processDefinitionJson = fetch_process_definition(process_definition_id)
-        processDefinition = load_process_definition(processDefinitionJson)
+        now = datetime.now()
+        today = now.date()
+        
+        organizationChart = fetch_organization_chart()
 
-        return {
-            "answer": input['answer'],  
-            "instance_id": "new",
-            "instance_name": "",
-            "role_bindings": "no bindings",
-            "data": "no data",
-            "current_activity_ids": "there's no currently running activities",
-            "current_user_ids": "there's no user currently running activities",
-            "processDefinitionJson": processDefinitionJson,
-            "process_definition_id": process_definition_id,
-            "activity_id": processDefinition.find_initial_activity().id,
-            "image": image,
-            "user_info": user_info,
-            "formattedDate": formattedDate,
-            "organizationChart": organizationChart
-        }
+        processDefinitionJson = None
+        
+        if process_instance_id!="new":
+            process_instance = fetch_process_instance(process_instance_id)
+
+            if not process_instance:
+                raise HTTPException(status_code=404, detail=f"Process instance with ID {process_instance_id} not found.")
+
+            if activity_id not in process_instance.current_activity_ids:
+                raise HTTPException(status_code=400, detail=f"Activity ID {activity_id} is not among the currently executing activities.")
+        
+            processDefinitionJson = fetch_process_definition(process_instance.get_def_id())
+
+            return {
+                "answer": input['answer'],
+                "instance_id": process_instance.proc_inst_id,
+                "instance_name": process_instance.proc_inst_name,
+                "role_bindings": process_instance.role_bindings,
+                "data": process_instance.model_dump_json(),   #TODO 속성 중에 processdefinition 은 불필요한데 들어있어서 사이즈를 차지 하니 제외처리필요
+                "current_activity_ids": process_instance.current_activity_ids,
+                "current_user_ids": process_instance.current_user_ids,
+                "processDefinitionJson": processDefinitionJson,
+                "process_definition_id": process_instance.get_def_id(),
+                "activity_id": activity_id,
+                "image": image,
+                "user_info": user_info,
+                "user_email": user_email,
+                "today": today,
+                "organizationChart": organizationChart
+            }
+        else:
+            process_definition_id = input.get('process_definition_id')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
+
+            if not process_definition_id:
+                raise HTTPException(status_code=404, detail="Neither process definition ID nor process instance ID was provided. Cannot start or proceed with the process.")
+            
+            processDefinitionJson = fetch_process_definition(process_definition_id)
+            processDefinition = load_process_definition(processDefinitionJson)
+
+            return {
+                "answer": input['answer'],  
+                "instance_id": "new",
+                "instance_name": "",
+                "role_bindings": "no bindings",
+                "data": "no data",
+                "current_activity_ids": "there's no currently running activities",
+                "current_user_ids": "there's no user currently running activities",
+                "processDefinitionJson": processDefinitionJson,
+                "process_definition_id": process_definition_id,
+                "activity_id": "id of the start event or start activity", #processDefinition.find_initial_activity().id,
+                "image": image,
+                "user_info": user_info,
+                "user_email": user_email,
+                "today": today,
+                "organizationChart": organizationChart
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with_process_definition)
 
