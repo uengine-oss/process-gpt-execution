@@ -1,23 +1,9 @@
 # audio_input.py
-from fastapi import FastAPI, File, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import File, UploadFile
 import uuid
 import openai
 import os
 
-app = FastAPI()
-
-# CORS 설정
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 모든메인용 (보상 주의 필요)
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.post("/upload")
 async def upload_audio(audio: UploadFile = File(...)):
     filename = str(uuid.uuid4())
     file_location = f"uploads/{filename}.mp3"
@@ -40,7 +26,5 @@ async def upload_audio(audio: UploadFile = File(...)):
             "transcript": transcript_response  # 수정된 부분:트 반환
         }
 
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8003)
+def add_routes_to_app(app):
+    app.add_api_route("/upload", upload_audio, methods=["POST"])

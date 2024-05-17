@@ -1,8 +1,7 @@
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import HTTPException
 from langchain.prompts import PromptTemplate
 from langchain.chat_models import ChatOpenAI
 from langserve import add_routes
-from fastapi.staticfiles import StaticFiles
 from langchain_core.runnables import RunnableLambda
 from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table
 import re
@@ -10,24 +9,6 @@ import json
 from decimal import Decimal
 from langchain.schema.output_parser import StrOutputParser
 from datetime import date
-from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI(
-    title="LangChain Server",
-    version="1.0",
-    description="A simple api server using Langchain's Runnable interfaces",
-)
-
-# CORS 미들웨어 추가
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 모든 출처 허용
-    allow_credentials=True,
-    allow_methods=["*"],  # 모든 HTTP 메서드 허용
-    allow_headers=["*"],  # 모든 HTTP 헤더 허용
-)
-
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 import os
 openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -124,25 +105,21 @@ draw_table_prompt = PromptTemplate.from_template(
     """
     )
 
+def add_routes_to_app(app) :
+    add_routes(
+        app,
+        combine_input_with_process_definition_lambda | prompt | model | extract_markdown_code_blocks,
+        path="/process-var-sql",
+    )
 
-add_routes(
-    app,
-    combine_input_with_process_definition_lambda | prompt | model | extract_markdown_code_blocks,
-    path="/process-var-sql",
-)
-
-add_routes(
-    app,
-    combine_input_with_process_definition_lambda | prompt | model | extract_markdown_code_blocks | runsql | draw_table_prompt | model | StrOutputParser() | extract_html_table | clean_html_string,
-    path="/process-data-query",
-)
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="localhost", port=8006)
+    add_routes(
+        app,
+        combine_input_with_process_definition_lambda | prompt | model | extract_markdown_code_blocks | runsql | draw_table_prompt | model | StrOutputParser() | extract_html_table | clean_html_string,
+        path="/process-data-query",
+    )
 
 """
-http :8006/process-data-query/invoke input[var_name]="모든 입사 지원자를 출력해줘"
-http :8001/process-data-query/invoke input[var_name]="sw분야 지원한 입사지원자 목록" 
-http :8001/process-var-sql/invoke input[var_name]="total_vacation_days_remains" input[resolution_rule]="vacation_addition 테이블의 전체 휴가일수에서 vacation_request 의 사용일수를 제외함. 그리고 10일은 기본적으로 추가"
+http :8000/process-data-query/invoke input[var_name]="모든 입사 지원자를 출력해줘"
+http :8000/process-data-query/invoke input[var_name]="sw분야 지원한 입사지원자 목록" 
+http :8000/process-var-sql/invoke input[var_name]="total_vacation_days_remains" input[resolution_rule]="vacation_addition 테이블의 전체 휴가일수에서 vacation_request 의 사용일수를 제외함. 그리고 10일은 기본적으로 추가"
 """

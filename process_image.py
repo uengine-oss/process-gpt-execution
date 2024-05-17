@@ -1,16 +1,12 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import HTTPException
 from pydantic import BaseModel
 from openai import OpenAI
-import base64
-
-app = FastAPI()
 
 class ImageData(BaseModel):
     image_base64: str
 
 client = OpenAI()
 
-@app.post("/process-image/")
 async def process_image(data: ImageData):
     try:
         response = client.chat.completions.create(
@@ -40,11 +36,5 @@ async def process_image(data: ImageData):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-from fastapi.staticfiles import StaticFiles
-
-# 정적 파일 디렉토리를 마운트합니다. 이 경우, 'static' 폴더를 사용합니다.
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8003)
+def add_routes_to_app(app):
+    app.add_api_route("/process-image/", process_image, methods=["POST"])
