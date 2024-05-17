@@ -95,8 +95,8 @@ prompt = PromptTemplate.from_template(
         "processDefinitionId": "{process_definition_id}",
         "dataChanges":
         [{{
-            "key": "process data name", // Replace with _ if there is a space
-            "value": <value for changed data>  // Refer to the data type of this process variable and use JavaScript syntax. For example, if the type of the process variable is Date, calculate and assign today's date.
+            "key": "process data name", // Replace with _ if there is a space, Process Definition 에서 없는 데이터는 추가하지 않음.
+            "value": <value for changed data>  // Refer to the data type of this process variable. For example, if the type of the process variable is Date, calculate and assign today's date.
         }}],
 
         "roleBindingChanges":
@@ -107,7 +107,7 @@ prompt = PromptTemplate.from_template(
         
         "completedActivities":
         [{{
-            "completedActivityId": "the id of completed activity id",
+            "completedActivityId": "the id of completed activity id", // Not Return if completedActivityId is "startEvent".
             "completedUserEmail": "the email address of completed activity’s role",
             "result": "PENDING | DONE" // The result of the completed activity
         }}],

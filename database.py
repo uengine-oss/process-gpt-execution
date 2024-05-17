@@ -369,23 +369,53 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
         return None
 
 def upsert_process_instance(process_instance: ProcessInstance) -> (bool, ProcessInstance):
-    process_name = process_instance.proc_inst_id.split('.')[0]  # 프로세스 정의명만 추출
+    process_name = process_instance.proc_inst_id.split('.')[0]  # Extract the process definition name
     if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids:
         process_instance.current_activity_ids = []
-    process_instance_data = process_instance.dict(exclude={'process_definition'})  # Pydantic 모을 dict로 변환
+    process_instance_data = process_instance.dict(exclude={'process_definition'})  # Convert Pydantic model to dict
     process_instance_data = convert_decimal(process_instance_data)
+
     try:
+        # Fetch existing columns from the table
+        existing_columns = fetch_table_columns(process_name.lower())
+
+        # Filter out non-existing columns
+        filtered_data = {key: value for key, value in process_instance_data.items() if key in existing_columns}
+
+        # Upsert the filtered data into the table
         supabase.table('proc_inst').upsert({
             'id': process_instance.proc_inst_id,
             'name': process_instance.proc_inst_name,
             'user_ids': process_instance.current_user_ids,
         }).execute()
-        response = supabase.table(process_name.lower()).upsert(process_instance_data).execute()
+
+        response = supabase.table(process_name.lower()).upsert(filtered_data).execute()
         success = bool(response.data)
         return success, process_instance
     except Exception as e:
-        raise HTTPException(status_code=404, detail=e) from e
-        # raise HTTPException(status_code=404, detail=f"The table '{process_name}' does not exist in the database.") from e
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+def fetch_table_columns(table_name: str) -> List[str]:
+    """
+    Fetches the column names of a given table from the database.
+    
+    Args:
+        table_name (str): The name of the table to fetch columns from.
+    
+    Returns:
+        List[str]: A list of column names.
+    """
+    try:
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor()
+        cursor.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}'")
+        columns = cursor.fetchall()
+        return [column[0] for column in columns]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch columns for table {table_name}: {e}")
+    finally:
+        if connection:
+            connection.close()
 
 def convert_decimal(data):
     for key, value in data.items():
@@ -480,5 +510,5 @@ def upsert_next_workitem(prcess_instance_data, process_result_data, process_defi
 
         return workitem
     except Exception as e:
-        raise HTTPException(status_code=404, detail=e) from e
+        raise HTTPException(status_code=404, detail=str(e)) from e
         
