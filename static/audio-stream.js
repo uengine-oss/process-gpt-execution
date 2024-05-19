@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', function() {
             headers: {
                 'Content-Type': 'text/plain'
             },
-            body: '{"query": "현재 엽업활동 상태를 알려줘"}'
+            body: '{"query": "현재 영업활동 프로세스 인스턴스들의 상태를 알려줘"}'
         })
             .then(response => {
                 const reader = response.body.getReader();

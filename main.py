@@ -19,7 +19,7 @@ from langchain.globals import set_llm_cache
 # set_llm_cache(InMemoryCache())
 from langchain.cache import SQLiteCache
 
-set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+#set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 
 
 app = FastAPI(

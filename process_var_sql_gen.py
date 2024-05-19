@@ -18,7 +18,7 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 
 
 # 1. OpenAI Chat Model 생성
-model = ChatOpenAI(model="gpt-4o")
+model = ChatOpenAI(model="gpt-4o", streaming=True)
 
 prompt = PromptTemplate.from_template(
     """
@@ -127,6 +127,18 @@ describe_result_prompt = PromptTemplate.from_template(
 
 from langchain.schema.runnable import RunnablePassthrough
 
+def generate_speech(part):
+    speech_file_path = Path(__file__).parent / "speech.mp3"
+    response = openai.audio.speech.create(
+        model="tts-1",
+        voice="nova",  # alloy
+        speed=1.2,
+        input=part
+    )
+    response.stream_to_file(speech_file_path)
+    with open(speech_file_path, 'rb') as file:
+        return file.read()
+    
 def create_audio_stream(input_text):
 
     chain = (
@@ -140,22 +152,32 @@ def create_audio_stream(input_text):
         StrOutputParser()     
     )
 
-    result = chain.invoke({"var_name": input_text, "resolution_rule": "요청된 프로세스 정의와 해당 건에 대한 프로세스 인스턴스 정보를 읽어야"})
 
-    # Split the input text by both periods and commas
-    segments = re.split(r'[.,]', result)
-    for i, segment in enumerate(segments, start=1):
-        if segment.strip():  # Ensure segment is not just whitespace
-            speech_file_path = Path(__file__).parent / f"speech_{i}.mp3"
-            response = openai.audio.speech.create(
-                model="tts-1",
-                voice="nova", #alloy
-                speed=1.2,
-                input=segment.strip()
-            )
-            response.stream_to_file(speech_file_path)
-            with open(speech_file_path, 'rb') as file:
-                yield file.read()
+    word = ""
+    for chunk in chain.stream({"var_name": input_text, "resolution_rule": "    요청된 프로세스 정의와 해당 건에 대한 프로세스 인스턴스 정보를 읽어야. 가능한 하나의 테이블에서 데이터를 조회. UNION 사용하지 말것."}):
+        word += chunk
+
+        if ',' in word or '.' in word:
+            # Find the position of the first comma or period
+            first_comma = word.find(',')
+            first_period = word.find('.')
+            
+            # Determine the earliest punctuation mark
+            if first_comma == -1:
+                split_index = first_period
+            elif first_period == -1:
+                split_index = first_comma
+            else:
+                split_index = min(first_comma, first_period)
+            
+            # Split the word at the earliest punctuation mark
+            part = word[:split_index]
+            word = word[split_index+1:]
+        
+            yield generate_speech(part)
+        
+    #result = chain.invoke({"var_name": input_text, "resolution_rule": "    요청된 프로세스 정의와 해당 건에 대한 프로세스 인스턴스 정보를 읽어야. 가능한 하나의 테이블에서 데이터를 조회. UNION 사용하지 말것."})
+
 
 from fastapi.responses import StreamingResponse
 
