@@ -1,4 +1,4 @@
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from langchain.prompts import PromptTemplate
 from langchain.chat_models import ChatOpenAI
 from langserve import add_routes
@@ -9,6 +9,8 @@ import json
 from decimal import Decimal
 from langchain.schema.output_parser import StrOutputParser
 from datetime import date
+from pathlib import Path
+import openai
 
 import os
 openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -16,7 +18,7 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 
 
 # 1. OpenAI Chat Model 생성
-model = ChatOpenAI(openai_api_key=openai_api_key)
+model = ChatOpenAI(model="gpt-4o")
 
 prompt = PromptTemplate.from_template(
     """
@@ -105,6 +107,65 @@ draw_table_prompt = PromptTemplate.from_template(
     """
     )
 
+describe_result_prompt = PromptTemplate.from_template(
+    """
+        Please describe the process instance data like this:
+
+        example: 현재의 프로세스는 영업활동프로세스이며, 진행상태는 영업 제안서 작성단계에서 정체가 발생하고 있으며 담당자는 장진영입니다. 영업 담당자는 강서구입니다. 
+        (현재 진행단계 설명, 진행상태 설명, 각 담당자 등 프로세스 인스턴스 테이블에서 얻어진 다양한 정보를 바탕으로 설명)
+
+        * 만약 데이터가 오류인 경우는, 그냥 해당 정보가 없다고 답해.
+        * 인스턴스 ID는 설명할 필요 없어.
+        * 결과는 개조식이 아닌 서술식으로 설명해
+
+        process data:
+        {result}     
+
+        * please describe in Korean Language                                    
+    """
+    )
+
+from langchain.schema.runnable import RunnablePassthrough
+
+def create_audio_stream(input_text):
+
+    chain = (
+        combine_input_with_process_definition_lambda | 
+        prompt | 
+        model | 
+        extract_markdown_code_blocks | 
+        runsql | 
+        describe_result_prompt | 
+        model | 
+        StrOutputParser()     
+    )
+
+    result = chain.invoke({"var_name": input_text, "resolution_rule": "요청된 프로세스 정의와 해당 건에 대한 프로세스 인스턴스 정보를 읽어야"})
+
+    # Split the input text by both periods and commas
+    segments = re.split(r'[.,]', result)
+    for i, segment in enumerate(segments, start=1):
+        if segment.strip():  # Ensure segment is not just whitespace
+            speech_file_path = Path(__file__).parent / f"speech_{i}.mp3"
+            response = openai.audio.speech.create(
+                model="tts-1",
+                voice="nova", #alloy
+                speed=1.2,
+                input=segment.strip()
+            )
+            response.stream_to_file(speech_file_path)
+            with open(speech_file_path, 'rb') as file:
+                yield file.read()
+
+from fastapi.responses import StreamingResponse
+
+#input_text = "현재 영업활동 프로세스 인스턴스들의 상태를 알려줘"
+
+async def stream_audio(request: Request):
+    body = await request.json()
+    input_text = body.get("query")
+    return StreamingResponse(create_audio_stream(input_text), media_type='audio/webm')
+
 def add_routes_to_app(app) :
     add_routes(
         app,
@@ -117,7 +178,12 @@ def add_routes_to_app(app) :
         combine_input_with_process_definition_lambda | prompt | model | extract_markdown_code_blocks | runsql | draw_table_prompt | model | StrOutputParser() | extract_html_table | clean_html_string,
         path="/process-data-query",
     )
+   
+    app.add_api_route("/audio-stream", stream_audio, methods=["POST"])
 
+
+
+ 
 """
 http :8000/process-data-query/invoke input[var_name]="모든 입사 지원자를 출력해줘"
 http :8000/process-data-query/invoke input[var_name]="sw분야 지원한 입사지원자 목록" 
