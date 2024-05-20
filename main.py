@@ -7,6 +7,7 @@ from process_image import add_routes_to_app as add_image_routes_to_app
 from process_var_sql_gen import add_routes_to_app as add_var_sql_gen_routes_to_app
 from audio_input import add_routes_to_app as add_audio_input_routes_to_app
 from min import add_routes_to_app as add_min_routes_to_app
+from process_def_search import add_routes_to_app as add_process_def_search_routes_to_app
 
 import os
 
@@ -46,6 +47,7 @@ add_image_routes_to_app(app)
 add_var_sql_gen_routes_to_app(app)
 add_audio_input_routes_to_app(app)
 add_min_routes_to_app(app)
+add_process_def_search_routes_to_app(app)
 
 
 if __name__ == "__main__":
