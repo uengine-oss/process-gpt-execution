@@ -56,7 +56,6 @@ def vision_model_chain(input):
             ),
             HumanMessage(
                 content=[
-                    {"type": "text", "text": input['answer']},
                     {
                         "type": "image_url",
                         "image_url": {
