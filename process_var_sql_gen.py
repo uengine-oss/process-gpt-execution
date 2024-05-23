@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Body
 from langchain.prompts import PromptTemplate
-from langchain.chat_models import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from langserve import add_routes
 from fastapi.staticfiles import StaticFiles
 from langchain_core.runnables import RunnableLambda
