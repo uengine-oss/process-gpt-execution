@@ -76,7 +76,30 @@ def execute_sql(sql_query):
         if connection:
             connection.close()
 
-
+def fetch_all_process_definitions():
+    try:
+        # Establish a connection to the database
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
+        
+        # Execute the SQL query to fetch all process definition
+        cursor.execute("SELECT definition FROM proc_def")
+        
+        # Fetch all rows
+        rows = cursor.fetchall()
+        
+        # Extract the definitions from the rows
+        process_definitions = [row['definition'] for row in rows]
+        
+        return process_definitions
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching process definitions: {e}")
+    
+    finally:
+        # Close the cursor and connection to clean up
+        if connection:
+            connection.close()
 
 def fetch_all_process_definition_ids():
     try:
@@ -323,10 +346,12 @@ class WorkItem(BaseModel):
     proc_inst_id: Optional[str] = None
     proc_def_id: Optional[str] = None
     activity_id: str
+    activity_name: str 
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     status: str
     description: Optional[str] = None
+    tool: Optional[str] = None
     
     @validator('start_date', 'end_date', pre=True)
     def parse_datetime(cls, value):
@@ -375,24 +400,57 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
         return None
 
 def upsert_process_instance(process_instance: ProcessInstance) -> (bool, ProcessInstance):
-    process_name = process_instance.proc_inst_id.split('.')[0]  # 프로세스 정의명만 추출
-    if 'END_PROCESS' in process_instance.current_activity_ids:
+    process_name = process_instance.proc_inst_id.split('.')[0]  # Extract the process definition name
+    if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids:
         process_instance.current_activity_ids = []
-    process_instance_data = process_instance.dict(exclude={'process_definition'})  # Pydantic 모을 dict로 변환
+        status = 'done'
+    else:
+        status = 'running'
+    process_instance_data = process_instance.dict(exclude={'process_definition'})  # Convert Pydantic model to dict
     process_instance_data = convert_decimal(process_instance_data)
+
     try:
+        # Fetch existing columns from the table
+        existing_columns = fetch_table_columns(process_name.lower())
+
+        # Filter out non-existing columns
+        filtered_data = {key: value for key, value in process_instance_data.items() if key in existing_columns}
+
+        # Upsert the filtered data into the table
         supabase.table('proc_inst').upsert({
             'id': process_instance.proc_inst_id,
             'name': process_instance.proc_inst_name,
             'user_ids': process_instance.current_user_ids,
+            'status': status
         }).execute()
-        response = supabase.table(process_name.lower()).upsert(process_instance_data).execute()
+
+        response = supabase.table(process_name.lower()).upsert(filtered_data).execute()
+        success = bool(response.data)
+        return success, process_instance
     except Exception as e:
-        raise HTTPException(status_code=404, detail=e) from e
-        # raise HTTPException(status_code=404, detail=f"The table '{process_name}' does not exist in the database.") from e
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+def fetch_table_columns(table_name: str) -> List[str]:
+    """
+    Fetches the column names of a given table from the database.
     
-    success = bool(response.data)
-    return success, process_instance
+    Args:
+        table_name (str): The name of the table to fetch columns from.
+    
+    Returns:
+        List[str]: A list of column names.
+    """
+    try:
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor()
+        cursor.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}'")
+        columns = cursor.fetchall()
+        return [column[0] for column in columns]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch columns for table {table_name}: {e}")
+    finally:
+        if connection:
+            connection.close()
 
 def convert_decimal(data):
     for key, value in data.items():
@@ -421,7 +479,7 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
         return None
 
 # todolist 업데이트
-def upsert_completed_workitem(prcess_instance_data, process_result_data):
+def upsert_completed_workitem(prcess_instance_data, process_result_data, process_definition):
     if not process_result_data['completedActivities']:
         return
     
@@ -430,11 +488,15 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data):
         workitem.status = process_result_data['completedActivities'][0]['result']
         workitem.end_date = datetime.now()
     else:
+        activity = process_definition.find_activity_by_id(process_result_data['nextActivities'][0]['nextActivityId'])
+
+
         workitem = WorkItem(
             id=f"{str(uuid.uuid4())}",
             proc_inst_id=prcess_instance_data['proc_inst_id'],
             proc_def_id=process_result_data['processDefinitionId'],
             activity_id=process_result_data['completedActivities'][0]['completedActivityId'],
+            activity_name=activity.name,
             user_id=process_result_data['completedActivities'][0]['completedUserEmail'],
             status=process_result_data['completedActivities'][0]['result'],
             start_date=datetime.now(),
@@ -450,25 +512,30 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data):
         raise HTTPException(status_code=404, detail=str(e)) from e
 
         
-def upsert_next_workitem(prcess_instance_data, process_result_data)->WorkItem: 
+def upsert_next_workitem(prcess_instance_data, process_result_data, process_definition)->WorkItem: 
     if not process_result_data['nextActivities']:
-        return
-    if process_result_data['nextActivities'][0]['nextActivityId'] == "END_PROCESS":
-        return
+        return None
+    if process_result_data['nextActivities'][0]['nextActivityId'] == "END_PROCESS" or process_result_data['nextActivities'][0]['nextActivityId'] == "endEvent":
+        return None
     
     workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], process_result_data['nextActivities'][0]['nextActivityId'])
     if workitem:
         workitem.status = process_result_data['nextActivities'][0]['result']
         workitem.end_date = datetime.now()
     else:
+        #process_definition = load_process_definition(fetch_process_definition(process_result_data['processDefinitionId'])) #TODO caching 필요.
+        activity = process_definition.find_activity_by_id(process_result_data['nextActivities'][0]['nextActivityId'])
+
         workitem = WorkItem(
             id=f"{str(uuid.uuid4())}",
             proc_inst_id=prcess_instance_data['proc_inst_id'],
             proc_def_id=process_result_data['processDefinitionId'].lower(),
-            activity_id=process_result_data['nextActivities'][0]['nextActivityId'],
+            activity_id=activity.id, #process_result_data['nextActivities'][0]['nextActivityId'],
+            activity_name=activity.name,  #TODO name과 id 둘다 있어야 함. 
             user_id=process_result_data['nextActivities'][0]['nextUserEmail'],
             status=process_result_data['nextActivities'][0]['result'],
-            start_date=datetime.now()
+            start_date=datetime.now(),
+            tool = activity.tool
         )
     try:
         workitem_dict = workitem.dict()
@@ -478,5 +545,5 @@ def upsert_next_workitem(prcess_instance_data, process_result_data)->WorkItem:
 
         return workitem
     except Exception as e:
-        raise HTTPException(status_code=404, detail=e) from e
+        raise HTTPException(status_code=404, detail=str(e)) from e
         

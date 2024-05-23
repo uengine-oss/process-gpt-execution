@@ -39,6 +39,7 @@ class ProcessActivity(BaseModel):
     outputData: Optional[List[str]] = Field(default_factory=list)
     checkpoints: Optional[List[str]] = Field(default_factory=list)
     pythonCode: Optional[str] = None
+    tool: Optional[str] = None
 
 class ProcessSequence(BaseModel):
     source: str
