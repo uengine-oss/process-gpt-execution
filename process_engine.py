@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableLambda
 from datetime import datetime
 
 
-from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitem
+from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems
 from database import ProcessInstance
 import uuid
 import json
@@ -73,9 +73,9 @@ prompt = PromptTemplate.from_template(
     
     - Received Message From Current Step:
     
-      activityId: "{activity_id}",
+      activityId: "{activity_id}",  // the activityId is not included in the Currently Running Activities or is the next activityId than Current Running Activities, it must never be added to completedActivities to return the activityId as complete and must be reported in cannotProceedErrors.
       user: "{user_email}",
-      submitted data: {answer}
+      submitted data: {answer}  // If outputData of the activity does not exist to proceed to the next activity, it must never be added to completedActivities to return the activityId as complete and must be reported which parameters should be entered in cannotProceedErrors.
     
     - Today is:  {today}
     
@@ -111,7 +111,8 @@ prompt = PromptTemplate.from_template(
             "completedUserEmail": "the email address of completed activity’s role",
             "result": "PENDING | DONE" // The result of the completed activity
         }}],
-    
+        
+        // instanceId 가 "new" 인 경우 Process Definition 의 모든 activities 를 nextActivities 로 등록한다
         "nextActivities":
         [{{
             "nextActivityId": "the id of next activity id", // Return "END_PROCESS" if nextActivityId is "endEvent".
@@ -122,8 +123,8 @@ prompt = PromptTemplate.from_template(
 
         "cannotProceedErrors":   // return errors if cannot proceed to next activity 
         [{{
-            "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" 
-            "reason": "explanation for the error"
+            "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST"
+            "reason": "explanation for the error in Korean"
         }}],
         
         "description": "description of the completed activities and the next activities and what the user who will perform the task should do in Korean"
@@ -196,7 +197,10 @@ def execute_next_activity(process_result_json: dict) -> str:
         if process_result.completedActivities:
             all_user_emails.update(activity.completedUserEmail for activity in process_result.completedActivities)
         if process_result.nextActivities:
-            process_instance.current_activity_ids = [activity.nextActivityId for activity in process_result.nextActivities]
+            if process_result.instanceId == "new":
+                process_instance.current_activity_ids = [process_result.nextActivities[0].nextActivityId]
+            else:
+                process_instance.current_activity_ids = [activity.nextActivityId for activity in process_result.nextActivities]    
             all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
         
         current_user_ids_set = set(process_instance.current_user_ids)
@@ -215,21 +219,22 @@ def execute_next_activity(process_result_json: dict) -> str:
                 process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
             else:
                 result = (f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found.")
-    
-        _, process_instance = upsert_process_instance(process_instance)
         
-        upsert_completed_workitem(process_instance.dict(), process_result.dict(), process_definition)    
-        workitem = upsert_next_workitem(process_instance.dict(), process_result.dict(), process_definition)
+        workitems = None
+        if not process_result.cannotProceedErrors:
+            _, process_instance = upsert_process_instance(process_instance)
+            upsert_completed_workitem(process_instance.dict(), process_result.dict(), process_definition)    
+            workitems = upsert_next_workitems(process_instance.dict(), process_result.dict(), process_definition)
         
         # Updating process_result_json with the latest process instance details and execution result
         process_result_json["instanceId"] = process_instance.proc_inst_id
         process_result_json["instanceName"] = process_instance.proc_inst_name
         process_result_json["result"] = result
         # Ensure workitem is not None before accessing its id
-        if workitem is not None:
-            process_result_json["workitemId"] = workitem.id
+        if workitems:
+            process_result_json["workitemIds"] = [workitem.id for workitem in workitems]
         else:
-            process_result_json["workitemId"] = None  # or handle it in another appropriate way
+            process_result_json["workitemIds"] = []
 
         return json.dumps(process_result_json)
     except Exception as e:
@@ -290,9 +295,6 @@ def combine_input_with_process_definition(input):
 
             if not process_instance:
                 raise HTTPException(status_code=404, detail=f"Process instance with ID {process_instance_id} not found.")
-
-            if activity_id not in process_instance.current_activity_ids:
-                raise HTTPException(status_code=400, detail=f"Activity ID {activity_id} is not among the currently executing activities.")
         
             processDefinitionJson = fetch_process_definition(process_instance.get_def_id())
 

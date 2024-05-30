@@ -414,7 +414,7 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
         existing_columns = fetch_table_columns(process_name.lower())
 
         # Filter out non-existing columns
-        filtered_data = {key: value for key, value in process_instance_data.items() if key in existing_columns}
+        filtered_data = {key.lower(): value for key, value in process_instance_data.items() if key.lower() in existing_columns}
 
         # Upsert the filtered data into the table
         supabase.table('proc_inst').upsert({
@@ -511,39 +511,40 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
-        
-def upsert_next_workitem(prcess_instance_data, process_result_data, process_definition)->WorkItem: 
-    if not process_result_data['nextActivities']:
-        return None
-    if process_result_data['nextActivities'][0]['nextActivityId'] == "END_PROCESS" or process_result_data['nextActivities'][0]['nextActivityId'] == "endEvent":
-        return None
-    
-    workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], process_result_data['nextActivities'][0]['nextActivityId'])
-    if workitem:
-        workitem.status = process_result_data['nextActivities'][0]['result']
-        workitem.end_date = datetime.now()
-    else:
-        #process_definition = load_process_definition(fetch_process_definition(process_result_data['processDefinitionId'])) #TODO caching 필요.
-        activity = process_definition.find_activity_by_id(process_result_data['nextActivities'][0]['nextActivityId'])
 
-        workitem = WorkItem(
-            id=f"{str(uuid.uuid4())}",
-            proc_inst_id=prcess_instance_data['proc_inst_id'],
-            proc_def_id=process_result_data['processDefinitionId'].lower(),
-            activity_id=activity.id, #process_result_data['nextActivities'][0]['nextActivityId'],
-            activity_name=activity.name,  #TODO name과 id 둘다 있어야 함. 
-            user_id=process_result_data['nextActivities'][0]['nextUserEmail'],
-            status=process_result_data['nextActivities'][0]['result'],
-            start_date=datetime.now(),
-            tool = activity.tool
-        )
-    try:
-        workitem_dict = workitem.dict()
-        workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
-        workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
-        supabase.table('todolist').upsert(workitem_dict).execute()
-
-        return workitem
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+def upsert_next_workitems(process_instance_data, process_result_data, process_definition) -> List[WorkItem]:
+    workitems = []
+    for activity_data in process_result_data['nextActivities']:
+        if activity_data['nextActivityId'] in ["END_PROCESS", "endEvent"]:
+            continue
         
+        workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity_data['nextActivityId'])
+        if workitem:
+            workitem.status = activity_data['result']
+            workitem.end_date = datetime.now()
+        else:
+            activity = process_definition.find_activity_by_id(activity_data['nextActivityId'])
+            workitem = WorkItem(
+                id=str(uuid.uuid4()),
+                proc_inst_id=process_instance_data['proc_inst_id'],
+                proc_def_id=process_result_data['processDefinitionId'].lower(),
+                activity_id=activity.id,
+                activity_name=activity.name,
+                user_id=activity_data['nextUserEmail'],
+                status=activity_data['result'],
+                start_date=datetime.now(),
+                tool=activity.tool
+            )
+        
+        try:
+            workitem_dict = workitem.dict()
+            workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
+            workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
+            supabase.table('todolist').upsert(workitem_dict).execute()
+            workitems.append(workitem)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    return workitems
+
+   
