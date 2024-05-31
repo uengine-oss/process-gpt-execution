@@ -75,7 +75,7 @@ prompt = PromptTemplate.from_template(
     
       activityId: "{activity_id}",  // the activityId is not included in the Currently Running Activities or is the next activityId than Current Running Activities, it must never be added to completedActivities to return the activityId as complete and must be reported in cannotProceedErrors.
       user: "{user_email}",
-      submitted data: {answer}  // If outputData of the activity does not exist to proceed to the next activity, it must never be added to completedActivities to return the activityId as complete and must be reported which parameters should be entered in cannotProceedErrors.
+      submitted data: {answer}  // If outputData of the activity does not exist to proceed to the next activity or if the type of outputData is Form and nothing is entered in the Object, it must never be added to completedActivities to return the activityId as complete and must be reported which parameters should be entered in cannotProceedErrors.
     
     - Today is:  {today}
     

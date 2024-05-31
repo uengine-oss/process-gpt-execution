@@ -403,9 +403,9 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
     process_name = process_instance.proc_inst_id.split('.')[0]  # Extract the process definition name
     if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids:
         process_instance.current_activity_ids = []
-        status = 'done'
+        status = 'COMPLETED'
     else:
-        status = 'running'
+        status = 'RUNNING'
     process_instance_data = process_instance.dict(exclude={'process_definition'})  # Convert Pydantic model to dict
     process_instance_data = convert_decimal(process_instance_data)
 
