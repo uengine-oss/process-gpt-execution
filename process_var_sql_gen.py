@@ -351,7 +351,7 @@ def create_audio_stream(data, email):
     input_text = data.get("query")
     chat_room_id = data.get("chat_room_id")
 
-    intent = "COMMAND_PROCESS_START" #intent_classification_chain.invoke({"query": input_text})
+    intent = intent_classification_chain.invoke({"query": input_text})
 
     chain = process_instance_data_query_chain
 
