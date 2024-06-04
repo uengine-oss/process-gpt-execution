@@ -6,24 +6,14 @@ import uuid
 from process_definition import ProcessDefinition, load_process_definition
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from fastapi import HTTPException
+from fastapi import FastAPI, Request, HTTPException
 from decimal import Decimal
 from datetime import datetime
 
-url: str = os.environ.get("SUPABASE_URL")
-key: str = os.environ.get("SUPABASE_KEY")
+app = FastAPI()
 
-# url = "https://hcnalfeqlkcovkxymgfx.supabase.co"
-# key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhjbmFsZmVxbGtjb3ZreHltZ2Z4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTI1NjU2MzksImV4cCI6MjAyODE0MTYzOX0.cD2FsxU-51JttR5_LmvoFsaqBa1gNvBlvhmZ3AX-bB8"
-# supabase: Client = create_client(url, key)
-
-# db_config = {
-#     'dbname': 'postgres',
-#     'user': 'postgres.hcnalfeqlkcovkxymgfx',
-#     'password': '@uengine123pw',
-#     'host': 'aws-0-ap-northeast-2.pooler.supabase.com',
-#     'port': '5432'
-# }
+# supabase: Client = None
+# db_config = {}
 
 url = "http://127.0.0.1:54321"
 key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
@@ -37,6 +27,18 @@ db_config = {
     'port': '54322'
 }
 
+async def update_db_settings(request: Request):
+    global supabase, db_config
+    data = await request.json()
+    data = data['data']
+    
+    url = data['url']
+    secret = data['secret']
+    supabase = create_client(url, secret)
+    
+    db_config = data['dbConfig']
+    
+    return {"message": "Settings updated successfully"}
 
 def execute_sql(sql_query):
     """
