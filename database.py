@@ -547,4 +547,59 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
 
     return workitems
 
-   
+import json
+
+class ChatMessage(BaseModel):
+    name: str
+    role: str
+    email: Optional[str]
+    image: Optional[str]
+    content: Optional[str]
+    timeStamp: Optional[datetime]
+
+class ChatItem(BaseModel):
+    id: str
+    uuid: str
+    messages: Optional[ChatMessage]
+
+def fetch_chat_history(chat_room_id: str) -> List[ChatItem]:
+    response = supabase.table("chats").select("*").eq('id', chat_room_id).execute()
+    chatHistory = []
+    for chat in response.data:
+        chatHistory.append(ChatItem(**chat))
+    return chatHistory
+
+def upsert_chat_message(chat_room_id: str, data: Dict[str, str]) -> None:
+    try:
+        output = data.get("output", None)
+        if output:
+            json_output = json.loads(output)
+            message = ChatMessage(
+                name="system",
+                role="system",
+                email="system@uengine.org",
+                image="",
+                content=json_output["description"],
+                timeStamp=datetime.now()
+            )
+        else:
+            message = ChatMessage(
+                name="system",
+                role="system",
+                email="system@uengine.org",
+                image="",
+                content="",
+                timeStamp=datetime.now()
+            )
+        message.timeStamp = message.timeStamp.isoformat() if message.timeStamp else None        
+        chat_item = ChatItem(
+            id=chat_room_id,
+            uuid=str(uuid.uuid4()),
+            messages=message
+        )
+        chat_item_dict = chat_item.dict()
+        supabase.table("chats").upsert(chat_item_dict).execute();
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
