@@ -12,13 +12,15 @@ async def upload_audio(audio: UploadFile = File(...)):
     
 
     # OpenAI Whisper API를 이용하여스크트 생성
-    with open(file_location, "rb") as audio_file:
-        transcript_response = openai.audio.transcriptions.create(
-            model="whisper-1", 
-            file=audio_file,
-            response_format="text"
-        )
-
+    transcript_response = None
+    try:
+        with open(file_location, "rb") as audio_file:
+            transcript_response = openai.audio.transcriptions.create(
+                model="whisper-1", 
+                file=audio_file,
+                response_format="text"
+            )
+    finally:
         os.remove(file_location)  # 파일 삭제
 
         return {

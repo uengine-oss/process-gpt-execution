@@ -3,21 +3,23 @@ from langchain.prompts import PromptTemplate
 from langchain_community.chat_models import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
-from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table
+from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, fetch_chat_history, upsert_chat_message, parse_token, fetch_user_info
 import re
 import json
 from decimal import Decimal
 from langchain.schema.output_parser import StrOutputParser
-from langchain_core.output_parsers.json import JsonOutputParser
+from langchain.output_parsers.json import SimpleJsonOutputParser  # JsonOutputParser 임포트
+import requests
+
 from datetime import date
 from pathlib import Path
 import openai
-from database import fetch_all_process_definitions
 
 import os
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
 
+parser = SimpleJsonOutputParser()
 
 # 1. OpenAI Chat Model 생성
 model = ChatOpenAI(model="gpt-4o", streaming=True)
@@ -247,6 +249,8 @@ intent_classification_chain = (
     StrOutputParser()
 )
 
+
+#
 process_instance_start_prompt = PromptTemplate.from_template(
     """
         다음 질의를 기반으로 어떤 프로세스를 시작해야 할지를 알려줘:
@@ -262,24 +266,27 @@ process_instance_start_prompt = PromptTemplate.from_template(
 
         result should be in this JSON format:
         {{
-            "processDefinitionId": "the process definition id"
-
+            "processDefinitionId": "the process definition id",
+            "email": "{email}",
+            "chatRoomId": "{chat_room_id}"
         }}
     """
 )
 
 
-def combine_input_with_instance_start(command):
+def combine_input_with_instance_start(input):
     try:
+        chat_room_id = input["chat_room_id"]
         processDefinitionList = fetch_all_process_definitions()
-
-        chat_history = "휴가처리프로세스에 대하여 궁금해.. 휴가처리는 ...하다." #fetch_chathistory(chat_room_id)
+        chat_history = fetch_chat_history(chat_room_id)
+        upsert_chat_message(chat_room_id, input)
 
         return {
             "processDefinitionList": processDefinitionList,
-            "command": command,
-            "chat_history": chat_history
-
+            "command": input["command"],
+            "chat_history": chat_history,
+            "email": input["email"],
+            "chat_room_id": chat_room_id
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -289,14 +296,44 @@ combine_input_with_instance_start_lambda = RunnableLambda(combine_input_with_ins
 
 
 def execute_process(process_start_json):
-    process_start_json["processDefinitionId"]
-    # 프로세스 인스턴스 생성.
+    process_definition_id = process_start_json["processDefinitionId"]
+    email = process_start_json["email"]
+    chatRoomId = process_start_json["chatRoomId"]
+    
+    try:
+        url = f"http://localhost:8000/complete/invoke"  # 또는 "http://localhost:8000/vision-complete"를 사용하여 비전 엔드포인트 호출
+        data = {
+            "input": {
+                "answer": "",
+                "process_instance_id": "new",
+                "process_definition_id": process_definition_id,
+                "userInfo": {
+                    "email": email
+                },
+                "activity_id": ""
+            }
+        }
+        response = requests.post(url, json=data)
+        
+        if response.status_code == 200:
+            upsert_chat_message(chatRoomId, response.json())
+            output = response.json().get("output", None)
+            if output:
+                json_output = json.loads(output)
+                return json_output["description"]
+            
+        else:
+            raise HTTPException(status_code=response.status_code, detail=str(response.text))
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 process_instance_start_chain = (
     combine_input_with_instance_start_lambda | 
     process_instance_start_prompt | 
     model | 
-    JsonOutputParser() |
+    parser |
     execute_process  
 )
 
@@ -316,7 +353,9 @@ def generate_speech(part):
         return file.read()
     
     
-def create_audio_stream(input_text):
+def create_audio_stream(data, email):
+    input_text = data.get("query")
+    chat_room_id = data.get("chat_room_id")
 
     intent = intent_classification_chain.invoke({"query": input_text})
 
@@ -328,7 +367,7 @@ def create_audio_stream(input_text):
         
     elif intent == "COMMAND_PROCESS_START":
         chain = process_instance_start_chain
-        input = {"command": input_text}
+        input = {"command": input_text, "chat_room_id": chat_room_id, "email": email}
 
     elif intent == "QUERY_PROCESS_DEFINITION":
         chain = process_definition_query_chain
@@ -337,6 +376,11 @@ def create_audio_stream(input_text):
     elif intent == "QUERY_TODO_SCHEDULE":
         chain = schedule_query_chain
         input = {"query": input_text}
+    
+    # TODO: QUERY_INFO 인 경우 작업 필요   
+    elif intent == "QUERY_INFO":
+        # chain = info_query_chain
+        input = {"var_name": input_text, "resolution_rule": "    요청된 프로세스 정의와 해당 건에 대한 프로세스 인스턴스 정보를 읽어야. 가능한 하나의 테이블에서 데이터를 조회. UNION 사용하지 말것."}
 
     word = ""
     for chunk in chain.stream(input):
@@ -367,11 +411,13 @@ def create_audio_stream(input_text):
 from fastapi.responses import StreamingResponse
 
 #input_text = "현재 영업활동 프로세스 인스턴스들의 상태를 알려줘"
-
 async def stream_audio(request: Request):
-    body = await request.json()
-    input_text = body.get("query")
-    return StreamingResponse(create_audio_stream(input_text), media_type='audio/webm')
+    user_info = parse_token(request)
+    email = user_info["email"]
+    input = await request.json()
+    return StreamingResponse(create_audio_stream(input, email), media_type='audio/webm')
+    # input = await request.json()
+    # return StreamingResponse(create_audio_stream(input), media_type='audio/webm')
 
 def add_routes_to_app(app) :
     add_routes(
