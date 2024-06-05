@@ -41,7 +41,7 @@ app.add_middleware(
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-app.post("/set-db-config")(update_db_settings)
+# app.post("/set-db-config")(update_db_settings)
 
 add_process_routes_to_app(app)
 add_db_manager_routes_to_app(app)

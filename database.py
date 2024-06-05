@@ -9,34 +9,40 @@ from psycopg2.extras import RealDictCursor
 from fastapi import FastAPI, Request, HTTPException
 from decimal import Decimal
 from datetime import datetime
+from contextvars import ContextVar
 
 app = FastAPI()
+
+db_config_var = ContextVar('db_config', default={})
+supabase_client_var = ContextVar('supabase', default=None)
 
 # supabase: Client = None
 # db_config = {}
 
-url = "http://127.0.0.1:54321"
-key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
-supabase: Client = create_client(url, key)
+# url = "http://127.0.0.1:54321"
+# key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
+# supabase: Client = create_client(url, key)
 
-db_config = {
-    'dbname': 'postgres',
-    'user': 'postgres',
-    'password': 'postgres',
-    'host': '127.0.0.1',
-    'port': '54322'
-}
+# db_config = {
+#     'dbname': 'postgres',
+#     'user': 'postgres',
+#     'password': 'postgres',
+#     'host': '127.0.0.1',
+#     'port': '54322'
+# }
 
-async def update_db_settings(request: Request):
-    global supabase, db_config
-    data = await request.json()
-    data = data['data']
+# masterDB: Client = create_client('https://qivmgbtrzgnjcpyynpam.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpdm1nYnRyemduamNweXlucGFtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcxNTU4ODc3NSwiZXhwIjoyMDMxMTY0Nzc1fQ.z8LIo50hs1gWcerWxx1dhjri-DMoDw9z0luba_Ap4cI')
+
+def update_db_settings(data):
+    global db_config_var, supabase_client_var
+    # client_host = request.client.host
+    # print(f"Client host: {client_host}")
     
-    url = data['url']
-    secret = data['secret']
-    supabase = create_client(url, secret)
+    supabase: Client = create_client(data['url'], data['secret'])
+    supabase_client_var.set(supabase)
     
     db_config = data['dbConfig']
+    db_config_var.set(db_config)
     
     return {"message": "Settings updated successfully"}
 
@@ -52,6 +58,7 @@ def execute_sql(sql_query):
     """
     
     try:
+        db_config = db_config_var.get()
         # Establish a connection to the database
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor(cursor_factory=RealDictCursor)
@@ -80,6 +87,7 @@ def execute_sql(sql_query):
 
 def fetch_all_process_definitions():
     try:
+        db_config = db_config_var.get()
         # Establish a connection to the database
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor(cursor_factory=RealDictCursor)
@@ -105,6 +113,7 @@ def fetch_all_process_definitions():
 
 def fetch_all_process_definition_ids():
     try:
+        db_config = db_config_var.get()
         # Establish a connection to the database
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor(cursor_factory=RealDictCursor)
@@ -140,6 +149,7 @@ def generate_create_statement_for_table(table_name):
     """
     
     try:
+        db_config = db_config_var.get()
         # Establish a connection to the database
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor()
@@ -302,6 +312,10 @@ def fetch_process_definition(def_id):
     Returns:
         dict: The process definition as a JSON object if found, else None.
     """
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
+    
     response = supabase.table('proc_def').select('*').eq('id', def_id.lower()).execute()
     
     # Check if the response contains data
@@ -389,6 +403,10 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
     if not full_id:
         raise HTTPException(status_code=404, detail="Instance Id should be provided")
 
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
+    
     response = supabase.table(process_name).select("*").eq('proc_inst_id', full_id).execute()
     
     if response.data:
@@ -418,6 +436,10 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
         # Filter out non-existing columns
         filtered_data = {key.lower(): value for key, value in process_instance_data.items() if key.lower() in existing_columns}
 
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")   
+        
         # Upsert the filtered data into the table
         supabase.table('proc_inst').upsert({
             'id': process_instance.proc_inst_id,
@@ -443,6 +465,7 @@ def fetch_table_columns(table_name: str) -> List[str]:
         List[str]: A list of column names.
     """
     try:
+        db_config = db_config_var.get()
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor()
         cursor.execute(f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}'")
@@ -462,6 +485,10 @@ def convert_decimal(data):
     return data
 
 def fetch_organization_chart():
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
+    
     response = supabase.table("configuration").select("*").eq('key', 'organization').execute()
     
     # Check if the response contains data
@@ -474,6 +501,10 @@ def fetch_organization_chart():
         return None
 
 def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str) -> Optional[WorkItem]:
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
+    
     response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('activity_id', activity_id).execute()
     if response.data:
         return WorkItem(**response.data[0])
@@ -509,6 +540,11 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
         workitem_dict = workitem.dict()
         workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
         workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
+
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
         supabase.table('todolist').upsert(workitem_dict).execute()
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -542,6 +578,11 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
             workitem_dict = workitem.dict()
             workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
             workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
+
+            supabase = supabase_client_var.get()
+            if supabase is None:
+                raise Exception("Supabase client is not configured for this request")
+            
             supabase.table('todolist').upsert(workitem_dict).execute()
             workitems.append(workitem)
         except Exception as e:

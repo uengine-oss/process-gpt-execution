@@ -3,7 +3,7 @@ from langchain.prompts import PromptTemplate
 from langchain_community.chat_models import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda
-from database import fetch_process_definition, execute_sql, generate_create_statement_for_table
+from database import fetch_process_definition, execute_sql, generate_create_statement_for_table, update_db_settings
 import re
 import os
 
@@ -83,6 +83,8 @@ def combine_input_with_process_definition(input):
     processDefinitionJson = None
 
     process_definition_id = input.get('process_definition_id')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
+    data = input.get('data')
+    update_db_settings(data)
 
     if not process_definition_id:
         raise HTTPException(status_code=404, detail="No process definition ID was provided.")

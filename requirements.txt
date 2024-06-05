@@ -6,6 +6,7 @@ attrs==23.2.0
 certifi==2024.2.2
 charset-normalizer==3.3.2
 click==8.1.7
+contextvars==2.4
 dataclasses-json==0.6.4
 deprecation==2.1.0
 distlib==0.3.8
@@ -20,10 +21,13 @@ h11==0.14.0
 httpcore==1.0.2
 httpx==0.25.2
 idna==3.6
+immutables==0.20
 jsonpatch==1.33
 jsonpointer==2.4
+langchain==0.1.20
 langchain-community==0.0.38
 langchain-core==0.1.52
+langchain-text-splitters==0.0.2
 langserve==0.0.41
 langsmith==0.1.59
 marshmallow==3.20.2

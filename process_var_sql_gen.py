@@ -7,7 +7,8 @@ from database import fetch_all_process_definition_ids, execute_sql, generate_cre
 import re
 import json
 from decimal import Decimal
-from langchain.schema.output_parser import StrOutputParser, JsonOutputParser
+from langchain.schema.output_parser import StrOutputParser
+from langchain_core.output_parsers.json import JsonOutputParser
 from datetime import date
 from pathlib import Path
 import openai
