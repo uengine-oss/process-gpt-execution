@@ -3,7 +3,7 @@ from langchain.prompts import PromptTemplate
 from langchain_community.chat_models import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
-from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, fetch_chat_history, upsert_chat_message
+from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, fetch_chat_history, upsert_chat_message, parse_token, fetch_user_info
 import re
 import json
 from decimal import Decimal
@@ -279,6 +279,7 @@ def combine_input_with_instance_start(input):
         chat_room_id = input["chat_room_id"]
         processDefinitionList = fetch_all_process_definitions()
         chat_history = fetch_chat_history(chat_room_id)
+        upsert_chat_message(chat_room_id, input)
 
         return {
             "processDefinitionList": processDefinitionList,
@@ -316,6 +317,11 @@ def execute_process(process_start_json):
         
         if response.status_code == 200:
             upsert_chat_message(chatRoomId, response.json())
+            output = response.json().get("output", None)
+            if output:
+                json_output = json.loads(output)
+                return json_output["description"]
+            
         else:
             raise HTTPException(status_code=response.status_code, detail=str(response.text))
             
@@ -370,6 +376,11 @@ def create_audio_stream(data, email):
     elif intent == "QUERY_TODO_SCHEDULE":
         chain = schedule_query_chain
         input = {"query": input_text}
+    
+    # TODO: QUERY_INFO 인 경우 작업 필요   
+    elif intent == "QUERY_INFO":
+        # chain = info_query_chain
+        input = {"var_name": input_text, "resolution_rule": "    요청된 프로세스 정의와 해당 건에 대한 프로세스 인스턴스 정보를 읽어야. 가능한 하나의 테이블에서 데이터를 조회. UNION 사용하지 말것."}
 
     word = ""
     for chunk in chain.stream(input):
@@ -400,23 +411,9 @@ def create_audio_stream(data, email):
 from fastapi.responses import StreamingResponse
 
 #input_text = "현재 영업활동 프로세스 인스턴스들의 상태를 알려줘"
-import jwt
-
 async def stream_audio(request: Request):
-    auth_header = request.headers.get('Authorization')
-    email = None
-    if auth_header:
-        token = auth_header.split(" ")[1]
-        try:
-            payload = jwt.decode(token, options={"verify_signature": False})
-            email = payload['email']
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Token expired")
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401, detail="Invalid token")
-    else:
-        raise HTTPException(status_code=401, detail="Authorization token is missing")
-    
+    user_info = parse_token(request)
+    email = user_info["email"]
     input = await request.json()
     return StreamingResponse(create_audio_stream(input, email), media_type='audio/webm')
     # input = await request.json()

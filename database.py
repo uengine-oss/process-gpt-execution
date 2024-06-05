@@ -549,6 +549,7 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
 
     return workitems
 
+
 import json
 
 class ChatMessage(BaseModel):
@@ -585,12 +586,13 @@ def upsert_chat_message(chat_room_id: str, data: Dict[str, str]) -> None:
                 timeStamp=datetime.now()
             )
         else:
+            user_info = fetch_user_info(data["email"])
             message = ChatMessage(
-                name="system",
-                role="system",
-                email="system@uengine.org",
+                name=user_info["username"],
+                role="user",
+                email=data["email"],
                 image="",
-                content="",
+                content=data["command"],
                 timeStamp=datetime.now()
             )
         message.timeStamp = message.timeStamp.isoformat() if message.timeStamp else None        
@@ -605,3 +607,25 @@ def upsert_chat_message(chat_room_id: str, data: Dict[str, str]) -> None:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
+import jwt
+
+def parse_token(request: Request) -> Dict[str, str]:
+    if request.headers:
+        auth_header = request.headers.get('Authorization')
+        if auth_header:
+            token = auth_header.split(" ")[1]
+            try:
+                payload = jwt.decode(token, options={"verify_signature": False})
+                return payload
+            except jwt.ExpiredSignatureError:
+                raise HTTPException(status_code=401, detail="Token expired")
+            except jwt.InvalidTokenError:
+                raise HTTPException(status_code=401, detail="Invalid token")
+        else:
+            return None
+    else:
+        return None
+
+def fetch_user_info(email: str) -> Dict[str, str]:
+    response = supabase.table("users").select("*").eq('email', email).execute()
+    return response.data[0]
