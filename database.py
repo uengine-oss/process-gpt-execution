@@ -615,6 +615,9 @@ class ChatItem(BaseModel):
     messages: Optional[ChatMessage]
 
 def fetch_chat_history(chat_room_id: str) -> List[ChatItem]:
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
     response = supabase.table("chats").select("*").eq('id', chat_room_id).execute()
     chatHistory = []
     for chat in response.data:
@@ -651,6 +654,9 @@ def upsert_chat_message(chat_room_id: str, data: Dict[str, str]) -> None:
             messages=message
         )
         chat_item_dict = chat_item.dict()
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
         supabase.table("chats").upsert(chat_item_dict).execute();
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -676,5 +682,8 @@ def parse_token(request: Request) -> Dict[str, str]:
         return None
 
 def fetch_user_info(email: str) -> Dict[str, str]:
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
     response = supabase.table("users").select("*").eq('email', email).execute()
     return response.data[0]
