@@ -77,14 +77,14 @@ prompt = PromptTemplate.from_template(
     """)
 
 
-def combine_input_with_process_definition(input):
+async def combine_input_with_process_definition(input):
     # 프로세스 인스턴스를 DB에서 검색
     
     processDefinitionJson = None
 
     process_definition_id = input.get('process_definition_id')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
-    data = input.get('data')
-    update_db_settings(data)
+    subdomain = input.get('subdomain')
+    await update_db_settings(subdomain)
 
     if not process_definition_id:
         raise HTTPException(status_code=404, detail="No process definition ID was provided.")
@@ -102,7 +102,6 @@ def combine_input_with_process_definition(input):
         "process_table_schema": process_table_schema
     }
     
-
 combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with_process_definition)
 
 def extract_markdown_code_blocks(markdown_text):

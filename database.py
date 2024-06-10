@@ -16,9 +16,6 @@ app = FastAPI()
 db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
 
-# supabase: Client = None
-# db_config = {}
-
 # url = "http://127.0.0.1:54321"
 # key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
 # supabase: Client = create_client(url, key)
@@ -31,18 +28,29 @@ supabase_client_var = ContextVar('supabase', default=None)
 #     'port': '54322'
 # }
 
-# masterDB: Client = create_client('https://qivmgbtrzgnjcpyynpam.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpdm1nYnRyemduamNweXlucGFtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcxNTU4ODc3NSwiZXhwIjoyMDMxMTY0Nzc1fQ.z8LIo50hs1gWcerWxx1dhjri-DMoDw9z0luba_Ap4cI')
 
-def update_db_settings(data):
+async def update_db_settings(subdomain):
     global db_config_var, supabase_client_var
-    # client_host = request.client.host
-    # print(f"Client host: {client_host}")
-    
-    supabase: Client = create_client(data['url'], data['secret'])
-    supabase_client_var.set(supabase)
-    
-    db_config = data['dbConfig']
-    db_config_var.set(db_config)
+
+    try:
+        supabase: Client = create_client('https://qivmgbtrzgnjcpyynpam.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpdm1nYnRyemduamNweXlucGFtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcxNTU4ODc3NSwiZXhwIjoyMDMxMTY0Nzc1fQ.z8LIo50hs1gWcerWxx1dhjri-DMoDw9z0luba_Ap4cI')
+        response = supabase.table("tenant_def").select("*").eq('id', subdomain).execute()
+        
+        if response.data:
+            data = response.data[0]
+            supabase: Client = create_client(data['url'], data['secret'])
+            supabase_client_var.set(supabase)
+            
+            db_config = {
+                'dbname': data['dbname'],
+                'user': data['user'],
+                'password': data['pw'],
+                'host': data['host'],
+                'port': data['port']
+            }
+            db_config_var.set(db_config)
+    except Exception as e:
+        print(f"An error occurred: {e}")
     
     return {"message": "Settings updated successfully"}
 
