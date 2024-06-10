@@ -8,7 +8,6 @@ from process_var_sql_gen import add_routes_to_app as add_var_sql_gen_routes_to_a
 from audio_input import add_routes_to_app as add_audio_input_routes_to_app
 from min import add_routes_to_app as add_min_routes_to_app
 from process_def_search import add_routes_to_app as add_process_def_search_routes_to_app
-from database import update_db_settings
 
 import os
 
@@ -40,8 +39,6 @@ app.add_middleware(
 
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# app.post("/set-db-config")(update_db_settings)
 
 add_process_routes_to_app(app)
 add_db_manager_routes_to_app(app)
