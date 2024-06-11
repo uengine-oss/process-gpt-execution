@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from process_engine import add_routes_to_app as add_process_routes_to_app
@@ -37,6 +37,27 @@ app.add_middleware(
     allow_headers=["*"],  # 모든 HTTP 헤더 허용
 )
 
+from starlette.middleware.base import BaseHTTPMiddleware
+from database import update_db_settings
+
+class DBConfigMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        host_name = request.headers.get('host')
+        print(f"Host: {host_name}")
+        subdomain = host_name.split('.')[0] if host_name else None
+        if subdomain:
+            await update_db_settings(subdomain)
+        else:
+            print("No host name found in the request headers.")
+        # 요청을 다음 미들웨어 또는 엔드포인트로 전달
+        response = await call_next(request)
+        return response
+
+
+app = FastAPI()
+
+# 미들웨어 추가
+app.add_middleware(DBConfigMiddleware)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 

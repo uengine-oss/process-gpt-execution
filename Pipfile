@@ -15,6 +15,7 @@ supabase = "*"
 psycopg2-binary = "*"
 python-multipart = "*"
 flask = "*"
+jwt = "*"
 
 [dev-packages]
 

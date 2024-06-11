@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableLambda
 from datetime import datetime
 
 
-from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems
+from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token
 from database import ProcessInstance
 import uuid
 import json
@@ -274,6 +274,14 @@ def vision_model_chain(input):
     )
     return msg
 
+chain = (
+    prompt | model | parser | execute_next_activity
+)
+
+vision_chain = (
+    vision_model_chain | parser | execute_next_activity
+)
+
 def combine_input_with_process_definition(input):
     # 프로세스 인스턴스를 DB에서 검색
     try:
@@ -298,7 +306,7 @@ def combine_input_with_process_definition(input):
         
             processDefinitionJson = fetch_process_definition(process_instance.get_def_id())
 
-            return {
+            chain_input = {
                 "answer": input['answer'],
                 "instance_id": process_instance.proc_inst_id,
                 "instance_name": process_instance.proc_inst_name,
@@ -322,9 +330,9 @@ def combine_input_with_process_definition(input):
                 raise HTTPException(status_code=404, detail="Neither process definition ID nor process instance ID was provided. Cannot start or proceed with the process.")
             
             processDefinitionJson = fetch_process_definition(process_definition_id)
-            processDefinition = load_process_definition(processDefinitionJson)
+            # processDefinition = load_process_definition(processDefinitionJson)
 
-            return {
+            chain_input = {
                 "answer": input['answer'],  
                 "instance_id": "new",
                 "instance_name": "",
@@ -341,23 +349,41 @@ def combine_input_with_process_definition(input):
                 "today": today,
                 "organizationChart": organizationChart
             }
+
+        if image:
+            return vision_chain.invoke(chain_input)
+        else:
+            return chain.invoke(chain_input)
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with_process_definition)
 
-def add_routes_to_app(app) :
-    add_routes(
-        app,
-        combine_input_with_process_definition_lambda | prompt | model | parser | execute_next_activity,
-        path="/complete",
-    )
+from fastapi import Request
 
-    add_routes(
-        app,
-        combine_input_with_process_definition_lambda | vision_model_chain | parser | execute_next_activity,
-        path="/vision-complete",
-    )
+async def combine_input_with_token(request: Request):
+    token_data = parse_token(request)
+    json_data = await request.json()
+    input = json_data.get('input')
+    input['userInfo'] = token_data
+    return combine_input_with_process_definition(input)
+
+def add_routes_to_app(app) :
+    app.add_api_route("/complete", combine_input_with_token, methods=["POST"])
+    app.add_api_route("/vision-complete", combine_input_with_token, methods=["POST"])
+    
+    # add_routes(
+    #     app,
+    #     combine_input_with_process_definition_lambda | prompt | model | parser | execute_next_activity,
+    #     path="/complete",
+    # )
+
+    # add_routes(
+    #     app,
+    #     combine_input_with_process_definition_lambda | vision_model_chain | parser | execute_next_activity,
+    #     path="/vision-complete",
+    # )
 
 """
 
