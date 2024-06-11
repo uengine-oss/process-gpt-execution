@@ -42,8 +42,7 @@ from database import update_db_settings
 
 class DBConfigMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        host_name = request.headers.get('host')
-        print(f"Host: {host_name}")
+        host_name = request.headers.get('X-Forwarded-Host')
         subdomain = host_name.split('.')[0] if host_name else None
         if subdomain:
             await update_db_settings(subdomain)
