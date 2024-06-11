@@ -83,8 +83,8 @@ async def combine_input_with_process_definition(input):
     processDefinitionJson = None
 
     process_definition_id = input.get('process_definition_id')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
-    subdomain = input.get('subdomain')
-    await update_db_settings(subdomain)
+    # subdomain = input.get('subdomain')
+    # await update_db_settings(subdomain)
 
     if not process_definition_id:
         raise HTTPException(status_code=404, detail="No process definition ID was provided.")
