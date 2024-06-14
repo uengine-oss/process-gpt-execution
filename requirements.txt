@@ -43,6 +43,7 @@ postgrest==0.15.0
 psycopg2-binary==2.9.9
 pydantic==2.6.1
 pydantic_core==2.16.2
+PyJWT==2.8.0
 python-dateutil==2.8.2
 python-multipart==0.0.9
 PyYAML==6.0.1
