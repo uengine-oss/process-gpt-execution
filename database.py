@@ -439,19 +439,23 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
 
         # Filter out non-existing columns
         filtered_data = {key.lower(): value for key, value in process_instance_data.items() if key.lower() in existing_columns}
+        
+        keys_to_exclude = {'proc_inst_id', 'proc_inst_name', 'role_bindings', 'current_activity_ids', 'current_user_ids'}
+        variables_data = {key: value for key, value in filtered_data.items() if key not in keys_to_exclude}
+        variables_data_json = json.dumps(variables_data, ensure_ascii=False)
 
         supabase = supabase_client_var.get()
         if supabase is None:
-            raise Exception("Supabase client is not configured for this request")   
+            raise Exception("Supabase client is not configured for this request")
         
-        # Upsert the filtered data into the table
         supabase.table('proc_inst').upsert({
             'id': process_instance.proc_inst_id,
             'name': process_instance.proc_inst_name,
             'user_ids': process_instance.current_user_ids,
-            'status': status
+            'status': status,
+            'variables_data': variables_data_json
         }).execute()
-
+        # Upsert the filtered data into the table
         response = supabase.table(process_name.lower()).upsert(filtered_data).execute()
         success = bool(response.data)
         return success, process_instance
