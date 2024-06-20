@@ -29,6 +29,11 @@ supabase_client_var = ContextVar('supabase', default=None)
 # }
 
 
+def load_sql_from_file(file_path):
+    """Load SQL commands from a text file."""
+    with open(file_path, 'r') as file:
+        return file.read()
+
 def create_default_tables():
     try:
         db_config = db_config_var.get()
@@ -36,201 +41,53 @@ def create_default_tables():
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor(cursor_factory=RealDictCursor)
         
-        sql_query = """
-drop table if exists configuration CASCADE;
-create table configuration (
-  key text primary key,
-  value jsonb
-);
-insert into configuration (key, value) values ('proc_map', '{}');
-insert into configuration (key, value) values ('organization', '{}');
-
-drop table if exists public.proc_map_history CASCADE;
-create table public.proc_map_history (
-    value jsonb not null,
-    created_at timestamp with time zone not null default now(),
-    constraint proc_map_history_pkey primary key (created_at)
-) tablespace pg_default;
-
-create or replace function public.save_previous_proc_map()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF OLD.key = 'proc_map' THEN
-        INSERT INTO public.proc_map_history(value, created_at)
-        VALUES (OLD.value, now());
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-create or replace trigger trigger_save_previous_proc_map
-BEFORE UPDATE ON configuration
-FOR EACH ROW
-WHEN (OLD.key = 'proc_map' AND NEW.value IS DISTINCT FROM OLD.value)
-EXECUTE PROCEDURE public.save_previous_proc_map();
-
-drop table if exists todolist CASCADE;
-create table todolist (
-    id uuid primary key,
-    user_id text,
-    proc_inst_id text,
-    proc_def_id text,
-    activity_id text,
-    activity_name text,
-    start_date timestamp,
-    end_date timestamp,
-    status text,
-    description text,
-    tool text
-);
-
-drop table if exists public.users CASCADE;
-create table public.users (
-    id uuid not null primary key,
-    username text null,
-    profile text null default '/src/assets/images/profile/defaultUser.png'::text,
-    email text null,
-    is_admin boolean not null default false,
-    notifications jsonb null,
-    role text null
-);
-
-create or replace function public.handle_new_user() 
-returns trigger as $$
-begin
-    insert into public.users (id, email)
-    values (new.id, new.email);
-      return new;
-end;
-$$ language plpgsql security definer;
-
-create or replace trigger on_auth_user_created
-    after insert on auth.users
-    for each row execute procedure public.handle_new_user();
-
-create or replace function public.handle_delete_user() 
-returns trigger as $$
-begin
-    delete from auth.users where id = old.id;
-    return old;
-end;
-$$ language plpgsql security definer;
-
-create or replace trigger on_public_user_deleted
-    after delete on public.users
-    for each row execute procedure public.handle_delete_user();
-
-drop table if exists proc_def CASCADE;
-create table proc_def (
-  id text primary key,
-  name text,
-  definition jsonb,
-  bpmn text
-);
-
-ALTER TABLE proc_def ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Enable insert for authenticated users only" ON "public"."proc_def"
-AS PERMISSIVE FOR INSERT
-TO authenticated
-WITH CHECK ((EXISTS ( SELECT 1 FROM users WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
-
-CREATE POLICY "Enable read access for all users" ON "public"."proc_def"
-AS PERMISSIVE FOR SELECT
-TO public
-USING (true);
-
-drop table if exists proc_inst CASCADE;
-create table
-  public.proc_inst (
-    id text not null,
-    name text null,
-    user_ids text[] null,
-    messages jsonb null,
-    agent_messages jsonb null,
-    status text null,
-    variables_data text null,
-    constraint proc_inst_pkey primary key (id)
-  ) tablespace pg_default;
-
-drop table if exists public.chats CASCADE;
-create table public.chats (
-    uuid text not null,
-    id text not null,
-    messages jsonb null,
-    constraint chats_pkey primary key (uuid)
-) tablespace pg_default;
-
-drop table if exists public.calendar CASCADE;
-create table public.calendar (
-  uid text not null,
-  data jsonb null,
-  constraint calendar_pkey primary key (uid)
-) tablespace pg_default;
-
-drop table if exists public.chat_rooms CASCADE;
-create table public.chat_rooms (
-  id text not null,
-  participants jsonb not null,
-  message jsonb null,
-  name text null,
-  constraint chat_rooms_pkey primary key (id)
-) tablespace pg_default;
-
-drop table if exists public.proc_def_arcv CASCADE;
-create table
-  public.proc_def_arcv (
-    arcv_id text not null,
-    proc_def_id text not null,
-    version text not null,
-    snapshot text null,
-    "timeStamp" timestamp without time zone null default current_timestamp,
-    diff text null,
-    constraint proc_def_arcv_pkey primary key (arcv_id)
-  ) tablespace pg_default;
-
-drop table if exists public.lock CASCADE;
-create table
-  public.lock (
-    id text not null,
-    user_id text null,
-    constraint lock_pkey primary key (id)
-  ) tablespace pg_default;
-
-drop table if exists form_def CASCADE;
-create table form_def (
-  id text primary key,
-  html text not null
-) tablespace pg_default;
-"""
-
+        # Load SQL from file
+        sql_query = load_sql_from_file('sql.txt')
+        
         cursor.execute(sql_query)
         connection.commit()
         
-        return "Table Created"
+        return "Tables created successfully."
     except Exception as e:
         print(f"An error occurred: {e}")
+    finally:
+        if connection:
+            connection.close()
+
 
 async def update_db_settings(subdomain):
     try:
-        supabase: Client = create_client('https://qivmgbtrzgnjcpyynpam.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpdm1nYnRyemduamNweXlucGFtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcxNTU4ODc3NSwiZXhwIjoyMDMxMTY0Nzc1fQ.z8LIo50hs1gWcerWxx1dhjri-DMoDw9z0luba_Ap4cI')
-        response = supabase.table("tenant_def").select("*").eq('id', subdomain).execute()
-        
-        if response.data:
-            data = response.data[0]
-            supabase: Client = create_client(data['url'], data['secret'])
+        if subdomain and "localhost" not in subdomain:
+            supabase: Client = create_client('https://qivmgbtrzgnjcpyynpam.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpdm1nYnRyemduamNweXlucGFtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcxNTU4ODc3NSwiZXhwIjoyMDMxMTY0Nzc1fQ.z8LIo50hs1gWcerWxx1dhjri-DMoDw9z0luba_Ap4cI')
+            response = supabase.table("tenant_def").select("*").eq('id', subdomain).execute()
+
+            if response.data:
+                data = response.data[0]
+                supabase: Client = create_client(data['url'], data['secret'])
+                supabase_client_var.set(supabase)
+                db_config = {
+                    'dbname': data['dbname'],
+                    'user': data['user'],
+                    'password': data['pw'],
+                    'host': data['host'],
+                    'port': data['port']
+                }
+                db_config_var.set(db_config)
+        else:
+            supabase: Client = create_client('http://127.0.0.1:54321', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0')
             supabase_client_var.set(supabase)
-            
             db_config = {
-                'dbname': data['dbname'],
-                'user': data['user'],
-                'password': data['pw'],
-                'host': data['host'],
-                'port': data['port']
+                'dbname': 'postgres',
+                'user': 'postgres',
+                'password': 'postgres',
+                'host': '127.0.0.1',
+                'port': '54322'
             }
             db_config_var.set(db_config)
+       
     except Exception as e:
         print(f"An error occurred: {e}")
+
 
 def execute_sql(sql_query):
     """
@@ -368,125 +225,6 @@ def generate_create_statement_for_table(table_name):
         # Close the cursor and connection to clean up
         if connection:
             connection.close()
-
-
-
-"""
-drop table configuration;
-
-create table configuration (
-  key text primary key,
-  value jsonb
-);
-
-insert into configuration (key, value)
-values ('proc_map', null)
-
-drop table todolist;
-
-create table todolist (
-    id uuid primary key,
-    user_id text,
-    proc_inst_id text,
-    proc_def_id text,
-    activity_id text,
-    start_date timestamp,
-    end_date timestamp,
-    status text,
-    description text
-);
-
-drop table public.users;
-
-create table public.users (
-    id uuid not null primary key,
-    username text null,
-    profile text null,
-    email text null
-);
--- inserts a row into public.users
-create or replace function public.handle_new_user() 
-returns trigger as $$
-begin
-    insert into public.users (id, email)
-    values (new.id, new.email);
-      return new;
-end;
-$$ language plpgsql security definer;
-
--- trigger the function every time a user is created
-create trigger on_auth_user_created
-    after insert on auth.users
-    for each row execute procedure public.handle_new_user();
-
-
-drop table organization;
-
-create table organization (
-  id bigint generated by default as identity,
-  messages jsonb,
-  organization_chart text
-);
-
-
-drop table proc_def;
-
-create table proc_def (
-  id text primary key,
-  name text,
-  definition jsonb,
-  bpmn text
-);
-
-drop table proc_inst;
-
-
-create table proc_inst (
-    id text primary key,
-    user_ids text[],
-    messages jsonb
-);
-==>
-create table vacation_request(
-  proc_inst_id text primary key,
-  proc_inst_name text,
-  current_activity_ids text array,
-  current_user_ids text array,
-  role_bindings jsonb
-  
-  -- 해당 프로세스 정의의 프로세스 변수 선언들을 필드로
-  reason text, -- 휴가 신청사유
-  start_date date, -- 휴가 시작일
-  return_date date -- 휴가 복귀일
-
-)
-
-create table
-  public.chats (
-    uuid text not null,
-    id text not null,
-    messages jsonb null,
-    constraint chats_pkey primary key (uuid)
-  ) tablespace pg_default;
-
-create table
-  public.calendar (
-    uid text not null,
-    data jsonb null,
-    constraint calendar_pkey primary key (uid)
-  ) tablespace pg_default;
-
-create table
-  public.chat_rooms (
-    id text not null,
-    participants jsonb not null,
-    message jsonb null,
-    name text null,
-    constraint chat_rooms_pkey primary key (id)
-  ) tablespace pg_default;
-  
-"""
-
 
 def fetch_process_definition(def_id):
     """
