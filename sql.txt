@@ -107,7 +107,6 @@ create table
     id text not null,
     name text null,
     user_ids text[] null,
-    messages jsonb null,
     agent_messages jsonb null,
     status text null,
     variables_data text null,
