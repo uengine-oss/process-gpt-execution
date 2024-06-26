@@ -363,10 +363,15 @@ combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with
 from fastapi import Request
 
 async def combine_input_with_token(request: Request):
-    token_data = parse_token(request)
     json_data = await request.json()
     input = json_data.get('input')
-    input['userInfo'] = token_data
+    
+    token_data = parse_token(request)
+    if token_data:
+        input['userInfo'] = token_data
+    elif input.get('userInfo'):
+        input['userInfo'] = input.get('userInfo')
+        
     return combine_input_with_process_definition(input)
 
 def add_routes_to_app(app) :

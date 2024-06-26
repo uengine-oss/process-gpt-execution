@@ -31,7 +31,7 @@ supabase_client_var = ContextVar('supabase', default=None)
 
 def load_sql_from_file(file_path):
     """Load SQL commands from a text file."""
-    with open(file_path, 'r') as file:
+    with open(file_path, 'r', encoding='utf-8') as file:  # UTF-8 인코딩으로 파일을 열기
         return file.read()
 
 def create_default_tables():
@@ -279,6 +279,13 @@ class ProcessInstance(BaseModel):
             variable_name = variable.name
             variable_map[variable_name] = getattr(self, variable_name, None)
         return variable_map
+
+class InstanceItem(BaseModel):
+    id: str
+    name: Optional[str] = None
+    status: Optional[str] = None
+    variables_data: Optional[str] = None
+    user_ids: Optional[List[str]] = None
     
 class WorkItem(BaseModel):
     id: str
@@ -428,6 +435,28 @@ def fetch_organization_chart():
     else:
         return None
 
+def fetch_process_instance_list(user_id: str) -> Optional[List[InstanceItem]]:
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
+    
+    response = supabase.table('proc_inst').select("*").filter('user_ids', 'cs', '{' + user_id + '}').execute()
+    if response.data:
+        return [InstanceItem(**item) for item in response.data]
+    else:
+        return None
+
+def fetch_todolist_by_user_id(user_id: str) -> Optional[List[WorkItem]]:
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
+    
+    response = supabase.table('todolist').select("*").eq('user_id', user_id).execute()
+    if response.data:
+        return [WorkItem(**item) for item in response.data]
+    else:
+        return None
+
 def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str) -> Optional[WorkItem]:
     supabase = supabase_client_var.get()
     if supabase is None:
@@ -544,17 +573,16 @@ def fetch_chat_history(chat_room_id: str) -> List[ChatItem]:
         chatHistory.append(ChatItem(**chat))
     return chatHistory
 
-def upsert_chat_message(chat_room_id: str, data: Dict[str, str]) -> None:
+def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool) -> None:
     try:
-        output = data.get("output", None)
-        if output:
-            json_output = json.loads(output)
+        if is_system:
+            json_data = json.loads(data)
             message = ChatMessage(
                 name="system",
                 role="system",
                 email="system@uengine.org",
                 image="",
-                content=json_output["description"],
+                content=json_data["description"],
                 timeStamp=datetime.now()
             )
         else:
