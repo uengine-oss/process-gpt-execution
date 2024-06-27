@@ -182,7 +182,6 @@ def clean_html_string(html_string):
 def execute_process(process_json):
     process_definition_id = process_json["processDefinitionId"]
     process_instance_id = process_json["processInstanceId"]
-    chatRoomId = process_json["chatRoomId"]
     email = process_json["email"]
     answer = process_json["answer"]
     

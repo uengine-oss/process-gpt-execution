@@ -109,7 +109,7 @@ prompt = PromptTemplate.from_template(
         [{{
             "completedActivityId": "the id of completed activity id", // Not Return if completedActivityId is "startEvent".
             "completedUserEmail": "the email address of completed activity’s role",
-            "result": "PENDING | DONE" // The result of the completed activity
+            "result": "PENDING | DONE" // The result of the completed activity, if there is a status to change in submitted data, use that value as a result
         }}],
         
         // instanceId 가 "new" 인 경우 Process Definition 의 모든 activities 를 nextActivities 로 등록한다
@@ -117,7 +117,7 @@ prompt = PromptTemplate.from_template(
         [{{
             "nextActivityId": "the id of next activity id", // Return "END_PROCESS" if nextActivityId is "endEvent".
             "nextUserEmail": "the email address of next activity’s role",
-            "result": "TODO | IN_PROGRESS | PENDING | DONE", // The result of the next activity
+            "result": "TODO | IN_PROGRESS | PENDING | DONE", // The result of the next activity, if there is a status to change in submitted data, use that value as a result
             "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)" // Returns a description of the process end if nextActivityId is "endEvent".
         }}],
 

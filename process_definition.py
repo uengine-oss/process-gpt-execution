@@ -22,19 +22,7 @@ class ProcessData(BaseModel):
 class ProcessRole(BaseModel):
     name: str
     resolutionRule: str
-
-class Variable(BaseModel):
-    name: Optional[str] = None
-    defaultValue: Optional[str] = None
-
-class Argument(BaseModel):
-    name: Optional[str] = None
-
-class DataField(BaseModel):
-    argument: Optional[Argument] = None
-    variable: Optional[Variable] = None
-    direction: Optional[str] = None
-
+    
 class ProcessActivity(BaseModel):
     name: str
     id: str
@@ -42,11 +30,12 @@ class ProcessActivity(BaseModel):
     description: str
     instruction: Optional[str] = None
     role: str
-    inputData: Optional[List[DataField]] = Field(default_factory=list)
-    outputData: Optional[List[DataField]] = Field(default_factory=list)
+    inputData: Optional[List[str]] = Field(default_factory=list)
+    outputData: Optional[List[str]] = Field(default_factory=list)
     checkpoints: Optional[List[str]] = Field(default_factory=list)
     pythonCode: Optional[str] = None
     tool: Optional[str] = None
+    properties: Optional[str] = None
 
 class ProcessSequence(BaseModel):
     source: str
