@@ -35,6 +35,11 @@ prompt = PromptTemplate.from_template(
                 "name": "start date",
                 "description": "start date of the vacation",
                 "type": "Date"
+            }},
+            {{
+                "name": "휴가 복귀일",
+                "description": "date of return from vacation",
+                "type": "Date"
             }}
         ]
         ...
@@ -54,7 +59,8 @@ prompt = PromptTemplate.from_template(
         -- fields for the process variables defined in this process definition    
 
         reason text,
-        start_date date // Replace with _ if there is a space.
+        start_date date, // Replace with _ if there is a space.
+        휴가_복귀일 date // Replace with _ if there is a space.
     )
 
 

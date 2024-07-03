@@ -551,17 +551,17 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
 import json
 
 class ChatMessage(BaseModel):
-    name: str
-    role: str
-    email: Optional[str]
-    image: Optional[str]
-    content: Optional[str]
-    timeStamp: Optional[datetime]
+    name: Optional[str] = None
+    role: Optional[str] = None
+    email: Optional[str] = None
+    image: Optional[str] = None
+    content: Optional[str] = None
+    timeStamp: Optional[datetime] = None
 
 class ChatItem(BaseModel):
     id: str
     uuid: str
-    messages: Optional[ChatMessage]
+    messages: Optional[ChatMessage] = None
 
 def fetch_chat_history(chat_room_id: str) -> List[ChatItem]:
     supabase = supabase_client_var.get()
@@ -570,6 +570,7 @@ def fetch_chat_history(chat_room_id: str) -> List[ChatItem]:
     response = supabase.table("chats").select("*").eq('id', chat_room_id).execute()
     chatHistory = []
     for chat in response.data:
+        chat.pop('jsonContent', None)
         chatHistory.append(ChatItem(**chat))
     return chatHistory
 

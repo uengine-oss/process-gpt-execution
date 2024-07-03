@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableLambda
 from datetime import datetime
 
 
-from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token
+from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token, upsert_chat_message
 from database import ProcessInstance
 import uuid
 import json
@@ -75,7 +75,7 @@ prompt = PromptTemplate.from_template(
     
       activityId: "{activity_id}",  // the activityId is not included in the Currently Running Activities or is the next activityId than Current Running Activities, it must never be added to completedActivities to return the activityId as complete and must be reported in cannotProceedErrors.
       user: "{user_email}",
-      submitted data: {answer}  // If outputData of the activity does not exist to proceed to the next activity or if the type of outputData is Form and nothing is entered in the Object, it must never be added to completedActivities to return the activityId as complete and must be reported which parameters should be entered in cannotProceedErrors.
+      submitted data: {answer}  // If outputData of the activity does not exist to proceed to the next activity or if the type of outputData is Form and nothing is entered in the Object, it must never be added to completedActivities to return the activityId as complete and must be reported which parameters should be entered in cannotProceedErrors. But if there is a status to change in the submitted data and the value is TODO or IN_PROGRESS or PENDING, the completedActivities must be returned without cannotProcessedErrors.
     
     - Today is:  {today}
     
@@ -87,8 +87,8 @@ prompt = PromptTemplate.from_template(
     The nextUserEmail included in nextActivities must be found in the Organization chart and returned.
     If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
     startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
-    Return the result with the following description in markdown (three backticks):
-    ```
+    
+    result should be in this JSON format:
     {{
         "instanceId": "{instance_id}",
         "instanceName": "process instance name",
@@ -130,11 +130,8 @@ prompt = PromptTemplate.from_template(
         "description": "description of the completed activities and the next activities and what the user who will perform the task should do in Korean"
 
     }}
-    
-    ```
-
-                                      
-    """)
+    """
+    )
 
 
 # Pydantic model for process execution
@@ -187,21 +184,23 @@ def execute_next_activity(process_result_json: dict) -> str:
             )
         else:
             process_instance = fetch_process_instance(process_result.instanceId)
-
+        
         process_definition = process_instance.process_definition
 
         for data_change in process_result.dataChanges or []:
             setattr(process_instance, data_change.key, data_change.value)
             
         all_user_emails = set()
-        if process_result.completedActivities:
-            all_user_emails.update(activity.completedUserEmail for activity in process_result.completedActivities)
         if process_result.nextActivities:
             if process_result.instanceId == "new":
                 process_instance.current_activity_ids = [process_result.nextActivities[0].nextActivityId]
             else:
                 process_instance.current_activity_ids = [activity.nextActivityId for activity in process_result.nextActivities]    
             all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
+        for activity in process_result.completedActivities:
+            all_user_emails.add(activity.completedUserEmail)
+            if activity.result in ["TODO", "IN_PROGRESS", "PENDING"]:
+                process_instance.current_activity_ids.append(activity.completedActivityId)
         
         current_user_ids_set = set(process_instance.current_user_ids)
         updated_user_emails = current_user_ids_set.union(all_user_emails)
@@ -220,12 +219,21 @@ def execute_next_activity(process_result_json: dict) -> str:
             else:
                 result = (f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found.")
         
+
         workitems = None
+        message_json = json.dumps({"description": ""})
         if not process_result.cannotProceedErrors:
             _, process_instance = upsert_process_instance(process_instance)
             upsert_completed_workitem(process_instance.dict(), process_result.dict(), process_definition)    
             workitems = upsert_next_workitems(process_instance.dict(), process_result.dict(), process_definition)
-        
+            message_json = json.dumps({"description": process_result.description})
+        else:
+            reason = ""
+            for error in process_result.cannotProceedErrors:
+                reason += error.reason + "\n"
+            message_json = json.dumps({"description": reason})        
+        upsert_chat_message(process_instance.proc_inst_id, message_json, True)
+
         # Updating process_result_json with the latest process instance details and execution result
         process_result_json["instanceId"] = process_instance.proc_inst_id
         process_result_json["instanceName"] = process_instance.proc_inst_name
@@ -238,6 +246,8 @@ def execute_next_activity(process_result_json: dict) -> str:
 
         return json.dumps(process_result_json)
     except Exception as e:
+        message_json = json.dumps({"description": str(e)})
+        upsert_chat_message(process_instance.proc_inst_id, message_json, True)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 import base64
@@ -300,6 +310,9 @@ def combine_input_with_process_definition(input):
         
         if process_instance_id!="new":
             process_instance = fetch_process_instance(process_instance_id)
+            
+            message_json = json.dumps({"description": f"워크아이템 '{activity_id}' 을/를 실행합니다."})        
+            upsert_chat_message(process_instance_id, message_json, True)
 
             if not process_instance:
                 raise HTTPException(status_code=404, detail=f"Process instance with ID {process_instance_id} not found.")

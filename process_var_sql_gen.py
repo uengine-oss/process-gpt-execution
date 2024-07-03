@@ -3,7 +3,7 @@ from langchain.prompts import PromptTemplate
 from langchain_community.chat_models import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
-from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, fetch_chat_history, upsert_chat_message, parse_token, fetch_todolist_by_user_id, fetch_process_instance_list
+from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, fetch_chat_history, upsert_chat_message, parse_token, fetch_todolist_by_user_id, fetch_process_instance_list, fetch_process_instance
 import re
 import json
 from decimal import Decimal
@@ -140,12 +140,29 @@ def combine_input_with_workitem_complete(input):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def combine_input_with_process_instance_chat_history(input):
+    try:
+        query = input["query"]
+        chat_room_id = input["chat_room_id"]
+        chat_history = fetch_chat_history(chat_room_id)
+        instance = fetch_process_instance(chat_room_id)
+        
+        return {
+            "query": query,
+            "chat_history": chat_history,
+            "process_instance": instance
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+        
+
 combine_input_with_process_table_schema_lambda = RunnableLambda(combine_input_with_process_table_schema)
 combine_input_with_instance_start_lambda = RunnableLambda(combine_input_with_instance_start)
 combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with_process_definition)
 combine_input_with_schedule_lambda = RunnableLambda(combine_input_with_schedule)
 combine_input_with_todolist_lambda = RunnableLambda(combine_input_with_todolist)
 combine_input_with_workitem_complete_lambda = RunnableLambda(combine_input_with_workitem_complete)
+combine_input_with_process_instance_chat_history_lambda = RunnableLambda(combine_input_with_process_instance_chat_history)
 
 def extract_markdown_code_blocks(markdown_text):
     # Extract code blocks from markdown text and concatenate them into a single string
@@ -355,6 +372,29 @@ workitem_complete_prompt = PromptTemplate.from_template(
     """
     )
 
+process_instance_with_chat_history_query_prompt = PromptTemplate.from_template(
+    """
+        Please describe the process instance data like this:
+
+        example: 현재의 프로세스는 영업활동프로세스이며, 진행상태는 영업 제안서 작성단계에서 정체가 발생하고 있으며 담당자는 장진영입니다. 영업 담당자는 강서구입니다. 
+        (현재 진행단계 설명, 진행상태 설명, 각 담당자 등 프로세스 인스턴스 데이터와 채팅 내역에서 얻어진 다양한 정보를 바탕으로 설명)
+        
+        here is user query:
+        {query}
+
+        here is process instance data:
+        {process_instance}
+        
+        here is chat history so far:
+        {chat_history} 
+
+        * 만약 데이터가 오류인 경우는, 그냥 해당 정보가 없다고 답해.
+        * 인스턴스 ID는 설명할 필요 없어.
+        * 결과는 개조식이 아닌 서술식으로 설명해
+        * please describe in Korean Language
+    """
+    )
+
 process_instance_data_query_chain = (
         combine_input_with_process_table_schema_lambda | 
         prompt | 
@@ -403,12 +443,20 @@ workitem_complete_chain = (
         execute_process 
     )
 
+process_instance_with_chat_history_query_chain = (
+        combine_input_with_process_instance_chat_history_lambda | 
+        process_instance_with_chat_history_query_prompt | 
+        model | 
+        StrOutputParser() 
+    )
+
 
 intent_classification = PromptTemplate.from_template(
     """
         Please classify the user's intent among follows:
 
         QUERY_PROCESS_INSTANCE: query for status of specific process instance.
+        QUERY_PROCESS_INSTANCE_WITH_CHAT_HISTORY: query for status of specific process instance with chat history.
         QUERY_PROCESS_DEFINITION: query for process definition, its activities, and checkpoints for the activity.
         QUERY_TODO_SCHEDULE: query for today's schedule
         QUERY_TODO_LIST: query for the to-do list or specific work items.
@@ -449,8 +497,13 @@ def generate_speech(part):
 def create_audio_stream(data, email):
     input_text = data.get("query")
     chat_room_id = data.get("chat_room_id")
+    
+    if chat_room_id and '.' in chat_room_id:
+        query = input_text + ", 채팅방 아이디: " + chat_room_id
+    else:
+        query = input_text
 
-    intent = intent_classification_chain.invoke({"query": input_text})
+    intent = intent_classification_chain.invoke({"query": query})
 
     chain = process_instance_data_query_chain
     
@@ -463,6 +516,10 @@ def create_audio_stream(data, email):
     if intent == "QUERY_PROCESS_INSTANCE":
         chain = process_instance_data_query_chain
         input = {"var_name": input_text, "resolution_rule": "요청된 프로세스 정의와 해당 건에 대한 프로세스 인스턴스 정보를 읽어야. 가능한 하나의 테이블에서 데이터를 조회. UNION 사용하지 말것."}
+    
+    elif intent == "QUERY_PROCESS_INSTANCE_WITH_CHAT_HISTORY":
+        chain = process_instance_with_chat_history_query_chain
+        input = {"query": input_text, "chat_room_id": chat_room_id}
         
     elif intent == "COMMAND_PROCESS_START":
         chain = process_instance_start_chain
@@ -472,9 +529,9 @@ def create_audio_stream(data, email):
         chain = process_definition_query_chain
         input = {"query": input_text}
 
-    elif intent == "QUERY_TODO_SCHEDULE":
-        chain = schedule_query_chain
-        input = {"query": input_text}
+    # elif intent == "QUERY_TODO_SCHEDULE":
+    #     chain = schedule_query_chain
+    #     input = {"query": input_text}
     
     elif intent == "QUERY_TODO_LIST":
         chain = todolist_query_chain

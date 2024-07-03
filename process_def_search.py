@@ -30,8 +30,8 @@ prompt = PromptTemplate.from_template(
     - Entered image: {image}
 
     Based on the entered message or image information, return the most similar process definition.
-    Return the result with the following description in markdown (three backticks):
-    ```
+    
+    result should be in this JSON format:
     {{
         "processDefinitionList": [{{
             "id": "process definition id",
@@ -39,10 +39,8 @@ prompt = PromptTemplate.from_template(
             "description": "process definition description"
         }}]
     }}
-    ```
-
-                                      
-    """)
+    """
+    )
 
 import base64
 from langchain.schema.messages import HumanMessage, AIMessage
