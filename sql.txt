@@ -3,7 +3,7 @@ create table configuration (
   key text primary key,
   value jsonb
 );
-insert into configuration (key, value) values ('proc_map', '{"mega_proc_list":[{"id":1,"name":"휴가","major_proc_list":[{"id":0,"name":"휴가관리","sub_proc_list":[{"id":"vacation_request_process","name":"휴가 신청 프로세스"}]}]}]}');
+insert into configuration (key, value) values ('proc_map', '{"mega_proc_list":[{"id":"휴가","name":"휴가","major_proc_list":[{"id":"휴가관리","name":"휴가관리","sub_proc_list":[{"id":"vacation_request_process","name":"휴가 신청 프로세스"}]}]}]}');
 insert into configuration (key, value) values ('organization', '{}');
 
 drop table if exists public.proc_map_history CASCADE;
