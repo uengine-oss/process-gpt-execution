@@ -254,7 +254,7 @@ def fetch_process_definition(def_id):
 class ProcessInstance(BaseModel):
     proc_inst_id: str
     proc_inst_name: str
-    role_bindings: Dict[str, str] = {}
+    role_bindings: Optional[List[Dict[str, str]]] = []
     current_activity_ids: List[str] = []
     current_user_ids: List[str] = []
     process_definition: ProcessDefinition = None  # Add a reference to ProcessDefinition

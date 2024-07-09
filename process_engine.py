@@ -83,8 +83,8 @@ prompt = PromptTemplate.from_template(
     The data changes and role binding changes should be derived from the user submitted data or attached image OCR. 
     At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
     Information about completed activities must be returned.
-    The completedUserEmail included in completedActivities must be found in the Organization chart and returned.
-    The nextUserEmail included in nextActivities must be found in the Organization chart and returned.
+    The completedUserEmail included in completedActivities must be found in the Organization chart or role bindings and returned.
+    The nextUserEmail included in nextActivities must be found in the Organization chart or role bindings and returned.
     If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
     startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
     
@@ -178,7 +178,7 @@ def execute_next_activity(process_result_json: dict) -> str:
             process_instance = ProcessInstance(
                 proc_inst_id=f"{process_result.processDefinitionId.lower()}.{str(uuid.uuid4())}",
                 proc_inst_name=f"{process_result.instanceName}",
-                role_bindings={},
+                role_bindings=[rb.model_dump() for rb in process_result.roleBindingChanges] or [],
                 current_activity_ids=[],
                 current_user_ids=[]
             )
@@ -192,10 +192,7 @@ def execute_next_activity(process_result_json: dict) -> str:
             
         all_user_emails = set()
         if process_result.nextActivities:
-            if process_result.instanceId == "new":
-                process_instance.current_activity_ids = [process_result.nextActivities[0].nextActivityId]
-            else:
-                process_instance.current_activity_ids = [activity.nextActivityId for activity in process_result.nextActivities]    
+            process_instance.current_activity_ids = [activity.nextActivityId for activity in process_result.nextActivities]    
             all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
         for activity in process_result.completedActivities:
             all_user_emails.add(activity.completedUserEmail)
@@ -300,6 +297,7 @@ def combine_input_with_process_definition(input):
         image = input.get("image")
         user_info = input.get('userInfo')
         user_email = user_info.get('email')
+        role_bindings = input.get('role_mappings')
         
         now = datetime.now()
         today = now.date()
@@ -349,13 +347,13 @@ def combine_input_with_process_definition(input):
                 "answer": input['answer'],  
                 "instance_id": "new",
                 "instance_name": "",
-                "role_bindings": "no bindings",
+                "role_bindings": role_bindings or "no bindings",
                 "data": "no data",
                 "current_activity_ids": "there's no currently running activities",
                 "current_user_ids": "there's no user currently running activities",
                 "processDefinitionJson": processDefinitionJson,
                 "process_definition_id": process_definition_id,
-                "activity_id": "id of the start event or start activity", #processDefinition.find_initial_activity().id,
+                "activity_id": activity_id or "id of the start event or start activity", #processDefinition.find_initial_activity().id,
                 "image": image,
                 "user_info": user_info,
                 "user_email": user_email,
