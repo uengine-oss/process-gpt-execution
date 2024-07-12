@@ -75,7 +75,7 @@ prompt = PromptTemplate.from_template(
     
       activityId: "{activity_id}",  // the activityId is not included in the Currently Running Activities or is the next activityId than Current Running Activities, it must never be added to completedActivities to return the activityId as complete and must be reported in cannotProceedErrors.
       user: "{user_email}",
-      submitted data: {answer}  // If outputData of the activity does not exist to proceed to the next activity or if the type of outputData is Form and nothing is entered in the Object, it must never be added to completedActivities to return the activityId as complete and must be reported which parameters should be entered in cannotProceedErrors. But if there is a status to change in the submitted data and the value is TODO or IN_PROGRESS or PENDING, the completedActivities must be returned without cannotProcessedErrors.
+      submitted data: {answer}  // If outputData of the activity does not exist to proceed to the next activity or if the type of outputData is Form and nothing is entered in the Object, it must never be added to completedActivities to return the activityId as complete and must be reported which parameters should be entered in cannotProceedErrors.
     
     - Today is:  {today}
     
@@ -109,7 +109,7 @@ prompt = PromptTemplate.from_template(
         [{{
             "completedActivityId": "the id of completed activity id", // Not Return if completedActivityId is "startEvent".
             "completedUserEmail": "the email address of completed activity’s role",
-            "result": "PENDING | DONE" // The result of the completed activity, if there is a status to change in submitted data, use that value as a result
+            "result": "PENDING | DONE" // The result of the completed activity
         }}],
         
         // instanceId 가 "new" 인 경우 Process Definition 의 모든 activities 를 nextActivities 로 등록한다
@@ -117,7 +117,7 @@ prompt = PromptTemplate.from_template(
         [{{
             "nextActivityId": "the id of next activity id", // Return "END_PROCESS" if nextActivityId is "endEvent".
             "nextUserEmail": "the email address of next activity’s role",
-            "result": "TODO | IN_PROGRESS | PENDING | DONE", // The result of the next activity, if there is a status to change in submitted data, use that value as a result
+            "result": "TODO | IN_PROGRESS | PENDING | DONE", // The result of the next activity
             "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)" // Returns a description of the process end if nextActivityId is "endEvent".
         }}],
 
@@ -192,12 +192,14 @@ def execute_next_activity(process_result_json: dict) -> str:
             
         all_user_emails = set()
         if process_result.nextActivities:
-            process_instance.current_activity_ids = [activity.nextActivityId for activity in process_result.nextActivities]    
+            for activity in process_result.nextActivities:
+                if activity.result != "TODO":
+                    process_instance.current_activity_ids.append(activity.nextActivityId)
+            if not process_instance.current_activity_ids:
+                process_instance.current_activity_ids.append(process_result.nextActivities[0].nextActivityId)
             all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
         for activity in process_result.completedActivities:
             all_user_emails.add(activity.completedUserEmail)
-            if activity.result in ["TODO", "IN_PROGRESS", "PENDING"]:
-                process_instance.current_activity_ids.append(activity.completedActivityId)
         
         current_user_ids_set = set(process_instance.current_user_ids)
         updated_user_emails = current_user_ids_set.union(all_user_emails)
@@ -385,9 +387,64 @@ async def combine_input_with_token(request: Request):
         
     return combine_input_with_process_definition(input)
 
+### role binding
+role_binding_prompt = PromptTemplate.from_template(
+    """
+    Now, we will create a system that recommends role performers at each stage when our employees start the process. Please refer to the resolution rule of the role in the process definition provided and our organization chart to find and return the best person for each role. If there is no suitable person, select yourself.
+
+    - Roles in Process Definition: {roles}
+
+    - Organization Chart: {organizationChart}
+    
+    - My Email: {myEmail}
+    
+    result should be in this JSON format:
+    {{
+        "roleBindings": [{{
+            "roleName": "role name",
+            "userId": "user email"
+        }}]
+    }}
+    """
+    )
+
+def process_role_binding(result_json: dict) -> str:
+    try:
+        return json.dumps(result_json)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+role_binding_chain = (
+    role_binding_prompt | model | parser | process_role_binding
+)
+
+async def combine_input_with_role_binding(request: Request):
+    try:
+        json_data = await request.json()
+        input = json_data.get('input')
+        token_data = parse_token(request)
+        if token_data:
+            my_email = token_data.get('email')
+        roles = input.get('roles')
+        organizationChart = fetch_organization_chart()
+        
+        chain_input = {
+            "roles": roles,
+            "organizationChart": organizationChart,
+            "myEmail": my_email
+        }
+        
+        return role_binding_chain.invoke(chain_input)
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    
+
 def add_routes_to_app(app) :
     app.add_api_route("/complete", combine_input_with_token, methods=["POST"])
     app.add_api_route("/vision-complete", combine_input_with_token, methods=["POST"])
+    app.add_api_route("/role-binding", combine_input_with_role_binding, methods=["POST"])
     
     # add_routes(
     #     app,

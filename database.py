@@ -457,6 +457,17 @@ def fetch_todolist_by_user_id(user_id: str) -> Optional[List[WorkItem]]:
     else:
         return None
 
+def fetch_todolist_by_proc_inst_id(proc_inst_id: str) -> Optional[List[WorkItem]]:
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
+    
+    response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).execute()
+    if response.data:
+        return [WorkItem(**item) for item in response.data]
+    else:
+        return None
+
 def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str) -> Optional[WorkItem]:
     supabase = supabase_client_var.get()
     if supabase is None:
@@ -478,9 +489,7 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
         workitem.status = process_result_data['completedActivities'][0]['result']
         workitem.end_date = datetime.now()
     else:
-        activity = process_definition.find_activity_by_id(process_result_data['nextActivities'][0]['nextActivityId'])
-
-
+        activity = process_definition.find_activity_by_id(process_result_data['completedActivities'][0]['completedActivityId'])
         workitem = WorkItem(
             id=f"{str(uuid.uuid4())}",
             proc_inst_id=prcess_instance_data['proc_inst_id'],
