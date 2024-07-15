@@ -42,16 +42,11 @@ prompt = PromptTemplate.from_template(
     """
     Now, you're going to create an interactive system similar to a BPM system that helps our company's employees understand various processes and take the next steps when they start a process or are curious about the next steps.
 
-    - Process Definition:
-    {processDefinitionJson}
+    - Process Definition: {processDefinitionJson}
 
     - Process Instance Id: {instance_id}
     
-    - Process Instance Naming Rules:
-    1. Write in Korean without spaces
-    2. Include process definition name: Name that indicates which instance of the process definition it is
-    3. Include user's name: The name of the person who execute the process instance
-    4. Date included: When the process executed (current date: {today})
+    - Process Instance Name Pattern: "{instance_name_pattern}"  // If there is no process instance name pattern, the key_value format of parameterValue, along with the process definition name, is the default for the instance name pattern. e.g. 휴가신청_이름_홍길동_사유_개인일정_시작일_20240701
 
     - Process Data:
     {data}
@@ -334,7 +329,8 @@ def combine_input_with_process_definition(input):
                 "user_info": user_info,
                 "user_email": user_email,
                 "today": today,
-                "organizationChart": organizationChart
+                "organizationChart": organizationChart,
+                "instance_name_pattern": processDefinitionJson.get("instanceNamePattern") or ""
             }
         else:
             process_definition_id = input.get('process_definition_id')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
@@ -360,7 +356,8 @@ def combine_input_with_process_definition(input):
                 "user_info": user_info,
                 "user_email": user_email,
                 "today": today,
-                "organizationChart": organizationChart
+                "organizationChart": organizationChart,
+                "instance_name_pattern": processDefinitionJson.get("instanceNamePattern") or ""
             }
 
         if image:
