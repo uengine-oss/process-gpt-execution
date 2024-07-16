@@ -3,7 +3,7 @@ create table configuration (
   key text primary key,
   value jsonb
 );
-insert into configuration (key, value) values ('proc_map', '{"mega_proc_list":[{"id":"휴가","name":"휴가","major_proc_list":[{"id":"휴가관리","name":"휴가관리","sub_proc_list":[{"id":"vacation_request_process","name":"휴가 신청 프로세스"}]}]}]}');
+insert into configuration (key, value) values ('proc_map', '{"mega_proc_list":[{"id":1,"name":"휴가","major_proc_list":[{"id":0,"name":"휴가관리","sub_proc_list":[{"id":"vacation_request_process","name":"휴가 신청 프로세스"}]}]}]}');
 insert into configuration (key, value) values ('organization', '{}');
 
 drop table if exists public.proc_map_history CASCADE;
@@ -44,6 +44,14 @@ create table todolist (
     description text,
     tool text
 );
+
+create view public.worklist as
+select
+  t.*,
+  p.name as proc_inst_name
+from
+  todolist t
+  join public.proc_inst p on t.proc_inst_id = p.id;
 
 drop table if exists public.users CASCADE;
 create table public.users (
@@ -90,7 +98,8 @@ create table proc_def (
 );
 
 insert into proc_def (id, name, definition, bpmn)
-values ('vacation_request_process', '휴가 신청 프로세스', '{"data":[{"name":"Name","type":"Text","description":"Namedescription"},{"name":"LeaveReason","type":"Text","description":"LeaveReasondescription"},{"name":"StartDate","type":"Date","description":"StartDatedescription"},{"name":"EndDate","type":"Date","description":"EndDatedescription"},{"name":"ManagerApproval","type":"Boolean","description":"ManagerApprovaldescription"},{"name":"HRNotification","type":"Boolean","description":"HRNotificationdescription"}],"roles":[{"name":"Employee","resolutionRule":"system"},{"name":"Manager","resolutionRule":"system"},{"name":"HR","resolutionRule":"system"}],"events":[{"id":"start_event","name":"start_event","role":"Employee","type":"StartEvent","description":"startevent"},{"id":"end_event","name":"end_event","role":"HR","type":"EndEvent","description":"endevent"}],"gateways":[],"sequences":[{"source":"start_event","target":"leave_request_activity","condition":""},{"source":"leave_request_activity","target":"manager_approval_activity","condition":""},{"source":"manager_approval_activity","target":"hr_notification_activity","condition":"ManagerApproval==true"},{"source":"hr_notification_activity","target":"end_event","condition":""}],"activities":[{"id":"leave_request_activity","name":"휴가신청서제출","role":"Employee","tool":"","type":"UserActivity","inputData":[{"argument":{"text":"이름"},"variable":{"name":"Name"},"direction":"IN"},{"argument":{"text":"휴가사유"},"variable":{"name":"LeaveReason"},"direction":"IN"},{"argument":{"text":"휴가시작일"},"variable":{"name":"StartDate"},"direction":"IN"},{"argument":{"text":"휴가복귀일"},"variable":{"name":"EndDate"},"direction":"IN"}],"outputData":[],"description":"휴가신청서제출description","instruction":"휴가신청서제출instruction"},{"id":"manager_approval_activity","name":"팀장승인","role":"Manager","tool":"","type":"UserActivity","inputData":[{"argument":{"text":"휴가승인여부"},"variable":{"name":"ManagerApproval"},"direction":"IN"}],"outputData":[],"description":"팀장승인description","instruction":"팀장승인instruction"},{"id":"hr_notification_activity","name":"인사팀통지","role":"HR","tool":"","type":"UserActivity","inputData":[{"argument":{"text":"휴가통지여부"},"variable":{"name":"HRNotification"},"direction":"IN"}],"outputData":[],"description":"인사팀통지description","instruction":"인사팀통지instruction"}],"description":"process.description","processDefinitionId":"vacation_request_process","processDefinitionName":"휴가신청프로세스"}', '<?xml version="1.0" encoding="UTF-8"?>
+values (
+  'vacation_request_process', '휴가 신청 프로세스', '{"data":[{"name":"Name","type":"Text","description":"Namedescription"},{"name":"LeaveReason","type":"Text","description":"LeaveReasondescription"},{"name":"StartDate","type":"Date","description":"StartDatedescription"},{"name":"EndDate","type":"Date","description":"EndDatedescription"},{"name":"ManagerApproval","type":"Boolean","description":"ManagerApprovaldescription"},{"name":"HRNotification","type":"Boolean","description":"HRNotificationdescription"}],"roles":[{"name":"Employee","resolutionRule":"system"},{"name":"Manager","resolutionRule":"system"},{"name":"HR","resolutionRule":"system"}],"events":[{"id":"start_event","name":"start_event","role":"Employee","type":"StartEvent","description":"startevent"},{"id":"end_event","name":"end_event","role":"HR","type":"EndEvent","description":"endevent"}],"gateways":[],"sequences":[{"source":"start_event","target":"leave_request_activity","condition":""},{"source":"leave_request_activity","target":"manager_approval_activity","condition":""},{"source":"manager_approval_activity","target":"hr_notification_activity","condition":"ManagerApproval==true"},{"source":"hr_notification_activity","target":"end_event","condition":""}],"activities":[{"id":"leave_request_activity","name":"휴가신청서제출","role":"Employee","tool":"","type":"UserActivity","inputData":[{"argument":{"text":"이름"},"variable":{"name":"Name"},"direction":"IN"},{"argument":{"text":"휴가사유"},"variable":{"name":"LeaveReason"},"direction":"IN"},{"argument":{"text":"휴가시작일"},"variable":{"name":"StartDate"},"direction":"IN"},{"argument":{"text":"휴가복귀일"},"variable":{"name":"EndDate"},"direction":"IN"}],"outputData":[],"description":"휴가신청서제출description","instruction":"휴가신청서제출instruction"},{"id":"manager_approval_activity","name":"팀장승인","role":"Manager","tool":"","type":"UserActivity","inputData":[{"argument":{"text":"휴가승인여부"},"variable":{"name":"ManagerApproval"},"direction":"IN"}],"outputData":[],"description":"팀장승인description","instruction":"팀장승인instruction"},{"id":"hr_notification_activity","name":"인사팀통지","role":"HR","tool":"","type":"UserActivity","inputData":[{"argument":{"text":"휴가통지여부"},"variable":{"name":"HRNotification"},"direction":"IN"}],"outputData":[],"description":"인사팀통지description","instruction":"인사팀통지instruction"}],"description":"process.description","processDefinitionId":"vacation_request_process","processDefinitionName":"휴가신청프로세스"}', '<?xml version="1.0" encoding="UTF-8"?>
 <bpmn:definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:uengine="http://uengine" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" id="Definitions_vacation_request_process" targetNamespace="http://bpmn.io/schema/bpmn" exporter="Custom BPMN Modeler" exporterVersion="1.0">
   <bpmn:collaboration id="Collaboration_1">
     <bpmn:participant id="Participant" name="Participant" processRef="vacation_request_process" />
@@ -309,6 +318,7 @@ create table
     snapshot text null,
     "timeStamp" timestamp without time zone null default current_timestamp,
     diff text null,
+    message text null,
     constraint proc_def_arcv_pkey primary key (arcv_id)
   ) tablespace pg_default;
 
