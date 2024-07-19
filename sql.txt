@@ -60,7 +60,6 @@ create table public.users (
     profile text null default '/src/assets/images/profile/defaultUser.png'::text,
     email text null,
     is_admin boolean not null default false,
-    notifications jsonb null,
     role text null
 );
 
@@ -335,3 +334,106 @@ create table form_def (
   id text primary key,
   html text not null
 ) tablespace pg_default;
+
+
+-- notifications table & trigger
+drop table if exists notifications CASCADE;
+create table notifications (
+  id text primary key,
+  user_id text,
+  title text,
+  type text,
+  description text,
+  is_checked boolean null default false,
+  time_stamp timestamp with time zone null default now(),
+  url text
+);
+
+create or replace function handle_todolist_change()
+returns trigger as $$
+declare
+    proc_inst_name text;
+begin
+    if (TG_OP = 'INSERT') then
+        select name into proc_inst_name from proc_inst where id = NEW.proc_inst_id;
+        
+        insert into notifications (id, user_id, title, type, description, is_checked, time_stamp, url)
+        values (
+            gen_random_uuid(),
+            NEW.user_id,
+            NEW.activity_name,
+            'workitem',
+            coalesce(proc_inst_name, ''),
+            case when NEW.status = 'DONE' then true else false end,
+            now(),
+            '/todolist/' || NEW.id
+        )
+        on conflict (id) do update
+        set
+            user_id = EXCLUDED.user_id,
+            title = EXCLUDED.title,
+            type = EXCLUDED.type,
+            description = EXCLUDED.description,
+            is_checked = EXCLUDED.is_checked,
+            time_stamp = EXCLUDED.time_stamp,
+            url = EXCLUDED.url;
+    end if;
+    return null;
+end;
+$$ language plpgsql;
+
+create trigger todolist_change_trigger
+after insert on todolist
+for each row
+execute function handle_todolist_change();
+
+create or replace function handle_chat_insert()
+returns trigger as $$
+declare
+    chat_room_participant jsonb;
+    participant_email text;
+    participant_record record;
+    chat_room_name text;
+begin
+    -- Fetch the chat room name
+    select name into chat_room_name from public.chat_rooms where id = NEW.id;
+
+    for participant_record in
+        select jsonb_array_elements(participants) as p
+        from public.chat_rooms
+        where id = NEW.id
+    loop
+        chat_room_participant := participant_record.p;
+        
+        if chat_room_participant->>'username' != 'System' and chat_room_participant->>'email' != NEW.messages->>'email' then
+            participant_email := chat_room_participant->>'email';
+            
+            insert into notifications (id, user_id, title, type, description, is_checked, time_stamp, url)
+            values (
+                gen_random_uuid(),
+                participant_email,
+                NEW.messages->>'content',
+                'chat',
+                chat_room_name,  -- Use chat room name as description
+                false,
+                now(),
+                '/chats?id=' || NEW.id
+            )
+            on conflict (id) do update
+            set
+                user_id = EXCLUDED.user_id,
+                title = EXCLUDED.title,
+                time_stamp = EXCLUDED.time_stamp,
+                is_checked = EXCLUDED.is_checked,
+                url = EXCLUDED.url;
+        end if;
+    end loop;
+
+    return null;
+end;
+$$ language plpgsql;
+
+create trigger chat_insert_trigger
+after insert on public.chats
+for each row
+execute function handle_chat_insert();
