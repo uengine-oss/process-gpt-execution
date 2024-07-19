@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableLambda
 from datetime import datetime
 
 
-from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token
+from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token, upsert_chat_message
 from database import ProcessInstance
 import uuid
 import json
@@ -42,16 +42,11 @@ prompt = PromptTemplate.from_template(
     """
     Now, you're going to create an interactive system similar to a BPM system that helps our company's employees understand various processes and take the next steps when they start a process or are curious about the next steps.
 
-    - Process Definition:
-    {processDefinitionJson}
+    - Process Definition: {processDefinitionJson}
 
     - Process Instance Id: {instance_id}
     
-    - Process Instance Naming Rules:
-    1. Write in Korean without spaces
-    2. Include process definition name: Name that indicates which instance of the process definition it is
-    3. Include user's name: The name of the person who execute the process instance
-    4. Date included: When the process executed (current date: {today})
+    - Process Instance Name Pattern: "{instance_name_pattern}"  // If there is no process instance name pattern, the key_value format of parameterValue, along with the process definition name, is the default for the instance name pattern. e.g. 휴가신청_이름_홍길동_사유_개인일정_시작일_20240701
 
     - Process Data:
     {data}
@@ -83,12 +78,12 @@ prompt = PromptTemplate.from_template(
     The data changes and role binding changes should be derived from the user submitted data or attached image OCR. 
     At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
     Information about completed activities must be returned.
-    The completedUserEmail included in completedActivities must be found in the Organization chart and returned.
-    The nextUserEmail included in nextActivities must be found in the Organization chart and returned.
+    The completedUserEmail included in completedActivities must be found in the Organization chart or role bindings and returned.
+    The nextUserEmail included in nextActivities must be found in the Organization chart or role bindings and returned.
     If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
     startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
-    Return the result with the following description in markdown (three backticks):
-    ```
+    
+    result should be in this JSON format:
     {{
         "instanceId": "{instance_id}",
         "instanceName": "process instance name",
@@ -130,11 +125,8 @@ prompt = PromptTemplate.from_template(
         "description": "description of the completed activities and the next activities and what the user who will perform the task should do in Korean"
 
     }}
-    
-    ```
-
-                                      
-    """)
+    """
+    )
 
 
 # Pydantic model for process execution
@@ -181,27 +173,28 @@ def execute_next_activity(process_result_json: dict) -> str:
             process_instance = ProcessInstance(
                 proc_inst_id=f"{process_result.processDefinitionId.lower()}.{str(uuid.uuid4())}",
                 proc_inst_name=f"{process_result.instanceName}",
-                role_bindings={},
+                role_bindings=[rb.model_dump() for rb in process_result.roleBindingChanges] or [],
                 current_activity_ids=[],
                 current_user_ids=[]
             )
         else:
             process_instance = fetch_process_instance(process_result.instanceId)
-
+        
         process_definition = process_instance.process_definition
 
         for data_change in process_result.dataChanges or []:
             setattr(process_instance, data_change.key, data_change.value)
             
         all_user_emails = set()
-        if process_result.completedActivities:
-            all_user_emails.update(activity.completedUserEmail for activity in process_result.completedActivities)
         if process_result.nextActivities:
-            if process_result.instanceId == "new":
-                process_instance.current_activity_ids = [process_result.nextActivities[0].nextActivityId]
-            else:
-                process_instance.current_activity_ids = [activity.nextActivityId for activity in process_result.nextActivities]    
+            for activity in process_result.nextActivities:
+                if activity.result != "TODO":
+                    process_instance.current_activity_ids.append(activity.nextActivityId)
+            if not process_instance.current_activity_ids:
+                process_instance.current_activity_ids.append(process_result.nextActivities[0].nextActivityId)
             all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
+        for activity in process_result.completedActivities:
+            all_user_emails.add(activity.completedUserEmail)
         
         current_user_ids_set = set(process_instance.current_user_ids)
         updated_user_emails = current_user_ids_set.union(all_user_emails)
@@ -220,12 +213,21 @@ def execute_next_activity(process_result_json: dict) -> str:
             else:
                 result = (f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found.")
         
+
         workitems = None
+        message_json = json.dumps({"description": ""})
         if not process_result.cannotProceedErrors:
             _, process_instance = upsert_process_instance(process_instance)
             upsert_completed_workitem(process_instance.dict(), process_result.dict(), process_definition)    
             workitems = upsert_next_workitems(process_instance.dict(), process_result.dict(), process_definition)
-        
+            message_json = json.dumps({"description": process_result.description})
+        else:
+            reason = ""
+            for error in process_result.cannotProceedErrors:
+                reason += error.reason + "\n"
+            message_json = json.dumps({"description": reason})        
+        upsert_chat_message(process_instance.proc_inst_id, message_json, True)
+
         # Updating process_result_json with the latest process instance details and execution result
         process_result_json["instanceId"] = process_instance.proc_inst_id
         process_result_json["instanceName"] = process_instance.proc_inst_name
@@ -238,6 +240,8 @@ def execute_next_activity(process_result_json: dict) -> str:
 
         return json.dumps(process_result_json)
     except Exception as e:
+        message_json = json.dumps({"description": str(e)})
+        upsert_chat_message(process_instance.proc_inst_id, message_json, True)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 import base64
@@ -290,6 +294,7 @@ def combine_input_with_process_definition(input):
         image = input.get("image")
         user_info = input.get('userInfo')
         user_email = user_info.get('email')
+        role_bindings = input.get('role_mappings')
         
         now = datetime.now()
         today = now.date()
@@ -300,6 +305,9 @@ def combine_input_with_process_definition(input):
         
         if process_instance_id!="new":
             process_instance = fetch_process_instance(process_instance_id)
+            
+            message_json = json.dumps({"description": f"워크아이템 '{activity_id}' 을/를 실행합니다."})        
+            upsert_chat_message(process_instance_id, message_json, True)
 
             if not process_instance:
                 raise HTTPException(status_code=404, detail=f"Process instance with ID {process_instance_id} not found.")
@@ -321,7 +329,8 @@ def combine_input_with_process_definition(input):
                 "user_info": user_info,
                 "user_email": user_email,
                 "today": today,
-                "organizationChart": organizationChart
+                "organizationChart": organizationChart,
+                "instance_name_pattern": processDefinitionJson.get("instanceNamePattern") or ""
             }
         else:
             process_definition_id = input.get('process_definition_id')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
@@ -336,18 +345,19 @@ def combine_input_with_process_definition(input):
                 "answer": input['answer'],  
                 "instance_id": "new",
                 "instance_name": "",
-                "role_bindings": "no bindings",
+                "role_bindings": role_bindings or "no bindings",
                 "data": "no data",
                 "current_activity_ids": "there's no currently running activities",
                 "current_user_ids": "there's no user currently running activities",
                 "processDefinitionJson": processDefinitionJson,
                 "process_definition_id": process_definition_id,
-                "activity_id": "id of the start event or start activity", #processDefinition.find_initial_activity().id,
+                "activity_id": activity_id or "id of the start event or start activity", #processDefinition.find_initial_activity().id,
                 "image": image,
                 "user_info": user_info,
                 "user_email": user_email,
                 "today": today,
-                "organizationChart": organizationChart
+                "organizationChart": organizationChart,
+                "instance_name_pattern": processDefinitionJson.get("instanceNamePattern") or ""
             }
 
         if image:
@@ -363,15 +373,75 @@ combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with
 from fastapi import Request
 
 async def combine_input_with_token(request: Request):
-    token_data = parse_token(request)
     json_data = await request.json()
     input = json_data.get('input')
-    input['userInfo'] = token_data
+    
+    token_data = parse_token(request)
+    if token_data:
+        input['userInfo'] = token_data
+    elif input.get('userInfo'):
+        input['userInfo'] = input.get('userInfo')
+        
     return combine_input_with_process_definition(input)
+
+### role binding
+role_binding_prompt = PromptTemplate.from_template(
+    """
+    Now, we will create a system that recommends role performers at each stage when our employees start the process. Please refer to the resolution rule of the role in the process definition provided and our organization chart to find and return the best person for each role. If there is no suitable person, select yourself.
+
+    - Roles in Process Definition: {roles}
+
+    - Organization Chart: {organizationChart}
+    
+    - My Email: {myEmail}
+    
+    result should be in this JSON format:
+    {{
+        "roleBindings": [{{
+            "roleName": "role name",
+            "userId": "user email"
+        }}]
+    }}
+    """
+    )
+
+def process_role_binding(result_json: dict) -> str:
+    try:
+        return json.dumps(result_json)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+role_binding_chain = (
+    role_binding_prompt | model | parser | process_role_binding
+)
+
+async def combine_input_with_role_binding(request: Request):
+    try:
+        json_data = await request.json()
+        input = json_data.get('input')
+        token_data = parse_token(request)
+        if token_data:
+            my_email = token_data.get('email')
+        roles = input.get('roles')
+        organizationChart = fetch_organization_chart()
+        
+        chain_input = {
+            "roles": roles,
+            "organizationChart": organizationChart,
+            "myEmail": my_email
+        }
+        
+        return role_binding_chain.invoke(chain_input)
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    
 
 def add_routes_to_app(app) :
     app.add_api_route("/complete", combine_input_with_token, methods=["POST"])
     app.add_api_route("/vision-complete", combine_input_with_token, methods=["POST"])
+    app.add_api_route("/role-binding", combine_input_with_role_binding, methods=["POST"])
     
     # add_routes(
     #     app,

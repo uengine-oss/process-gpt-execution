@@ -60,6 +60,11 @@ END $$;
     except Exception as e:
         print(f"An error occurred: {e}")
 
+def load_sql_from_file(file_path):
+    """Load SQL commands from a text file."""
+    with open(file_path, 'r', encoding='utf-8') as file:  # UTF-8 인코딩으로 파일을 열기
+        return file.read()
+
 def create_default_tables():
     try:
         db_config = db_config_var.get()
@@ -67,373 +72,53 @@ def create_default_tables():
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor(cursor_factory=RealDictCursor)
         
-        sql_query = """
-drop table if exists configuration CASCADE;
-create table configuration (
-  key text primary key,
-  value jsonb
-);
-insert into configuration (key, value) values ('proc_map', '{"mega_proc_list":[{"id":1,"name":"휴가","major_proc_list":[{"id":0,"name":"휴가관리","sub_proc_list":[{"id":"vacation_request_process","name":"휴가 신청 프로세스"}]}]}]}');
-insert into configuration (key, value) values ('organization', '{}');
-
-drop table if exists public.proc_map_history CASCADE;
-create table public.proc_map_history (
-    value jsonb not null,
-    created_at timestamp with time zone not null default now(),
-    constraint proc_map_history_pkey primary key (created_at)
-) tablespace pg_default;
-
-create or replace function public.save_previous_proc_map()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF OLD.key = 'proc_map' THEN
-        INSERT INTO public.proc_map_history(value, created_at)
-        VALUES (OLD.value, now());
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-create or replace trigger trigger_save_previous_proc_map
-BEFORE UPDATE ON configuration
-FOR EACH ROW
-WHEN (OLD.key = 'proc_map' AND NEW.value IS DISTINCT FROM OLD.value)
-EXECUTE PROCEDURE public.save_previous_proc_map();
-
-drop table if exists todolist CASCADE;
-create table todolist (
-    id uuid primary key,
-    user_id text,
-    proc_inst_id text,
-    proc_def_id text,
-    activity_id text,
-    activity_name text,
-    start_date timestamp,
-    end_date timestamp,
-    status text,
-    description text,
-    tool text
-);
-
-create view public.worklist as
-select
-  t.*,
-  p.name as proc_inst_name
-from
-  todolist t
-  join public.proc_inst p on t.proc_inst_id = p.id;
-
-drop table if exists public.users CASCADE;
-create table public.users (
-    id uuid not null primary key,
-    username text null,
-    profile text null default '/src/assets/images/profile/defaultUser.png'::text,
-    email text null,
-    is_admin boolean not null default false,
-    notifications jsonb null,
-    role text null
-);
-
-create or replace function public.handle_new_user() 
-returns trigger as $$
-begin
-    insert into public.users (id, email)
-    values (new.id, new.email);
-      return new;
-end;
-$$ language plpgsql security definer;
-
-create or replace trigger on_auth_user_created
-    after insert on auth.users
-    for each row execute procedure public.handle_new_user();
-
-create or replace function public.handle_delete_user() 
-returns trigger as $$
-begin
-    delete from auth.users where id = old.id;
-    return old;
-end;
-$$ language plpgsql security definer;
-
-create or replace trigger on_public_user_deleted
-    after delete on public.users
-    for each row execute procedure public.handle_delete_user();
-
-drop table if exists proc_def CASCADE;
-create table proc_def (
-  id text primary key,
-  name text,
-  definition jsonb,
-  bpmn text
-);
-
-insert into proc_def (id, name, definition, bpmn)
-values (
-  'vacation_request_process', '휴가 신청 프로세스', '{"data":[{"name":"Name","type":"Text","description":"Namedescription"},{"name":"LeaveReason","type":"Text","description":"LeaveReasondescription"},{"name":"StartDate","type":"Date","description":"StartDatedescription"},{"name":"EndDate","type":"Date","description":"EndDatedescription"},{"name":"ManagerApproval","type":"Boolean","description":"ManagerApprovaldescription"},{"name":"HRNotification","type":"Boolean","description":"HRNotificationdescription"}],"roles":[{"name":"Employee","resolutionRule":"system"},{"name":"Manager","resolutionRule":"system"},{"name":"HR","resolutionRule":"system"}],"events":[{"id":"start_event","name":"start_event","role":"Employee","type":"StartEvent","description":"startevent"},{"id":"end_event","name":"end_event","role":"HR","type":"EndEvent","description":"endevent"}],"gateways":[],"sequences":[{"source":"start_event","target":"leave_request_activity","condition":""},{"source":"leave_request_activity","target":"manager_approval_activity","condition":""},{"source":"manager_approval_activity","target":"hr_notification_activity","condition":"ManagerApproval==true"},{"source":"hr_notification_activity","target":"end_event","condition":""}],"activities":[{"id":"leave_request_activity","name":"휴가신청서제출","role":"Employee","tool":"","type":"UserActivity","inputData":[{"argument":{"text":"이름"},"variable":{"name":"Name"},"direction":"IN"},{"argument":{"text":"휴가사유"},"variable":{"name":"LeaveReason"},"direction":"IN"},{"argument":{"text":"휴가시작일"},"variable":{"name":"StartDate"},"direction":"IN"},{"argument":{"text":"휴가복귀일"},"variable":{"name":"EndDate"},"direction":"IN"}],"outputData":[],"description":"휴가신청서제출description","instruction":"휴가신청서제출instruction"},{"id":"manager_approval_activity","name":"팀장승인","role":"Manager","tool":"","type":"UserActivity","inputData":[{"argument":{"text":"휴가승인여부"},"variable":{"name":"ManagerApproval"},"direction":"IN"}],"outputData":[],"description":"팀장승인description","instruction":"팀장승인instruction"},{"id":"hr_notification_activity","name":"인사팀통지","role":"HR","tool":"","type":"UserActivity","inputData":[{"argument":{"text":"휴가통지여부"},"variable":{"name":"HRNotification"},"direction":"IN"}],"outputData":[],"description":"인사팀통지description","instruction":"인사팀통지instruction"}],"description":"process.description","processDefinitionId":"vacation_request_process","processDefinitionName":"휴가신청프로세스"}', '<?xml version="1.0" encoding="UTF-8"?>
-<bpmn:definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:uengine="http://uengine" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" id="Definitions_vacation_request_process" targetNamespace="http://bpmn.io/schema/bpmn" exporter="Custom BPMN Modeler" exporterVersion="1.0">
-  <bpmn:collaboration id="Collaboration_1">
-    <bpmn:participant id="Participant" name="Participant" processRef="vacation_request_process" />
-  </bpmn:collaboration>
-  <bpmn:process id="vacation_request_process" isExecutable="true">
-    <bpmn:extensionElements>
-      <uengine:properties>
-        <uengine:variable name="Name" type="Text" />
-        <uengine:variable name="LeaveReason" type="Text" />
-        <uengine:variable name="StartDate" type="Date" />
-        <uengine:variable name="EndDate" type="Date" />
-        <uengine:variable name="ManagerApproval" type="Boolean" />
-        <uengine:variable name="HRNotification" type="Boolean" />
-      </uengine:properties>
-    </bpmn:extensionElements>
-    <bpmn:laneSet id="LaneSet_1">
-      <bpmn:lane id="Lane_0" name="Employee">
-        <bpmn:flowNodeRef>leave_request_activity</bpmn:flowNodeRef>
-      </bpmn:lane>
-      <bpmn:lane id="Lane_1" name="Manager">
-        <bpmn:flowNodeRef>manager_approval_activity</bpmn:flowNodeRef>
-      </bpmn:lane>
-      <bpmn:lane id="Lane_2" name="HR">
-        <bpmn:flowNodeRef>hr_notification_activity</bpmn:flowNodeRef>
-      </bpmn:lane>
-    </bpmn:laneSet>
-    <bpmn:sequenceFlow id="SequenceFlow_start_event_leave_request_activity" name="" sourceRef="start_event" targetRef="leave_request_activity">
-      <bpmn:extensionElements>
-        <uengine:properties>
-          <uengine:json>{"condition":""}</uengine:json>
-        </uengine:properties>
-      </bpmn:extensionElements>
-    </bpmn:sequenceFlow>
-    <bpmn:sequenceFlow id="SequenceFlow_leave_request_activity_manager_approval_activity" name="" sourceRef="leave_request_activity" targetRef="manager_approval_activity">
-      <bpmn:extensionElements>
-        <uengine:properties>
-          <uengine:json>{"condition":""}</uengine:json>
-        </uengine:properties>
-      </bpmn:extensionElements>
-    </bpmn:sequenceFlow>
-    <bpmn:sequenceFlow id="SequenceFlow_manager_approval_activity_hr_notification_activity" name="" sourceRef="manager_approval_activity" targetRef="hr_notification_activity">
-      <bpmn:extensionElements>
-        <uengine:properties>
-          <uengine:json>{"condition":"ManagerApproval == true"}</uengine:json>
-        </uengine:properties>
-      </bpmn:extensionElements>
-    </bpmn:sequenceFlow>
-    <bpmn:sequenceFlow id="SequenceFlow_hr_notification_activity_end_event" name="" sourceRef="hr_notification_activity" targetRef="end_event">
-      <bpmn:extensionElements>
-        <uengine:properties>
-          <uengine:json>{"condition":""}</uengine:json>
-        </uengine:properties>
-      </bpmn:extensionElements>
-    </bpmn:sequenceFlow>
-    <bpmn:startEvent id="start_event" name="Start Event" />
-    <bpmn:endEvent id="end_event" name="End Event" />
-    <bpmn:userTask id="leave_request_activity" name="휴가 신청서 제출" $type="bpmn:UserTask">
-      <bpmn:extensionElements>
-        <uengine:properties>
-          <uengine:json>{"parameters":[{"argument":{"text":"이름"},"variable":{"name":"Name"},"direction":"IN"},{"argument":{"text":"휴가 사유"},"variable":{"name":"LeaveReason"},"direction":"IN"},{"argument":{"text":"휴가 시작일"},"variable":{"name":"StartDate"},"direction":"IN"},{"argument":{"text":"휴가 복귀일"},"variable":{"name":"EndDate"},"direction":"IN"}]}</uengine:json>
-        </uengine:properties>
-      </bpmn:extensionElements>
-      <bpmn:incoming>SequenceFlow_start_event_leave_request_activity</bpmn:incoming>
-      <bpmn:outgoing>SequenceFlow_leave_request_activity_manager_approval_activity</bpmn:outgoing>
-    </bpmn:userTask>
-    <bpmn:userTask id="manager_approval_activity" name="팀장 승인" $type="bpmn:UserTask">
-      <bpmn:extensionElements>
-        <uengine:properties>
-          <uengine:json>{"parameters":[{"argument":{"text":"휴가 승인 여부"},"variable":{"name":"ManagerApproval"},"direction":"IN"}]}</uengine:json>
-        </uengine:properties>
-      </bpmn:extensionElements>
-      <bpmn:incoming>SequenceFlow_leave_request_activity_manager_approval_activity</bpmn:incoming>
-      <bpmn:outgoing>SequenceFlow_manager_approval_activity_hr_notification_activity</bpmn:outgoing>
-    </bpmn:userTask>
-    <bpmn:userTask id="hr_notification_activity" name="인사팀 통지" $type="bpmn:UserTask">
-      <bpmn:extensionElements>
-        <uengine:properties>
-          <uengine:json>{"parameters":[{"argument":{"text":"휴가 통지 여부"},"variable":{"name":"HRNotification"},"direction":"IN"}]}</uengine:json>
-        </uengine:properties>
-      </bpmn:extensionElements>
-      <bpmn:incoming>SequenceFlow_manager_approval_activity_hr_notification_activity</bpmn:incoming>
-      <bpmn:outgoing>SequenceFlow_hr_notification_activity_end_event</bpmn:outgoing>
-    </bpmn:userTask>
-  </bpmn:process>
-  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
-    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Collaboration_1">
-      <bpmndi:BPMNShape id="Participant_1" bpmnElement="Participant">
-        <dc:Bounds x="70" y="100" width="780" height="300" />
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="BPMNShape_2" bpmnElement="Lane_2" isHorizontal="true">
-        <dc:Bounds x="100" y="300" width="750" height="100" />
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="BPMNShape_1" bpmnElement="Lane_1" isHorizontal="true">
-        <dc:Bounds x="100" y="200" width="750" height="100" />
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="BPMNShape_0" bpmnElement="Lane_0" isHorizontal="true">
-        <dc:Bounds x="100" y="100" width="750" height="100" />
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="Shape_start_event" bpmnElement="start_event">
-        <dc:Bounds x="160" y="133" width="34" height="34" />
-        <bpmndi:BPMNLabel>
-          <dc:Bounds x="145" y="173" width="64" height="14" />
-        </bpmndi:BPMNLabel>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="Shape_end_event" bpmnElement="end_event">
-        <dc:Bounds x="750" y="333" width="34" height="34" />
-        <bpmndi:BPMNLabel>
-          <dc:Bounds x="735" y="373" width="64" height="14" />
-        </bpmndi:BPMNLabel>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="BPMNShape_leave_request_activity" bpmnElement="leave_request_activity">
-        <dc:Bounds x="240" y="110" width="100" height="80" />
-        <bpmndi:BPMNLabel />
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="BPMNShape_manager_approval_activity" bpmnElement="manager_approval_activity">
-        <dc:Bounds x="400" y="210" width="100" height="80" />
-        <bpmndi:BPMNLabel />
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="BPMNShape_hr_notification_activity" bpmnElement="hr_notification_activity">
-        <dc:Bounds x="560" y="310" width="100" height="80" />
-        <bpmndi:BPMNLabel />
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNEdge id="BPMNEdge_start_event_leave_request_activity" bpmnElement="SequenceFlow_start_event_leave_request_activity">
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="194" y="150" />
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="240" y="150" />
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="BPMNEdge_leave_request_activity_manager_approval_activity" bpmnElement="SequenceFlow_leave_request_activity_manager_approval_activity">
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="340" y="150" />
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="365" y="150" />
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="365" y="250" />
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="400" y="250" />
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="400" y="250" />
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="BPMNEdge_manager_approval_activity_hr_notification_activity" bpmnElement="SequenceFlow_manager_approval_activity_hr_notification_activity">
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="500" y="250" />
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="525" y="250" />
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="525" y="350" />
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="560" y="350" />
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="560" y="350" />
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="BPMNEdge_hr_notification_activity_end_event" bpmnElement="SequenceFlow_hr_notification_activity_end_event">
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="660" y="350" />
-        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="750" y="350" />
-      </bpmndi:BPMNEdge>
-    </bpmndi:BPMNPlane>
-  </bpmndi:BPMNDiagram>
-</bpmn:definitions>
-');
-
-ALTER TABLE proc_def ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Enable insert for authenticated users only" ON "public"."proc_def"
-AS PERMISSIVE FOR INSERT
-TO authenticated
-WITH CHECK ((EXISTS ( SELECT 1 FROM users WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
-
-CREATE POLICY "Enable read access for all users" ON "public"."proc_def"
-AS PERMISSIVE FOR SELECT
-TO public
-USING (true);
-
-drop table if exists proc_inst CASCADE;
-create table
-  public.proc_inst (
-    id text not null,
-    name text null,
-    user_ids text[] null,
-    agent_messages jsonb null,
-    status text null,
-    variables_data text null,
-    constraint proc_inst_pkey primary key (id)
-  ) tablespace pg_default;
-
-drop table if exists public.chats CASCADE;
-create table public.chats (
-    uuid text not null,
-    id text not null,
-    messages jsonb null,
-    constraint chats_pkey primary key (uuid)
-) tablespace pg_default;
-
-drop table if exists public.calendar CASCADE;
-create table public.calendar (
-  uid text not null,
-  data jsonb null,
-  constraint calendar_pkey primary key (uid)
-) tablespace pg_default;
-
-drop table if exists public.chat_rooms CASCADE;
-create table public.chat_rooms (
-  id text not null,
-  participants jsonb not null,
-  message jsonb null,
-  name text null,
-  constraint chat_rooms_pkey primary key (id)
-) tablespace pg_default;
-
-create view
-  public.chat_room_chats as
-select
-  cr.id,
-  cr.name,
-  cr.participants,
-  c.uuid,
-  c.messages
-from
-  chat_rooms cr
-  join chats c on cr.id = c.id;
-
-drop table if exists public.proc_def_arcv CASCADE;
-create table
-  public.proc_def_arcv (
-    arcv_id text not null,
-    proc_def_id text not null,
-    version text not null,
-    snapshot text null,
-    "timeStamp" timestamp without time zone null default current_timestamp,
-    diff text null,
-    message text null,
-    constraint proc_def_arcv_pkey primary key (arcv_id)
-  ) tablespace pg_default;
-
-drop table if exists public.lock CASCADE;
-create table
-  public.lock (
-    id text not null,
-    user_id text null,
-    constraint lock_pkey primary key (id)
-  ) tablespace pg_default;
-
-drop table if exists form_def CASCADE;
-create table form_def (
-  id text primary key,
-  html text not null
-) tablespace pg_default;
-"""
-
+        # Load SQL from file
+        sql_query = load_sql_from_file('sql.txt')
+        
         cursor.execute(sql_query)
         connection.commit()
         
-        return "Table Created"
+        return "Tables created successfully."
     except Exception as e:
         print(f"An error occurred: {e}")
+    finally:
+        if connection:
+            connection.close()
+
 
 async def update_db_settings(subdomain):
     try:
-        supabase: Client = create_client('https://qivmgbtrzgnjcpyynpam.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpdm1nYnRyemduamNweXlucGFtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcxNTU4ODc3NSwiZXhwIjoyMDMxMTY0Nzc1fQ.z8LIo50hs1gWcerWxx1dhjri-DMoDw9z0luba_Ap4cI')
-        response = supabase.table("tenant_def").select("*").eq('id', subdomain).execute()
-        
-        if response.data:
-            data = response.data[0]
-            supabase: Client = create_client(data['url'], data['secret'])
+        if subdomain and "localhost" not in subdomain:
+            supabase: Client = create_client('https://qivmgbtrzgnjcpyynpam.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpdm1nYnRyemduamNweXlucGFtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcxNTU4ODc3NSwiZXhwIjoyMDMxMTY0Nzc1fQ.z8LIo50hs1gWcerWxx1dhjri-DMoDw9z0luba_Ap4cI')
+            response = supabase.table("tenant_def").select("*").eq('id', subdomain).execute()
+
+            if response.data:
+                data = response.data[0]
+                supabase: Client = create_client(data['url'], data['secret'])
+                supabase_client_var.set(supabase)
+                db_config = {
+                    'dbname': data['dbname'],
+                    'user': data['user'],
+                    'password': data['pw'],
+                    'host': data['host'],
+                    'port': data['port']
+                }
+                db_config_var.set(db_config)
+        else:
+            supabase: Client = create_client('http://127.0.0.1:54321', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0')
             supabase_client_var.set(supabase)
-            
             db_config = {
-                'dbname': data['dbname'],
-                'user': data['user'],
-                'password': data['pw'],
-                'host': data['host'],
-                'port': data['port']
+                'dbname': 'postgres',
+                'user': 'postgres',
+                'password': 'postgres',
+                'host': '127.0.0.1',
+                'port': '54322'
             }
             db_config_var.set(db_config)
+       
     except Exception as e:
         print(f"An error occurred: {e}")
+
 
 def execute_sql(sql_query):
     """
@@ -572,125 +257,6 @@ def generate_create_statement_for_table(table_name):
         if connection:
             connection.close()
 
-
-
-"""
-drop table configuration;
-
-create table configuration (
-  key text primary key,
-  value jsonb
-);
-
-insert into configuration (key, value)
-values ('proc_map', null)
-
-drop table todolist;
-
-create table todolist (
-    id uuid primary key,
-    user_id text,
-    proc_inst_id text,
-    proc_def_id text,
-    activity_id text,
-    start_date timestamp,
-    end_date timestamp,
-    status text,
-    description text
-);
-
-drop table public.users;
-
-create table public.users (
-    id uuid not null primary key,
-    username text null,
-    profile text null,
-    email text null
-);
--- inserts a row into public.users
-create or replace function public.handle_new_user() 
-returns trigger as $$
-begin
-    insert into public.users (id, email)
-    values (new.id, new.email);
-      return new;
-end;
-$$ language plpgsql security definer;
-
--- trigger the function every time a user is created
-create trigger on_auth_user_created
-    after insert on auth.users
-    for each row execute procedure public.handle_new_user();
-
-
-drop table organization;
-
-create table organization (
-  id bigint generated by default as identity,
-  messages jsonb,
-  organization_chart text
-);
-
-
-drop table proc_def;
-
-create table proc_def (
-  id text primary key,
-  name text,
-  definition jsonb,
-  bpmn text
-);
-
-drop table proc_inst;
-
-
-create table proc_inst (
-    id text primary key,
-    user_ids text[],
-    messages jsonb
-);
-==>
-create table vacation_request(
-  proc_inst_id text primary key,
-  proc_inst_name text,
-  current_activity_ids text array,
-  current_user_ids text array,
-  role_bindings jsonb
-  
-  -- 해당 프로세스 정의의 프로세스 변수 선언들을 필드로
-  reason text, -- 휴가 신청사유
-  start_date date, -- 휴가 시작일
-  return_date date -- 휴가 복귀일
-
-)
-
-create table
-  public.chats (
-    uuid text not null,
-    id text not null,
-    messages jsonb null,
-    constraint chats_pkey primary key (uuid)
-  ) tablespace pg_default;
-
-create table
-  public.calendar (
-    uid text not null,
-    data jsonb null,
-    constraint calendar_pkey primary key (uid)
-  ) tablespace pg_default;
-
-create table
-  public.chat_rooms (
-    id text not null,
-    participants jsonb not null,
-    message jsonb null,
-    name text null,
-    constraint chat_rooms_pkey primary key (id)
-  ) tablespace pg_default;
-  
-"""
-
-
 def fetch_process_definition(def_id):
     """
     Fetches the process definition from the 'proc_def' table based on the given definition ID.
@@ -719,7 +285,7 @@ def fetch_process_definition(def_id):
 class ProcessInstance(BaseModel):
     proc_inst_id: str
     proc_inst_name: str
-    role_bindings: Dict[str, str] = {}
+    role_bindings: Optional[List[Dict[str, str]]] = []
     current_activity_ids: List[str] = []
     current_user_ids: List[str] = []
     process_definition: ProcessDefinition = None  # Add a reference to ProcessDefinition
@@ -744,6 +310,13 @@ class ProcessInstance(BaseModel):
             variable_name = variable.name
             variable_map[variable_name] = getattr(self, variable_name, None)
         return variable_map
+
+class InstanceItem(BaseModel):
+    id: str
+    name: Optional[str] = None
+    status: Optional[str] = None
+    variables_data: Optional[str] = None
+    user_ids: Optional[List[str]] = None
     
 class WorkItem(BaseModel):
     id: str
@@ -893,6 +466,39 @@ def fetch_organization_chart():
     else:
         return None
 
+def fetch_process_instance_list(user_id: str) -> Optional[List[InstanceItem]]:
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
+    
+    response = supabase.table('proc_inst').select("*").filter('user_ids', 'cs', '{' + user_id + '}').execute()
+    if response.data:
+        return [InstanceItem(**item) for item in response.data]
+    else:
+        return None
+
+def fetch_todolist_by_user_id(user_id: str) -> Optional[List[WorkItem]]:
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
+    
+    response = supabase.table('todolist').select("*").eq('user_id', user_id).execute()
+    if response.data:
+        return [WorkItem(**item) for item in response.data]
+    else:
+        return None
+
+def fetch_todolist_by_proc_inst_id(proc_inst_id: str) -> Optional[List[WorkItem]]:
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
+    
+    response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).execute()
+    if response.data:
+        return [WorkItem(**item) for item in response.data]
+    else:
+        return None
+
 def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str) -> Optional[WorkItem]:
     supabase = supabase_client_var.get()
     if supabase is None:
@@ -914,9 +520,7 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
         workitem.status = process_result_data['completedActivities'][0]['result']
         workitem.end_date = datetime.now()
     else:
-        activity = process_definition.find_activity_by_id(process_result_data['nextActivities'][0]['nextActivityId'])
-
-
+        activity = process_definition.find_activity_by_id(process_result_data['completedActivities'][0]['completedActivityId'])
         workitem = WorkItem(
             id=f"{str(uuid.uuid4())}",
             proc_inst_id=prcess_instance_data['proc_inst_id'],
@@ -987,17 +591,17 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
 import json
 
 class ChatMessage(BaseModel):
-    name: str
-    role: str
-    email: Optional[str]
-    image: Optional[str]
-    content: Optional[str]
-    timeStamp: Optional[datetime]
+    name: Optional[str] = None
+    role: Optional[str] = None
+    email: Optional[str] = None
+    image: Optional[str] = None
+    content: Optional[str] = None
+    timeStamp: Optional[datetime] = None
 
 class ChatItem(BaseModel):
     id: str
     uuid: str
-    messages: Optional[ChatMessage]
+    messages: Optional[ChatMessage] = None
 
 def fetch_chat_history(chat_room_id: str) -> List[ChatItem]:
     supabase = supabase_client_var.get()
@@ -1006,20 +610,20 @@ def fetch_chat_history(chat_room_id: str) -> List[ChatItem]:
     response = supabase.table("chats").select("*").eq('id', chat_room_id).execute()
     chatHistory = []
     for chat in response.data:
+        chat.pop('jsonContent', None)
         chatHistory.append(ChatItem(**chat))
     return chatHistory
 
-def upsert_chat_message(chat_room_id: str, data: Dict[str, str]) -> None:
+def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool) -> None:
     try:
-        output = data.get("output", None)
-        if output:
-            json_output = json.loads(output)
+        if is_system:
+            json_data = json.loads(data)
             message = ChatMessage(
                 name="system",
                 role="system",
                 email="system@uengine.org",
                 image="",
-                content=json_output["description"],
+                content=json_data["description"],
                 timeStamp=datetime.now()
             )
         else:

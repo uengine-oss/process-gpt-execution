@@ -44,10 +44,7 @@ class DBConfigMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         host_name = request.headers.get('X-Forwarded-Host')
         subdomain = host_name.split('.')[0] if host_name else None
-        if subdomain:
-            await update_db_settings(subdomain)
-        else:
-            print("No host name found in the request headers.")
+        await update_db_settings(subdomain)
         # 요청을 다음 미들웨어 또는 엔드포인트로 전달
         response = await call_next(request)
         return response
