@@ -28,6 +28,37 @@ supabase_client_var = ContextVar('supabase', default=None)
 #     'port': '54322'
 # }
 
+async def add_table_columns(request: Request):
+    try:
+        obj = await request.json()  # Request 객체를 통해 JSON 데이터 받아오기
+        table_name = obj['tableName']
+        columns = obj['tableColumns']
+
+        db_config = db_config_var.get()
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
+
+        for column_name, column_type in columns.items():
+            sql_query = f"""
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 
+        FROM information_schema.columns 
+        WHERE table_name='{table_name}' 
+        AND column_name='{column_name}'
+    ) THEN
+        ALTER TABLE {table_name}
+        ADD COLUMN {column_name} {column_type} null;
+    END IF;
+END $$;
+"""
+            cursor.execute(sql_query)
+        
+        connection.commit()
+        return "Columns added"
+    except Exception as e:
+        print(f"An error occurred: {e}")
 
 def create_default_tables():
     try:
@@ -42,7 +73,7 @@ create table configuration (
   key text primary key,
   value jsonb
 );
-insert into configuration (key, value) values ('proc_map', '{}');
+insert into configuration (key, value) values ('proc_map', '{"mega_proc_list":[{"id":1,"name":"휴가","major_proc_list":[{"id":0,"name":"휴가관리","sub_proc_list":[{"id":"vacation_request_process","name":"휴가 신청 프로세스"}]}]}]}');
 insert into configuration (key, value) values ('organization', '{}');
 
 drop table if exists public.proc_map_history CASCADE;
@@ -83,6 +114,14 @@ create table todolist (
     description text,
     tool text
 );
+
+create view public.worklist as
+select
+  t.*,
+  p.name as proc_inst_name
+from
+  todolist t
+  join public.proc_inst p on t.proc_inst_id = p.id;
 
 drop table if exists public.users CASCADE;
 create table public.users (
@@ -128,6 +167,158 @@ create table proc_def (
   bpmn text
 );
 
+insert into proc_def (id, name, definition, bpmn)
+values (
+  'vacation_request_process', '휴가 신청 프로세스', '{"data":[{"name":"Name","type":"Text","description":"Namedescription"},{"name":"LeaveReason","type":"Text","description":"LeaveReasondescription"},{"name":"StartDate","type":"Date","description":"StartDatedescription"},{"name":"EndDate","type":"Date","description":"EndDatedescription"},{"name":"ManagerApproval","type":"Boolean","description":"ManagerApprovaldescription"},{"name":"HRNotification","type":"Boolean","description":"HRNotificationdescription"}],"roles":[{"name":"Employee","resolutionRule":"system"},{"name":"Manager","resolutionRule":"system"},{"name":"HR","resolutionRule":"system"}],"events":[{"id":"start_event","name":"start_event","role":"Employee","type":"StartEvent","description":"startevent"},{"id":"end_event","name":"end_event","role":"HR","type":"EndEvent","description":"endevent"}],"gateways":[],"sequences":[{"source":"start_event","target":"leave_request_activity","condition":""},{"source":"leave_request_activity","target":"manager_approval_activity","condition":""},{"source":"manager_approval_activity","target":"hr_notification_activity","condition":"ManagerApproval==true"},{"source":"hr_notification_activity","target":"end_event","condition":""}],"activities":[{"id":"leave_request_activity","name":"휴가신청서제출","role":"Employee","tool":"","type":"UserActivity","inputData":[{"argument":{"text":"이름"},"variable":{"name":"Name"},"direction":"IN"},{"argument":{"text":"휴가사유"},"variable":{"name":"LeaveReason"},"direction":"IN"},{"argument":{"text":"휴가시작일"},"variable":{"name":"StartDate"},"direction":"IN"},{"argument":{"text":"휴가복귀일"},"variable":{"name":"EndDate"},"direction":"IN"}],"outputData":[],"description":"휴가신청서제출description","instruction":"휴가신청서제출instruction"},{"id":"manager_approval_activity","name":"팀장승인","role":"Manager","tool":"","type":"UserActivity","inputData":[{"argument":{"text":"휴가승인여부"},"variable":{"name":"ManagerApproval"},"direction":"IN"}],"outputData":[],"description":"팀장승인description","instruction":"팀장승인instruction"},{"id":"hr_notification_activity","name":"인사팀통지","role":"HR","tool":"","type":"UserActivity","inputData":[{"argument":{"text":"휴가통지여부"},"variable":{"name":"HRNotification"},"direction":"IN"}],"outputData":[],"description":"인사팀통지description","instruction":"인사팀통지instruction"}],"description":"process.description","processDefinitionId":"vacation_request_process","processDefinitionName":"휴가신청프로세스"}', '<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:uengine="http://uengine" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" id="Definitions_vacation_request_process" targetNamespace="http://bpmn.io/schema/bpmn" exporter="Custom BPMN Modeler" exporterVersion="1.0">
+  <bpmn:collaboration id="Collaboration_1">
+    <bpmn:participant id="Participant" name="Participant" processRef="vacation_request_process" />
+  </bpmn:collaboration>
+  <bpmn:process id="vacation_request_process" isExecutable="true">
+    <bpmn:extensionElements>
+      <uengine:properties>
+        <uengine:variable name="Name" type="Text" />
+        <uengine:variable name="LeaveReason" type="Text" />
+        <uengine:variable name="StartDate" type="Date" />
+        <uengine:variable name="EndDate" type="Date" />
+        <uengine:variable name="ManagerApproval" type="Boolean" />
+        <uengine:variable name="HRNotification" type="Boolean" />
+      </uengine:properties>
+    </bpmn:extensionElements>
+    <bpmn:laneSet id="LaneSet_1">
+      <bpmn:lane id="Lane_0" name="Employee">
+        <bpmn:flowNodeRef>leave_request_activity</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_1" name="Manager">
+        <bpmn:flowNodeRef>manager_approval_activity</bpmn:flowNodeRef>
+      </bpmn:lane>
+      <bpmn:lane id="Lane_2" name="HR">
+        <bpmn:flowNodeRef>hr_notification_activity</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:sequenceFlow id="SequenceFlow_start_event_leave_request_activity" name="" sourceRef="start_event" targetRef="leave_request_activity">
+      <bpmn:extensionElements>
+        <uengine:properties>
+          <uengine:json>{"condition":""}</uengine:json>
+        </uengine:properties>
+      </bpmn:extensionElements>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="SequenceFlow_leave_request_activity_manager_approval_activity" name="" sourceRef="leave_request_activity" targetRef="manager_approval_activity">
+      <bpmn:extensionElements>
+        <uengine:properties>
+          <uengine:json>{"condition":""}</uengine:json>
+        </uengine:properties>
+      </bpmn:extensionElements>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="SequenceFlow_manager_approval_activity_hr_notification_activity" name="" sourceRef="manager_approval_activity" targetRef="hr_notification_activity">
+      <bpmn:extensionElements>
+        <uengine:properties>
+          <uengine:json>{"condition":"ManagerApproval == true"}</uengine:json>
+        </uengine:properties>
+      </bpmn:extensionElements>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="SequenceFlow_hr_notification_activity_end_event" name="" sourceRef="hr_notification_activity" targetRef="end_event">
+      <bpmn:extensionElements>
+        <uengine:properties>
+          <uengine:json>{"condition":""}</uengine:json>
+        </uengine:properties>
+      </bpmn:extensionElements>
+    </bpmn:sequenceFlow>
+    <bpmn:startEvent id="start_event" name="Start Event" />
+    <bpmn:endEvent id="end_event" name="End Event" />
+    <bpmn:userTask id="leave_request_activity" name="휴가 신청서 제출" $type="bpmn:UserTask">
+      <bpmn:extensionElements>
+        <uengine:properties>
+          <uengine:json>{"parameters":[{"argument":{"text":"이름"},"variable":{"name":"Name"},"direction":"IN"},{"argument":{"text":"휴가 사유"},"variable":{"name":"LeaveReason"},"direction":"IN"},{"argument":{"text":"휴가 시작일"},"variable":{"name":"StartDate"},"direction":"IN"},{"argument":{"text":"휴가 복귀일"},"variable":{"name":"EndDate"},"direction":"IN"}]}</uengine:json>
+        </uengine:properties>
+      </bpmn:extensionElements>
+      <bpmn:incoming>SequenceFlow_start_event_leave_request_activity</bpmn:incoming>
+      <bpmn:outgoing>SequenceFlow_leave_request_activity_manager_approval_activity</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:userTask id="manager_approval_activity" name="팀장 승인" $type="bpmn:UserTask">
+      <bpmn:extensionElements>
+        <uengine:properties>
+          <uengine:json>{"parameters":[{"argument":{"text":"휴가 승인 여부"},"variable":{"name":"ManagerApproval"},"direction":"IN"}]}</uengine:json>
+        </uengine:properties>
+      </bpmn:extensionElements>
+      <bpmn:incoming>SequenceFlow_leave_request_activity_manager_approval_activity</bpmn:incoming>
+      <bpmn:outgoing>SequenceFlow_manager_approval_activity_hr_notification_activity</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:userTask id="hr_notification_activity" name="인사팀 통지" $type="bpmn:UserTask">
+      <bpmn:extensionElements>
+        <uengine:properties>
+          <uengine:json>{"parameters":[{"argument":{"text":"휴가 통지 여부"},"variable":{"name":"HRNotification"},"direction":"IN"}]}</uengine:json>
+        </uengine:properties>
+      </bpmn:extensionElements>
+      <bpmn:incoming>SequenceFlow_manager_approval_activity_hr_notification_activity</bpmn:incoming>
+      <bpmn:outgoing>SequenceFlow_hr_notification_activity_end_event</bpmn:outgoing>
+    </bpmn:userTask>
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Collaboration_1">
+      <bpmndi:BPMNShape id="Participant_1" bpmnElement="Participant">
+        <dc:Bounds x="70" y="100" width="780" height="300" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_2" bpmnElement="Lane_2" isHorizontal="true">
+        <dc:Bounds x="100" y="300" width="750" height="100" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_1" bpmnElement="Lane_1" isHorizontal="true">
+        <dc:Bounds x="100" y="200" width="750" height="100" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_0" bpmnElement="Lane_0" isHorizontal="true">
+        <dc:Bounds x="100" y="100" width="750" height="100" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="160" y="133" width="34" height="34" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="145" y="173" width="64" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_end_event" bpmnElement="end_event">
+        <dc:Bounds x="750" y="333" width="34" height="34" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="735" y="373" width="64" height="14" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_leave_request_activity" bpmnElement="leave_request_activity">
+        <dc:Bounds x="240" y="110" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_manager_approval_activity" bpmnElement="manager_approval_activity">
+        <dc:Bounds x="400" y="210" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_hr_notification_activity" bpmnElement="hr_notification_activity">
+        <dc:Bounds x="560" y="310" width="100" height="80" />
+        <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="BPMNEdge_start_event_leave_request_activity" bpmnElement="SequenceFlow_start_event_leave_request_activity">
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="194" y="150" />
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="240" y="150" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_leave_request_activity_manager_approval_activity" bpmnElement="SequenceFlow_leave_request_activity_manager_approval_activity">
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="340" y="150" />
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="365" y="150" />
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="365" y="250" />
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="400" y="250" />
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="400" y="250" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_manager_approval_activity_hr_notification_activity" bpmnElement="SequenceFlow_manager_approval_activity_hr_notification_activity">
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="500" y="250" />
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="525" y="250" />
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="525" y="350" />
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="560" y="350" />
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="560" y="350" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_hr_notification_activity_end_event" bpmnElement="SequenceFlow_hr_notification_activity_end_event">
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="660" y="350" />
+        <di:waypoint xmlns:di="http://www.omg.org/spec/DD/20100524/DI" x="750" y="350" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>
+');
+
 ALTER TABLE proc_def ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Enable insert for authenticated users only" ON "public"."proc_def"
@@ -146,7 +337,6 @@ create table
     id text not null,
     name text null,
     user_ids text[] null,
-    messages jsonb null,
     agent_messages jsonb null,
     status text null,
     variables_data text null,
@@ -177,6 +367,18 @@ create table public.chat_rooms (
   constraint chat_rooms_pkey primary key (id)
 ) tablespace pg_default;
 
+create view
+  public.chat_room_chats as
+select
+  cr.id,
+  cr.name,
+  cr.participants,
+  c.uuid,
+  c.messages
+from
+  chat_rooms cr
+  join chats c on cr.id = c.id;
+
 drop table if exists public.proc_def_arcv CASCADE;
 create table
   public.proc_def_arcv (
@@ -186,6 +388,7 @@ create table
     snapshot text null,
     "timeStamp" timestamp without time zone null default current_timestamp,
     diff text null,
+    message text null,
     constraint proc_def_arcv_pkey primary key (arcv_id)
   ) tablespace pg_default;
 
