@@ -28,6 +28,37 @@ supabase_client_var = ContextVar('supabase', default=None)
 #     'port': '54322'
 # }
 
+async def add_table_columns(request: Request):
+    try:
+        obj = await request.json()  # Request 객체를 통해 JSON 데이터 받아오기
+        table_name = obj['tableName']
+        columns = obj['tableColumns']
+
+        db_config = db_config_var.get()
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
+
+        for column_name, column_type in columns.items():
+            sql_query = f"""
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 
+        FROM information_schema.columns 
+        WHERE table_name='{table_name}' 
+        AND column_name='{column_name}'
+    ) THEN
+        ALTER TABLE {table_name}
+        ADD COLUMN {column_name} {column_type} null;
+    END IF;
+END $$;
+"""
+            cursor.execute(sql_query)
+        
+        connection.commit()
+        return "Columns added"
+    except Exception as e:
+        print(f"An error occurred: {e}")
 
 def load_sql_from_file(file_path):
     """Load SQL commands from a text file."""
