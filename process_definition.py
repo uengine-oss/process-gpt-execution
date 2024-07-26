@@ -123,3 +123,7 @@ if __name__ == "__main__":
             output = execute_python_code(activity.pythonCode, current_dir)
             print(output)
     # End Generation Here
+
+class UIDefinition(BaseModel):
+    id: str
+    html: str

@@ -3,7 +3,7 @@ from supabase import create_client, Client
 from pydantic import BaseModel, validator
 from typing import Any, Dict, List, Optional
 import uuid
-from process_definition import ProcessDefinition, load_process_definition
+from process_definition import ProcessDefinition, load_process_definition, UIDefinition
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from fastapi import FastAPI, Request, HTTPException
@@ -280,7 +280,30 @@ def fetch_process_definition(def_id):
         return process_definition
     else:
         raise ValueError(f"No process definition found with ID {def_id}")
-        
+
+def fetch_all_ui_definition():
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
+    
+    response = supabase.table('form_def').select('*').execute()
+    
+    if response.data:
+        return response.data
+    else:
+        return []
+
+def fetch_ui_definition(def_id):
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
+    
+    response = supabase.table('form_def').select('*').eq('id', def_id.lower()).execute()
+    
+    if response.data:
+        # Assuming the first match is the desired one since ID should be unique
+        ui_definition = UIDefinition(**response.data[0])
+        return ui_definition
 
 class ProcessInstance(BaseModel):
     proc_inst_id: str
@@ -360,6 +383,9 @@ def fetch_and_apply_system_data_sources(process_instance: ProcessInstance) -> No
     return process_instance
 
 def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
+    if full_id == "new" or '.' not in full_id:
+        return None
+    
     process_name = full_id.split('.')[0]  # Extract only the process definition name
 
     if not full_id:
@@ -515,8 +541,9 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
     if not process_result_data['completedActivities']:
         return
     
-    if process_result_data['instanceId'] != "new":
-        workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], process_result_data['completedActivities'][0]['completedActivityId'])
+    workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], process_result_data['completedActivities'][0]['completedActivityId'])
+    
+    if workitem:
         workitem.status = process_result_data['completedActivities'][0]['result']
         workitem.end_date = datetime.now()
     else:
