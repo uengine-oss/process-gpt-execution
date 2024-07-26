@@ -529,6 +529,7 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
             activity_name=activity.name,
             user_id=process_result_data['completedActivities'][0]['completedUserEmail'],
             status=process_result_data['completedActivities'][0]['result'],
+            tool=activity.tool,
             start_date=datetime.now(),
             end_date=datetime.now()
         )

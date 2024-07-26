@@ -15,6 +15,7 @@ prompt = PromptTemplate.from_template(
     """
   You are a database administrator. Generate the DDL to store the following process definition's data value in a supabase's postgres DB. 
   Write the DDL in such a way that it modifies the table (ALTER statement) if it already exists, and creates it if it does not.
+  Include only newly added or deleted columns in ALTER statements and exclude columns that have not changed or already exist.
   DO NOT create any other objects like triggers and functions except table.
   DO USE the same name for table with the process definition id.
 
