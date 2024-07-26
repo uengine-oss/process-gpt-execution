@@ -173,7 +173,7 @@ def execute_next_activity(process_result_json: dict) -> str:
             process_instance = ProcessInstance(
                 proc_inst_id=f"{process_result.processDefinitionId.lower()}.{str(uuid.uuid4())}",
                 proc_inst_name=f"{process_result.instanceName}",
-                role_bindings=[rb.model_dump() for rb in process_result.roleBindingChanges] or [],
+                role_bindings=[rb.model_dump() for rb in (process_result.roleBindingChanges or [])],
                 current_activity_ids=[],
                 current_user_ids=[]
             )
