@@ -587,17 +587,32 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
             workitem.end_date = datetime.now()
         else:
             activity = process_definition.find_activity_by_id(activity_data['nextActivityId'])
-            workitem = WorkItem(
-                id=str(uuid.uuid4()),
-                proc_inst_id=process_instance_data['proc_inst_id'],
-                proc_def_id=process_result_data['processDefinitionId'].lower(),
-                activity_id=activity.id,
-                activity_name=activity.name,
-                user_id=activity_data['nextUserEmail'],
-                status=activity_data['result'],
-                start_date=datetime.now(),
-                tool=activity.tool
-            )
+            if activity:
+                workitem = WorkItem(
+                    id=str(uuid.uuid4()),
+                    proc_inst_id=process_instance_data['proc_inst_id'],
+                    proc_def_id=process_result_data['processDefinitionId'].lower(),
+                    activity_id=activity.id,
+                    activity_name=activity.name,
+                    user_id=activity_data['nextUserEmail'],
+                    status=activity_data['result'],
+                    start_date=datetime.now(),
+                    tool=activity.tool
+                )
+            else:
+                gateway = process_definition.find_gateway_by_id(activity_data['nextActivityId'])
+                if gateway:
+                    workitem = WorkItem(
+                        id=str(uuid.uuid4()),
+                        proc_inst_id=process_instance_data['proc_inst_id'],
+                        proc_def_id=process_result_data['processDefinitionId'].lower(),
+                        activity_id=gateway.id,
+                        activity_name=gateway.name,
+                        user_id=activity_data['nextUserEmail'],
+                        status=activity_data['result'],
+                        start_date=datetime.now(),
+                        tool=""
+                    )
         
         try:
             workitem_dict = workitem.dict()
