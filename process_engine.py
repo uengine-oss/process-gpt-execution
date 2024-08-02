@@ -85,11 +85,12 @@ prompt = PromptTemplate.from_template(
     At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
     If the process variable is a form, the submitted data should be returned based on the form definitions.
     Information about completed activities must be returned.
-    The completedUserEmail included in completedActivities must be found in the Organization chart or role bindings and returned.
-    The nextUserEmail included in nextActivities must be found in the Organization chart or role bindings and returned.
+    The completedUserEmail included in completedActivities must be found in the role bindings and returned. If not, find the organization chart and return it.
+    The nextUserEmail included in nextActivities must be found in the role bindings and returned. If not, find the organization chart and return it.
     If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
     startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
     If the user-submitted data is insufficient, refer to the chat history to extract the process data values.
+    If the activity you completed with reference to the process definition is the first activity, make sure to return all remaining activities to the next activity. (If you have more than one activity left, never return only one. If there is a branch gateway, only return the activity before that.)
     
     result should be in this JSON format:
     {{
