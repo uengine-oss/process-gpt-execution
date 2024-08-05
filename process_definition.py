@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Union, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, root_validator
 
 class DataSource(BaseModel):
     type: str
@@ -38,18 +38,43 @@ class ProcessActivity(BaseModel):
     properties: Optional[str] = None
 
 class ProcessSequence(BaseModel):
+    id: str
     source: str
     target: str
-    condition: Optional[str] = None
+    condition: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    properties: Optional[str] = None
+
+    @root_validator(pre=True)
+    def check_condition(cls, values):
+        if values.get('condition') == "":
+            values['condition'] = {}
+        return values
+
+class ProcessGateway(BaseModel):
+    id: Optional[str] = None
+    name: Optional[str] = None
+    role: Optional[str] = None
+    type: Optional[str] = None
+    process: Optional[str] = None
+    condition: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    properties: Optional[str] = None
+    description: Optional[str] = None
+
+    @root_validator(pre=True)
+    def check_condition(cls, values):
+        if values.get('condition') == "":
+            values['condition'] = {}
+        return values
 
 class ProcessDefinition(BaseModel):
     processDefinitionName: str
     processDefinitionId: str
     description: str
-    data: List[ProcessData] = []
-    roles: List[ProcessRole] = []
-    activities: List[ProcessActivity] = []
-    sequences: List[ProcessSequence] = []
+    data: Optional[List[ProcessData]] = []
+    roles: Optional[List[ProcessRole]] = []
+    activities: Optional[List[ProcessActivity]] = []
+    sequences: Optional[List[ProcessSequence]] = []
+    gateways: Optional[List[ProcessGateway]] = []
 
     def is_starting_activity(self, activity_id: str) -> bool:
         """
@@ -102,6 +127,12 @@ class ProcessDefinition(BaseModel):
             if activity.id == activity_id:
                 return activity
         return None
+    
+    def find_gateway_by_id(self, gateway_id: str) -> Optional[ProcessGateway]:
+        for gateway in self.gateways:
+            if gateway.id == gateway_id:
+                return gateway
+        return None
 
 def load_process_definition(definition_json: dict) -> ProcessDefinition:
     # definition_json = json.loads(definition_json)
@@ -123,3 +154,7 @@ if __name__ == "__main__":
             output = execute_python_code(activity.pythonCode, current_dir)
             print(output)
     # End Generation Here
+
+class UIDefinition(BaseModel):
+    id: str
+    html: str
