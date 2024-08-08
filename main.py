@@ -38,7 +38,7 @@ app.add_middleware(
 )
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from database import update_db_settings, create_default_tables, add_table_columns
+from database import update_db_settings, update_db
 
 class DBConfigMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -52,9 +52,7 @@ class DBConfigMiddleware(BaseHTTPMiddleware):
 
 app = FastAPI()
 
-app.post("/create_default_tables")(create_default_tables)
-app.post("/add_table_columns")(add_table_columns)
-
+app.post("/update_db")(update_db)
     
 # 미들웨어 추가
 app.add_middleware(DBConfigMiddleware)

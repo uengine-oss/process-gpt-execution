@@ -28,44 +28,12 @@ supabase_client_var = ContextVar('supabase', default=None)
 #     'port': '54322'
 # }
 
-async def add_table_columns(request: Request):
-    try:
-        obj = await request.json()  # Request 객체를 통해 JSON 데이터 받아오기
-        table_name = obj['tableName']
-        columns = obj['tableColumns']
-
-        db_config = db_config_var.get()
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-        for column_name, column_type in columns.items():
-            sql_query = f"""
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 
-        FROM information_schema.columns 
-        WHERE table_name='{table_name}' 
-        AND column_name='{column_name}'
-    ) THEN
-        ALTER TABLE {table_name}
-        ADD COLUMN {column_name} {column_type} null;
-    END IF;
-END $$;
-"""
-            cursor.execute(sql_query)
-        
-        connection.commit()
-        return "Columns added"
-    except Exception as e:
-        print(f"An error occurred: {e}")
-
 def load_sql_from_file(file_path):
     """Load SQL commands from a text file."""
     with open(file_path, 'r', encoding='utf-8') as file:  # UTF-8 인코딩으로 파일을 열기
         return file.read()
 
-def create_default_tables():
+def update_db():
     try:
         db_config = db_config_var.get()
         # Establish a connection to the database
@@ -73,7 +41,7 @@ def create_default_tables():
         cursor = connection.cursor(cursor_factory=RealDictCursor)
         
         # Load SQL from file
-        sql_query = load_sql_from_file('sql.txt')
+        sql_query = load_sql_from_file('update_db_sql.txt')
         
         cursor.execute(sql_query)
         connection.commit()
