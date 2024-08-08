@@ -90,7 +90,6 @@ prompt = PromptTemplate.from_template(
     If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
     startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
     If the user-submitted data is insufficient, refer to the chat history to extract the process data values.
-    If the activity you completed with reference to the process definition is the first activity, make sure to return all remaining activities to the todo activity. (If you have more than one activity left, never return only one. If there is a branch gateway, return only the previous activities.)
     
     result should be in this JSON format:
     {{
@@ -123,13 +122,6 @@ prompt = PromptTemplate.from_template(
             "result": "IN_PROGRESS | PENDING | DONE", // The result of the next activity
             "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)" // Returns a description of the process end if nextActivityId is "endEvent".
         }}],
-        
-        "todoActivities":
-        [{{
-            "todoActivityId": "the id of todo activity id",
-            "todoUserEmail": "the email address of todo activity’s role",
-            "result": "TODO",
-        }}],
 
         "cannotProceedErrors":   // return errors if cannot proceed to next activity 
         [{{
@@ -155,11 +147,6 @@ class CompletedActivity(BaseModel):
     completedUserEmail: Optional[str] = None
     result: Optional[str] = None
 
-class TodoActivity(BaseModel):
-    todoActivityId: Optional[str] = None
-    todoUserEmail: Optional[str] = None
-    result: Optional[str] = None
-
 class RoleBindingChange(BaseModel):
     roleName: str
     userId: str
@@ -179,7 +166,6 @@ class ProcessResult(BaseModel):
     roleBindingChanges: Optional[List[RoleBindingChange]] = None
     nextActivities: List[Activity]
     completedActivities: List[CompletedActivity]
-    todoActivities: Optional[List[TodoActivity]] = None
     processDefinitionId: str
     result: Optional[str] = None
     cannotProceedErrors: List[ProceedError]
@@ -213,8 +199,8 @@ def execute_next_activity(process_result_json: dict) -> str:
         all_user_emails = set()
         if process_result.nextActivities:
             for activity in process_result.nextActivities:
-                if activity.result != "TODO":
-                    process_instance.current_activity_ids.append(activity.nextActivityId)
+                if activity.result == "IN_PROGRESS":
+                    process_instance.current_activity_ids = [activity.nextActivityId]
             if not process_instance.current_activity_ids:
                 process_instance.current_activity_ids.append(process_result.nextActivities[0].nextActivityId)
             all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
@@ -237,7 +223,9 @@ def execute_next_activity(process_result_json: dict) -> str:
                 process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
             else:
                 result = (f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found.")
-
+                
+        upsert_todo_workitems(process_instance.dict(), process_result.dict(), process_definition)
+        
         workitems = None
         message_json = json.dumps({"description": ""})
         if not process_result.cannotProceedErrors:
@@ -252,9 +240,6 @@ def execute_next_activity(process_result_json: dict) -> str:
             message_json = json.dumps({"description": reason})
         upsert_chat_message(process_instance.proc_inst_id, message_json, True)
         
-        if process_result.todoActivities:
-            upsert_todo_workitems(process_instance.dict(), process_result.dict(), process_definition)
-
         # Updating process_result_json with the latest process instance details and execution result
         process_result_json["instanceId"] = process_instance.proc_inst_id
         process_result_json["instanceName"] = process_instance.proc_inst_name

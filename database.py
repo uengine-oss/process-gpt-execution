@@ -599,25 +599,20 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
     return workitems
 
 def upsert_todo_workitems(prcess_instance_data, process_result_data, process_definition):
-    if not process_result_data['todoActivities']:
-        return
     try:
-        for activity_data in process_result_data['todoActivities']:
-            workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], activity_data['todoActivityId'])
-            
+        initial_activity = process_definition.find_initial_activity()
+        next_activities = process_definition.find_next_activities(initial_activity.id)
+        for activity in next_activities:
+            workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], activity.id)
             if not workitem:
-                activity = process_definition.find_activity_by_id(activity_data['todoActivityId'])
-                if not activity:
-                    continue
-                
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     proc_inst_id=prcess_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=activity.id,
                     activity_name=activity.name,
-                    user_id=activity_data['todoUserEmail'],
-                    status=activity_data['result'],
+                    user_id="",
+                    status="TODO",
                     tool=activity.tool,
                     start_date=datetime.now(),
                 )
