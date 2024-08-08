@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableLambda
 from datetime import datetime
 
 
-from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token, upsert_chat_message, fetch_ui_definition, fetch_chat_history
+from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token, upsert_chat_message, fetch_ui_definition, fetch_chat_history, upsert_todo_workitems
 from database import ProcessInstance
 import uuid
 import json
@@ -69,7 +69,7 @@ prompt = PromptTemplate.from_template(
     
     - Received Message From Current Step:
     
-      activityId: "{activity_id}",  // the activityId is not included in the Currently Running Activities or is the next activityId than Current Running Activities, it must never be added to completedActivities to return the activityId as complete and must be reported in cannotProceedErrors.z
+      activityId: "{activity_id}",  // the activityId is not included in the Currently Running Activities or is the next activityId than Current Running Activities, it must never be added to completedActivities to return the activityId as complete and must be reported in cannotProceedErrors.
       user: "{user_email}",
       submitted data: "{answer}"    // In the following cases, activityId should not be added to completeActivities and the parameters that must be entered in canotProcessedErrors must be reported. However, if the submitted data has a "user_input_text" value or answers, you must enter a Form field or parameter value for that content. 1) If there is no output data for the activity to proceed to the next activity, 2) If the type of output data is Form and nothing is entered in the Object.
     
@@ -90,7 +90,7 @@ prompt = PromptTemplate.from_template(
     If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
     startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
     If the user-submitted data is insufficient, refer to the chat history to extract the process data values.
-    If the activity you completed with reference to the process definition is the first activity, make sure to return all remaining activities to the next activity. (If you have more than one activity left, never return only one. If there is a branch gateway, only return the activity before that.)
+    If the activity you completed with reference to the process definition is the first activity, make sure to return all remaining activities to the todo activity. (If you have more than one activity left, never return only one. If there is a branch gateway, return only the previous activities.)
     
     result should be in this JSON format:
     {{
@@ -113,15 +113,22 @@ prompt = PromptTemplate.from_template(
         [{{
             "completedActivityId": "the id of completed activity id", // Not Return if completedActivityId is "startEvent".
             "completedUserEmail": "the email address of completed activity’s role",
-            "result": "PENDING | DONE" // The result of the completed activity
+            "result": "DONE" // The result of the completed activity
         }}],
         
         "nextActivities":
         [{{
-            "nextActivityId": "the id of next activity id", // Return "END_PROCESS" if nextActivityId is "endEvent".
+            "nextActivityId": "the id of next activity id", // Not Return "END_PROCESS" if nextActivityId is "endEvent".
             "nextUserEmail": "the email address of next activity’s role",
-            "result": "TODO | IN_PROGRESS | PENDING | DONE", // The result of the next activity
+            "result": "IN_PROGRESS | PENDING | DONE", // The result of the next activity
             "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)" // Returns a description of the process end if nextActivityId is "endEvent".
+        }}],
+        
+        "todoActivities":
+        [{{
+            "todoActivityId": "the id of todo activity id",
+            "todoUserEmail": "the email address of todo activity’s role",
+            "result": "TODO",
         }}],
 
         "cannotProceedErrors":   // return errors if cannot proceed to next activity 
@@ -148,6 +155,11 @@ class CompletedActivity(BaseModel):
     completedUserEmail: Optional[str] = None
     result: Optional[str] = None
 
+class TodoActivity(BaseModel):
+    todoActivityId: Optional[str] = None
+    todoUserEmail: Optional[str] = None
+    result: Optional[str] = None
+
 class RoleBindingChange(BaseModel):
     roleName: str
     userId: str
@@ -167,6 +179,7 @@ class ProcessResult(BaseModel):
     roleBindingChanges: Optional[List[RoleBindingChange]] = None
     nextActivities: List[Activity]
     completedActivities: List[CompletedActivity]
+    todoActivities: Optional[List[TodoActivity]] = None
     processDefinitionId: str
     result: Optional[str] = None
     cannotProceedErrors: List[ProceedError]
@@ -224,21 +237,23 @@ def execute_next_activity(process_result_json: dict) -> str:
                 process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
             else:
                 result = (f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found.")
-        
 
         workitems = None
         message_json = json.dumps({"description": ""})
         if not process_result.cannotProceedErrors:
             _, process_instance = upsert_process_instance(process_instance)
-            upsert_completed_workitem(process_instance.dict(), process_result.dict(), process_definition)    
+            upsert_completed_workitem(process_instance.dict(), process_result.dict(), process_definition)
             workitems = upsert_next_workitems(process_instance.dict(), process_result.dict(), process_definition)
             message_json = json.dumps({"description": process_result.description})
         else:
             reason = ""
             for error in process_result.cannotProceedErrors:
                 reason += error.reason + "\n"
-            message_json = json.dumps({"description": reason})        
+            message_json = json.dumps({"description": reason})
         upsert_chat_message(process_instance.proc_inst_id, message_json, True)
+        
+        if process_result.todoActivities:
+            upsert_todo_workitems(process_instance.dict(), process_result.dict(), process_definition)
 
         # Updating process_result_json with the latest process instance details and execution result
         process_result_json["instanceId"] = process_instance.proc_inst_id
