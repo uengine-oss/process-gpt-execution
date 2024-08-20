@@ -36,6 +36,15 @@ class ProcessActivity(BaseModel):
     pythonCode: Optional[str] = None
     tool: Optional[str] = None
     properties: Optional[str] = None
+    duration: Optional[int] = None
+    
+    def __hash__(self):
+        return hash(self.id)  # 또는 다른 고유한 속성을 사용
+
+    def __eq__(self, other):
+        if isinstance(other, ProcessActivity):
+            return self.id == other.id  # 또는 다른 비교 로직을 사용
+        return False
 
 class ProcessSequence(BaseModel):
     id: str
@@ -98,16 +107,41 @@ class ProcessDefinition(BaseModel):
         Returns:
             Optional[Activity]: The initial activity if found, None otherwise.
         """
-        # Collect all target activity IDs from sequences
-        target_activity_ids = {sequence.target for sequence in self.sequences}
-
-        # Find an activity that is not a target of any sequence, implying it's the start
-        for activity in self.activities:
-            if activity.id not in target_activity_ids:
-                return activity
-
-        # If no such activity is found, return None
+        # Find the sequence with "start_event" as the source
+        start_sequence = next((seq for seq in self.sequences if seq.source == "start_event"), None)
+        
+        if start_sequence:
+            # Find the activity that matches the target of the start sequence
+            return next((activity for activity in self.activities if activity.id == start_sequence.target), None)
+        
         return None
+    
+    def find_prev_activity(self, current_activity_id: str) -> Optional[ProcessActivity]:
+        for sequence in self.sequences:
+            if sequence.target == current_activity_id:
+                activity = self.find_activity_by_id(sequence.source)
+                if activity:
+                    return activity
+                else:
+                    gateway = self.find_gateway_by_id(sequence.source)
+                    if gateway:
+                        for sequence in self.sequences:
+                            if sequence.target == gateway.id:
+                                return self.find_prev_activity(sequence.source)
+        return None
+    
+    def find_prev_activities(self, current_activity_id: str, prev_activities: List[ProcessActivity] = []) -> List[ProcessActivity]:
+        for sequence in self.sequences:
+            if sequence.target == current_activity_id:
+                activity = self.find_activity_by_id(sequence.source)
+                if activity:
+                    prev_activities.append(activity)
+                    return self.find_prev_activities(activity.id, prev_activities)
+                else:
+                    gateway = self.find_gateway_by_id(sequence.source)
+                    if gateway:
+                        prev_activities.extend(self.find_prev_activities(gateway.id))
+        return list(dict.fromkeys(prev_activities))
 
     def find_next_activities(self, current_activity_id: str) -> List[ProcessActivity]:
         """

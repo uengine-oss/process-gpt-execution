@@ -8,7 +8,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from fastapi import FastAPI, Request, HTTPException
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextvars import ContextVar
 
 app = FastAPI()
@@ -318,6 +318,7 @@ class WorkItem(BaseModel):
     activity_name: str 
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
+    due_date: Optional[datetime] = None
     status: str
     description: Optional[str] = None
     tool: Optional[str] = None
@@ -516,6 +517,8 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
         workitem.end_date = datetime.now()
     else:
         activity = process_definition.find_activity_by_id(process_result_data['completedActivities'][0]['completedActivityId'])
+        start_date = datetime.now()
+        due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
         workitem = WorkItem(
             id=f"{str(uuid.uuid4())}",
             proc_inst_id=prcess_instance_data['proc_inst_id'],
@@ -525,14 +528,16 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
             user_id=process_result_data['completedActivities'][0]['completedUserEmail'],
             status=process_result_data['completedActivities'][0]['result'],
             tool=activity.tool,
-            start_date=datetime.now(),
-            end_date=datetime.now()
+            start_date=start_date,
+            end_date=datetime.now() if process_result_data['completedActivities'][0]['result'] == 'DONE' else None,
+            due_date=due_date
         )
 
     try:
         workitem_dict = workitem.dict()
         workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
         workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
+        workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
 
         supabase = supabase_client_var.get()
         if supabase is None:
@@ -552,10 +557,16 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
         workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity_data['nextActivityId'])
         if workitem:
             workitem.status = activity_data['result']
-            workitem.end_date = datetime.now()
+            workitem.end_date = datetime.now() if activity_data['result'] == 'DONE' else None
         else:
             activity = process_definition.find_activity_by_id(activity_data['nextActivityId'])
             if activity:
+                prev_activities = process_definition.find_prev_activities(activity.id, [])
+                start_date = datetime.now()
+                if prev_activities:
+                    for prev_activity in prev_activities:
+                        start_date = start_date + timedelta(days=prev_activity.duration)
+                due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
                 workitem = WorkItem(
                     id=str(uuid.uuid4()),
                     proc_inst_id=process_instance_data['proc_inst_id'],
@@ -564,28 +575,16 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     activity_name=activity.name,
                     user_id=activity_data['nextUserEmail'],
                     status=activity_data['result'],
-                    start_date=datetime.now(),
+                    start_date=start_date,
+                    due_date=due_date,
                     tool=activity.tool
                 )
-            else:
-                gateway = process_definition.find_gateway_by_id(activity_data['nextActivityId'])
-                if gateway:
-                    workitem = WorkItem(
-                        id=str(uuid.uuid4()),
-                        proc_inst_id=process_instance_data['proc_inst_id'],
-                        proc_def_id=process_result_data['processDefinitionId'].lower(),
-                        activity_id=gateway.id,
-                        activity_name=gateway.name,
-                        user_id=activity_data['nextUserEmail'],
-                        status=activity_data['result'],
-                        start_date=datetime.now(),
-                        tool=""
-                    )
         
         try:
             workitem_dict = workitem.dict()
             workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
             workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
+            workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
 
             supabase = supabase_client_var.get()
             if supabase is None:
@@ -601,8 +600,14 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
 def upsert_todo_workitems(prcess_instance_data, process_result_data, process_definition):
     try:
         initial_activity = process_definition.find_initial_activity()
-        next_activities = process_definition.find_next_activities(initial_activity.id)
+        next_activities = [activity for activity in process_definition.activities if activity.id != initial_activity.id]
         for activity in next_activities:
+            prev_activities = process_definition.find_prev_activities(activity.id, [])
+            start_date = datetime.now()
+            if prev_activities:
+                for prev_activity in prev_activities:
+                    start_date = start_date + timedelta(days=prev_activity.duration)
+            due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
             workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], activity.id)
             if not workitem:
                 workitem = WorkItem(
@@ -614,11 +619,13 @@ def upsert_todo_workitems(prcess_instance_data, process_result_data, process_def
                     user_id="",
                     status="TODO",
                     tool=activity.tool,
-                    start_date=datetime.now(),
+                    start_date=start_date,
+                    due_date=due_date
                 )
                 workitem_dict = workitem.dict()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
                 workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
+                workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
 
                 supabase = supabase_client_var.get()
                 if supabase is None:
