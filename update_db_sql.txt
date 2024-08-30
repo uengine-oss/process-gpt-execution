@@ -15,18 +15,18 @@ END;
 $$;
 
 create table if not exists public.proc_map_history (
-    value jsonb not null,
-    created_at timestamp with time zone not null default now(),
+    value jsonb,
+    created_at timestamp with time zone default now(),
     constraint proc_map_history_pkey primary key (created_at)
 ) tablespace pg_default;
 
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_map_history' AND column_name='value') THEN
-        ALTER TABLE public.proc_map_history ADD COLUMN value jsonb not null;
+        ALTER TABLE public.proc_map_history ADD COLUMN value jsonb;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_map_history' AND column_name='created_at') THEN
-        ALTER TABLE public.proc_map_history ADD COLUMN created_at timestamp with time zone not null default now();
+        ALTER TABLE public.proc_map_history ADD COLUMN created_at timestamp with time zone default now();
     END IF;
 END;
 $$;
@@ -224,7 +224,7 @@ create table if not exists public.proc_inst (
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_inst' AND column_name='id') THEN
-        ALTER TABLE public.proc_inst ADD COLUMN id text not null;
+        ALTER TABLE public.proc_inst ADD COLUMN id text;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_inst' AND column_name='name') THEN
         ALTER TABLE public.proc_inst ADD COLUMN name text null;
@@ -254,10 +254,10 @@ create table if not exists public.chats (
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chats' AND column_name='uuid') THEN
-        ALTER TABLE public.chats ADD COLUMN uuid text not null;
+        ALTER TABLE public.chats ADD COLUMN uuid text;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chats' AND column_name='id') THEN
-        ALTER TABLE public.chats ADD COLUMN id text not null;
+        ALTER TABLE public.chats ADD COLUMN id text;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chats' AND column_name='messages') THEN
         ALTER TABLE public.chats ADD COLUMN messages jsonb null;
@@ -274,7 +274,7 @@ create table if not exists public.calendar (
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='calendar' AND column_name='uid') THEN
-        ALTER TABLE public.calendar ADD COLUMN uid text not null;
+        ALTER TABLE public.calendar ADD COLUMN uid text;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='calendar' AND column_name='data') THEN
         ALTER TABLE public.calendar ADD COLUMN data jsonb null;
@@ -293,10 +293,10 @@ create table if not exists public.chat_rooms (
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chat_rooms' AND column_name='id') THEN
-        ALTER TABLE public.chat_rooms ADD COLUMN id text not null;
+        ALTER TABLE public.chat_rooms ADD COLUMN id text;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chat_rooms' AND column_name='participants') THEN
-        ALTER TABLE public.chat_rooms ADD COLUMN participants jsonb not null;
+        ALTER TABLE public.chat_rooms ADD COLUMN participants jsonb;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chat_rooms' AND column_name='message') THEN
         ALTER TABLE public.chat_rooms ADD COLUMN message jsonb null;
@@ -358,13 +358,13 @@ create table if not exists public.proc_def_arcv (
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='arcv_id') THEN
-        ALTER TABLE public.proc_def_arcv ADD COLUMN arcv_id text not null;
+        ALTER TABLE public.proc_def_arcv ADD COLUMN arcv_id text;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='proc_def_id') THEN
-        ALTER TABLE public.proc_def_arcv ADD COLUMN proc_def_id text not null;
+        ALTER TABLE public.proc_def_arcv ADD COLUMN proc_def_id text;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='version') THEN
-        ALTER TABLE public.proc_def_arcv ADD COLUMN version text not null;
+        ALTER TABLE public.proc_def_arcv ADD COLUMN version text;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='snapshot') THEN
         ALTER TABLE public.proc_def_arcv ADD COLUMN snapshot text null;
@@ -390,7 +390,7 @@ create table if not exists public.lock (
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='lock' AND column_name='id') THEN
-        ALTER TABLE public.lock ADD COLUMN id text not null;
+        ALTER TABLE public.lock ADD COLUMN id text;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='lock' AND column_name='user_id') THEN
         ALTER TABLE public.lock ADD COLUMN user_id text null;
@@ -408,16 +408,16 @@ create table if not exists form_def (
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='id') THEN
-        ALTER TABLE form_def ADD COLUMN id text primary key;
+        ALTER TABLE form_def ADD COLUMN id text;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='html') THEN
-        ALTER TABLE form_def ADD COLUMN html text not null;
+        ALTER TABLE form_def ADD COLUMN html text;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='proc_def_id') THEN
-        ALTER TABLE form_def ADD COLUMN proc_def_id text not null;
+        ALTER TABLE form_def ADD COLUMN proc_def_id text;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='activity_id') THEN
-        ALTER TABLE form_def ADD COLUMN activity_id text not null;
+        ALTER TABLE form_def ADD COLUMN activity_id text;
     END IF;
 END;
 $$;
