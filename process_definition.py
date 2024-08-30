@@ -108,7 +108,7 @@ class ProcessDefinition(BaseModel):
             Optional[Activity]: The initial activity if found, None otherwise.
         """
         # Find the sequence with "start_event" as the source
-        start_sequence = next((seq for seq in self.sequences if seq.source == "start_event"), None)
+        start_sequence = next((seq for seq in self.sequences if "start_event" in seq.source.lower()), None)
         
         if start_sequence:
             # Find the activity that matches the target of the start sequence

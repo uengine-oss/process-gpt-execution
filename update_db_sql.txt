@@ -400,7 +400,9 @@ $$;
 
 create table if not exists form_def (
   id text primary key,
-  html text not null
+  html text not null,
+  proc_def_id text not null,
+  activity_id text not null
 ) tablespace pg_default;
 
 DO $$
@@ -410,6 +412,12 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='html') THEN
         ALTER TABLE form_def ADD COLUMN html text not null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='proc_def_id') THEN
+        ALTER TABLE form_def ADD COLUMN proc_def_id text not null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='activity_id') THEN
+        ALTER TABLE form_def ADD COLUMN activity_id text not null;
     END IF;
 END;
 $$;

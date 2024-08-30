@@ -273,6 +273,18 @@ def fetch_ui_definition(def_id):
         ui_definition = UIDefinition(**response.data[0])
         return ui_definition
 
+def fetch_ui_definition_by_activity_id(def_id, proc_def_id, activity_id):
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured for this request")
+    
+    response = supabase.table('form_def').select('*').eq('id', def_id.lower()).eq('proc_def_id', proc_def_id).eq('activity_id', activity_id).execute()
+    
+    if response.data:
+        # Assuming the first match is the desired one since ID should be unique
+        ui_definition = UIDefinition(**response.data[0])
+        return ui_definition
+
 class ProcessInstance(BaseModel):
     proc_inst_id: str
     proc_inst_name: str
@@ -581,17 +593,18 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                 )
         
         try:
-            workitem_dict = workitem.dict()
-            workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
-            workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
-            workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
+            if workitem:
+                workitem_dict = workitem.dict()
+                workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
+                workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
+                workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
 
-            supabase = supabase_client_var.get()
-            if supabase is None:
-                raise Exception("Supabase client is not configured for this request")
-            
-            supabase.table('todolist').upsert(workitem_dict).execute()
-            workitems.append(workitem)
+                supabase = supabase_client_var.get()
+                if supabase is None:
+                    raise Exception("Supabase client is not configured for this request")
+                
+                supabase.table('todolist').upsert(workitem_dict).execute()
+                workitems.append(workitem)
         except Exception as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
 

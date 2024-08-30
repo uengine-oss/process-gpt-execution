@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableLambda
 from datetime import datetime
 
 
-from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token, upsert_chat_message, fetch_ui_definition, fetch_chat_history, upsert_todo_workitems
+from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token, upsert_chat_message, fetch_ui_definition_by_activity_id, fetch_chat_history, upsert_todo_workitems
 from database import ProcessInstance
 import uuid
 import json
@@ -22,7 +22,24 @@ vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096)
 
 # ConfigurableField를 사용하여 모델 선택 구성
 
-parser = SimpleJsonOutputParser()
+# parser = SimpleJsonOutputParser()
+import re
+class CustomJsonOutputParser(SimpleJsonOutputParser):
+    def parse(self, text: str) -> dict:
+        # Remove comments
+        text = re.sub(r'//.*?\n|/\*.*?\*/', '', text, flags=re.S)
+        
+        # Extract JSON from markdown if present
+        match = re.search(r'```json\n(.*?)\n```', text, re.DOTALL)
+        if match:
+            text = match.group(1)
+        
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON: {str(e)}")
+# Replace the existing parser with our custom parser
+parser = CustomJsonOutputParser()
 
 
 from process_definition import load_process_definition
@@ -64,8 +81,8 @@ prompt = PromptTemplate.from_template(
     - Users Currently Running Activities:
     {current_user_ids}
     
-    - Form Definitions:
-    {form_definitions}
+    - Currently Running Activity's Form Definition:
+    {form_definition}
     
     - Received Message From Current Step:
     
@@ -298,9 +315,6 @@ vision_chain = (
     vision_model_chain | parser | execute_next_activity
 )
 
-def get_ui_definition(def_id):
-    ui_definition = fetch_ui_definition(def_id)
-    return ui_definition
 
 def combine_input_with_process_definition(input):
     # 프로세스 인스턴스를 DB에서 검색
@@ -330,13 +344,14 @@ def combine_input_with_process_definition(input):
                 raise HTTPException(status_code=404, detail=f"Process instance with ID {process_instance_id} not found.")
         
             processDefinitionJson = fetch_process_definition(process_instance.get_def_id())
+            process_definition_id = input.get('process_definition_id')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
             
-            form_definitions = []
+            form_definition = None
             if processDefinitionJson.get("data"):
                 for data_item in processDefinitionJson["data"]:
                     if data_item["type"] == "Form":
-                        ui_definition = fetch_ui_definition(data_item["name"])
-                        form_definitions.append(ui_definition)
+                        ui_definition = fetch_ui_definition_by_activity_id(data_item["name"], process_definition_id, activity_id)
+                        form_definition = ui_definition
 
             chain_input = {
                 "answer": input['answer'],
@@ -355,7 +370,7 @@ def combine_input_with_process_definition(input):
                 "today": today,
                 "organizationChart": organizationChart,
                 "instance_name_pattern": processDefinitionJson.get("instanceNamePattern") or "",
-                "form_definitions": form_definitions,
+                "form_definition": form_definition,
                 "chat_history": chat_history
             }
         else:
@@ -368,12 +383,12 @@ def combine_input_with_process_definition(input):
             processDefinitionJson = fetch_process_definition(process_definition_id)
             # processDefinition = load_process_definition(processDefinitionJson)
 
-            form_definitions = []
+            form_definition = None  
             if processDefinitionJson.get("data"):
                 for data_item in processDefinitionJson["data"]:
                     if data_item["type"] == "Form":
-                        ui_definition = fetch_ui_definition(data_item["name"])
-                        form_definitions.append(ui_definition)
+                        ui_definition = fetch_ui_definition_by_activity_id(data_item["name"], process_definition_id, activity_id)
+                        form_definition = ui_definition
 
             chain_input = {
                 "answer": input['answer'],  
@@ -392,7 +407,7 @@ def combine_input_with_process_definition(input):
                 "today": today,
                 "organizationChart": organizationChart,
                 "instance_name_pattern": processDefinitionJson.get("instanceNamePattern") or "",
-                "form_definitions": form_definitions,
+                "form_definition": form_definition,
                 "chat_history": chat_history
             }
 
