@@ -88,7 +88,7 @@ prompt = PromptTemplate.from_template(
     
       activityId: "{activity_id}",  // the activityId is not included in the Currently Running Activities or is the next activityId than Current Running Activities, it must never be added to completedActivities to return the activityId as complete and must be reported in cannotProceedErrors.
       user: "{user_email}",
-      submitted data: "{answer}"    // In the following cases, activityId should not be added to completeActivities and the parameters that must be entered in canotProcessedErrors must be reported. However, if the submitted data has a "user_input_text" value or answers, you must enter a Form field or parameter value for that content. 1) If there is no output data for the activity to proceed to the next activity, 2) If the type of output data is Form and nothing is entered in the Object.
+      submitted data: "{answer}"    // Based on the current running activity form definition, make sure that the content of the submitted data has entered all the fields in the form. If all are not entered, return the "DATA_FIELD_NOT_EXIST" error.
     
     - Chat History:
     {chat_history}
@@ -100,7 +100,7 @@ prompt = PromptTemplate.from_template(
     Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
     The data changes and role binding changes should be derived from the user submitted data or attached image OCR. 
     At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
-    If the process variable is a form, the submitted data should be returned based on the form definitions.
+    If the submitted data is in a form definition format, dataChanges must be returned for each field of the form definition.
     Information about completed activities must be returned.
     The completedUserEmail included in completedActivities must be found in the role bindings and returned. If not, find the organization chart and return it.
     The nextUserEmail included in nextActivities must be found in the role bindings and returned. If not, find the organization chart and return it.
