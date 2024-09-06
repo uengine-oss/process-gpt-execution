@@ -418,7 +418,8 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
             'name': process_instance.proc_inst_name,
             'user_ids': process_instance.current_user_ids,
             'status': status,
-            'variables_data': variables_data_json
+            'variables_data': variables_data_json,
+            'proc_def_id': process_instance.get_def_id()
         }).execute()
         # Upsert the filtered data into the table
         response = supabase.table(process_name.lower()).upsert(filtered_data).execute()
