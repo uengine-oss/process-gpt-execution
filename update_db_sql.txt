@@ -218,6 +218,7 @@ create table if not exists public.proc_inst (
     agent_messages jsonb null,
     status text null,
     variables_data text null,
+    proc_def_id text null,
     constraint proc_inst_pkey primary key (id)
 ) tablespace pg_default;
 
@@ -240,6 +241,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_inst' AND column_name='variables_data') THEN
         ALTER TABLE public.proc_inst ADD COLUMN variables_data text null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_inst' AND column_name='proc_def_id') THEN
+        ALTER TABLE public.proc_inst ADD COLUMN proc_def_id text null;
     END IF;
 END;
 $$;

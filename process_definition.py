@@ -50,14 +50,8 @@ class ProcessSequence(BaseModel):
     id: str
     source: str
     target: str
-    condition: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    condition: Optional[str] = None
     properties: Optional[str] = None
-
-    @root_validator(pre=True)
-    def check_condition(cls, values):
-        if values.get('condition') == "":
-            values['condition'] = {}
-        return values
 
 class ProcessGateway(BaseModel):
     id: Optional[str] = None
@@ -130,18 +124,34 @@ class ProcessDefinition(BaseModel):
                                 return self.find_prev_activity(sequence.source)
         return None
     
-    def find_prev_activities(self, current_activity_id: str, prev_activities: List[ProcessActivity] = []) -> List[ProcessActivity]:
+    def find_prev_activities(self, activity_id, prev_activities=None, visited=None):
+        if prev_activities is None:
+            prev_activities = []
+        if visited is None:
+            visited = set()
+
+        if activity_id in visited:
+            return prev_activities
+
+        visited.add(activity_id)
+
+        activity = self.find_activity_by_id(activity_id)
+        if activity is None:
+            return prev_activities
+
         for sequence in self.sequences:
-            if sequence.target == current_activity_id:
-                activity = self.find_activity_by_id(sequence.source)
-                if activity:
-                    prev_activities.append(activity)
-                    return self.find_prev_activities(activity.id, prev_activities)
-                else:
-                    gateway = self.find_gateway_by_id(sequence.source)
-                    if gateway:
-                        prev_activities.extend(self.find_prev_activities(gateway.id))
-        return list(dict.fromkeys(prev_activities))
+            if sequence.target == activity_id:
+                source_activity = self.find_activity_by_id(sequence.source)
+                if source_activity:
+                    prev_activities.append(source_activity)
+                    self.find_prev_activities(source_activity.id, prev_activities, visited)
+
+        if isinstance(activity, ProcessGateway):
+            for gateway in self.gateways:
+                if gateway.id == activity.id:
+                    prev_activities.extend(self.find_prev_activities(gateway.id, [], visited))
+
+        return prev_activities
 
     def find_next_activities(self, current_activity_id: str) -> List[ProcessActivity]:
         """
