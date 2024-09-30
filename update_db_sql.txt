@@ -1,113 +1,71 @@
-create table if not exists configuration (
-  key text primary key,
-  value jsonb
-);
-
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='configuration' AND column_name='key') THEN
-        ALTER TABLE configuration ADD COLUMN key text primary key;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='configuration' AND column_name='value') THEN
-        ALTER TABLE configuration ADD COLUMN value jsonb;
-    END IF;
-END;
-$$;
-
-create table if not exists public.proc_map_history (
-    value jsonb,
-    created_at timestamp with time zone default now(),
-    constraint proc_map_history_pkey primary key (created_at)
+create table if not exists public.tenants (
+    id text not null,
+    owner uuid null default auth.uid (),
+    constraint tenants_pkey primary key (id)
 ) tablespace pg_default;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_map_history' AND column_name='value') THEN
-        ALTER TABLE public.proc_map_history ADD COLUMN value jsonb;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='tenants' AND column_name='id') THEN
+        ALTER TABLE public.tenants ADD COLUMN id text not null;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_map_history' AND column_name='created_at') THEN
-        ALTER TABLE public.proc_map_history ADD COLUMN created_at timestamp with time zone default now();
-    END IF;
-END;
-$$;
-
-create or replace function public.save_previous_proc_map()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF OLD.key = 'proc_map' THEN
-        INSERT INTO public.proc_map_history(value, created_at)
-        VALUES (OLD.value, now());
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-create or replace trigger trigger_save_previous_proc_map
-BEFORE UPDATE ON configuration
-FOR EACH ROW
-WHEN (OLD.key = 'proc_map' AND NEW.value IS DISTINCT FROM OLD.value)
-EXECUTE PROCEDURE public.save_previous_proc_map();
-
-create table if not exists todolist (
-    id uuid primary key,
-    user_id text,
-    proc_inst_id text,
-    proc_def_id text,
-    activity_id text,
-    activity_name text,
-    start_date timestamp,
-    end_date timestamp,
-    status text,
-    description text,
-    tool text
-);
-
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='id') THEN
-        ALTER TABLE todolist ADD COLUMN id uuid primary key;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='user_id') THEN
-        ALTER TABLE todolist ADD COLUMN user_id text;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='proc_inst_id') THEN
-        ALTER TABLE todolist ADD COLUMN proc_inst_id text;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='proc_def_id') THEN
-        ALTER TABLE todolist ADD COLUMN proc_def_id text;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='activity_id') THEN
-        ALTER TABLE todolist ADD COLUMN activity_id text;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='activity_name') THEN
-        ALTER TABLE todolist ADD COLUMN activity_name text;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='start_date') THEN
-        ALTER TABLE todolist ADD COLUMN start_date timestamp;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='end_date') THEN
-        ALTER TABLE todolist ADD COLUMN end_date timestamp;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='status') THEN
-        ALTER TABLE todolist ADD COLUMN status text;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='description') THEN
-        ALTER TABLE todolist ADD COLUMN description text;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='tool') THEN
-        ALTER TABLE todolist ADD COLUMN tool text;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='tenants' AND column_name='owner') THEN
+        ALTER TABLE public.tenants ADD COLUMN owner uuid null default auth.uid();
     END IF;
 END;
 $$;
+
+ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY tenants_insert_policy
+    ON tenants
+    FOR INSERT
+    TO authenticated
+    USING (true);
+
+CREATE POLICY tenants_select_policy
+    ON tenants
+    FOR SELECT
+    TO authenticated
+    USING (auth.uid() = owner);
+
+CREATE POLICY tenants_update_policy
+    ON tenants
+    FOR UPDATE
+    TO authenticated
+    USING (auth.uid() = owner);
+
+CREATE POLICY tenants_delete_policy
+    ON tenants
+    FOR DELETE
+    TO authenticated
+    USING (auth.uid() = owner);
+
+
+
+create or replace function auth.tenant_id() 
+returns text
+language sql stable
+as $$
+    select 
+        nullif(
+            ((current_setting('request.jwt.claims')::jsonb ->>  'app_metadata')::jsonb ->> 'tenant_id'),
+            ''
+        )::text
+$$;
+
+
 
 create table if not exists public.users (
-    id uuid not null primary key,
+    id uuid not null,
     username text null,
     profile text null default '/src/assets/images/profile/defaultUser.png'::text,
     email text null,
     is_admin boolean not null default false,
-    role text null
-);
+    role text null,
+    current_tenant text not null default auth.tenant_id(),
+    constraint users_pkey primary key (id)
+) tablespace pg_default;
 
 DO $$
 BEGIN
@@ -129,6 +87,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='role') THEN
         ALTER TABLE public.users ADD COLUMN role text null;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='current_tenant') THEN
+        ALTER TABLE public.users ADD COLUMN current_tenant text not null default auth.tenant_id();
+    END IF;
 END;
 $$;
 
@@ -137,7 +98,7 @@ returns trigger as $$
 begin
     insert into public.users (id, email)
     values (new.id, new.email);
-      return new;
+    return new;
 end;
 $$ language plpgsql security definer;
 
@@ -157,196 +118,231 @@ create or replace trigger on_public_user_deleted
     after delete on public.users
     for each row execute procedure public.handle_delete_user();
 
-create table if not exists proc_def (
-  id text primary key,
-  name text,
-  definition jsonb,
-  bpmn text
-);
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY users_insert_policy
+    ON users
+    FOR INSERT
+    TO authenticated
+    USING (true);
+
+CREATE POLICY users_select_policy
+    ON users
+    FOR SELECT
+    TO public
+    USING (auth.tenant_id() = current_tenant);
+
+CREATE POLICY users_update_policy
+    ON users
+    FOR UPDATE
+    TO authenticated
+    USING (auth.uid() = id);
+
+CREATE POLICY users_delete_policy
+    ON users
+    FOR DELETE
+    TO authenticated
+    USING (auth.uid() = id);
+
+
+
+create table if not exists public.configuration (
+    key text not null,
+    value jsonb null,
+    tenant_id text null default auth.tenant_id (),
+    uuid uuid not null default gen_random_uuid (),
+    constraint configuration_pkey primary key (uuid),
+    constraint configuration_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
+) tablespace pg_default;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='configuration' AND column_name='key') THEN
+        ALTER TABLE public.configuration ADD COLUMN key text not null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='configuration' AND column_name='value') THEN
+        ALTER TABLE public.configuration ADD COLUMN value jsonb null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='configuration' AND column_name='uuid') THEN
+        ALTER TABLE public.configuration ADD COLUMN uuid uuid not null default gen_random_uuid ();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='configuration' AND column_name='tenant_id') THEN
+        ALTER TABLE public.configuration ADD COLUMN tenant_id text null default auth.tenant_id ();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='configuration' AND column_name='tenant_id') THEN
+        ALTER TABLE public.configuration ADD COLUMN tenant_id text null default auth.tenant_id ();
+    END IF;
+END;
+$$;
+
+ALTER TABLE configuration ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY configuration_insert_policy
+    ON configuration
+    FOR INSERT
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY configuration_select_policy
+    ON configuration
+    FOR SELECT
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY configuration_update_policy
+    ON configuration
+    FOR UPDATE
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY configuration_delete_policy
+    ON configuration
+    FOR DELETE
+    TO authenticated
+    USING ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
+   FROM users
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
+
+
+
+create table if not exists public.proc_map_history (
+    value jsonb not null,
+    created_at timestamp with time zone not null default now(),
+    tenant_id text null,
+    uuid uuid not null default gen_random_uuid (),
+    constraint proc_map_history_pkey primary key (uuid),
+    constraint proc_map_history_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
+) tablespace pg_default;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_map_history' AND column_name='value') THEN
+        ALTER TABLE public.proc_map_history ADD COLUMN value jsonb not null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_map_history' AND column_name='created_at') THEN
+        ALTER TABLE public.proc_map_history ADD COLUMN created_at timestamp with time zone not null default now();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_map_history' AND column_name='tenant_id') THEN
+        ALTER TABLE public.proc_map_history ADD COLUMN tenant_id text null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_map_history' AND column_name='uuid') THEN
+        ALTER TABLE public.proc_map_history ADD COLUMN uuid uuid not null default gen_random_uuid ();
+    END IF;
+END;
+$$;
+
+ALTER TABLE proc_map_history ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY proc_map_history_insert_policy
+    ON proc_map_history
+    FOR INSERT
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY proc_map_history_select_policy
+    ON proc_map_history
+    FOR SELECT
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY proc_map_history_update_policy
+    ON proc_map_history
+    FOR UPDATE
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY proc_map_history_delete_policy
+    ON proc_map_history
+    FOR DELETE
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+create or replace function public.save_previous_proc_map()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF OLD.key = 'proc_map' THEN
+        INSERT INTO public.proc_map_history(value, created_at)
+        VALUES (OLD.value, now());
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+create or replace trigger trigger_save_previous_proc_map
+BEFORE UPDATE ON configuration
+FOR EACH ROW
+WHEN (OLD.key = 'proc_map' AND NEW.value IS DISTINCT FROM OLD.value)
+EXECUTE PROCEDURE public.save_previous_proc_map();
+
+
+
+create table if not exists public.proc_def (
+    id text not null,
+    name text null,
+    definition jsonb null,
+    bpmn text null,
+    uuid uuid not null default gen_random_uuid (),
+    tenant_id text null default auth.tenant_id (),
+    constraint proc_def_pkey primary key (uuid),
+    constraint proc_def_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
+) tablespace pg_default;
 
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def' AND column_name='id') THEN
-        ALTER TABLE proc_def ADD COLUMN id text primary key;
+        ALTER TABLE public.proc_def ADD COLUMN id text not null;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def' AND column_name='name') THEN
-        ALTER TABLE proc_def ADD COLUMN name text;
+        ALTER TABLE public.proc_def ADD COLUMN name text null;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def' AND column_name='definition') THEN
-        ALTER TABLE proc_def ADD COLUMN definition jsonb;
+        ALTER TABLE public.proc_def ADD COLUMN definition jsonb null;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def' AND column_name='bpmn') THEN
-        ALTER TABLE proc_def ADD COLUMN bpmn text;
+        ALTER TABLE public.proc_def ADD COLUMN bpmn text null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def' AND column_name='uuid') THEN
+        ALTER TABLE public.proc_def ADD COLUMN uuid uuid not null default gen_random_uuid ();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def' AND column_name='tenant_id') THEN
+        ALTER TABLE public.proc_def ADD COLUMN tenant_id text null default auth.tenant_id ();
     END IF;
 END;
 $$;
 
 ALTER TABLE proc_def ENABLE ROW LEVEL SECURITY;
 
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_policies
-        WHERE policyname = 'Enable insert for authenticated users only'
-        AND tablename = 'proc_def'
-    ) THEN
-        CREATE POLICY "Enable insert for authenticated users only" ON "public"."proc_def"
-        AS PERMISSIVE FOR INSERT
-        TO authenticated
-        WITH CHECK ((EXISTS ( SELECT 1 FROM users WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
-    END IF;
+CREATE POLICY proc_def_insert_policy
+    ON proc_def
+    FOR INSERT
+    TO authenticated
+    USING ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
+   FROM users
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
 
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_policies
-        WHERE policyname = 'Enable read access for all users'
-        AND tablename = 'proc_def'
-    ) THEN
-        CREATE POLICY "Enable read access for all users" ON "public"."proc_def"
-        AS PERMISSIVE FOR SELECT
-        TO public
-        USING (true);
-    END IF;
-END;
-$$;
+CREATE POLICY proc_def_select_policy
+    ON proc_def
+    FOR SELECT        
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
 
-create table if not exists public.proc_inst (
-    id text not null,
-    name text null,
-    user_ids text[] null,
-    agent_messages jsonb null,
-    status text null,
-    variables_data text null,
-    proc_def_id text null,
-    constraint proc_inst_pkey primary key (id)
-) tablespace pg_default;
+CREATE POLICY proc_def_update_policy
+    ON proc_def
+    FOR UPDATE
+    TO authenticated
+    USING ((tenant_id = auth.tenant_id()) AND (EXISTS ( SELECT 1
+   FROM users
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
 
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_inst' AND column_name='id') THEN
-        ALTER TABLE public.proc_inst ADD COLUMN id text;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_inst' AND column_name='name') THEN
-        ALTER TABLE public.proc_inst ADD COLUMN name text null;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_inst' AND column_name='user_ids') THEN
-        ALTER TABLE public.proc_inst ADD COLUMN user_ids text[] null;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_inst' AND column_name='agent_messages') THEN
-        ALTER TABLE public.proc_inst ADD COLUMN agent_messages jsonb null;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_inst' AND column_name='status') THEN
-        ALTER TABLE public.proc_inst ADD COLUMN status text null;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_inst' AND column_name='variables_data') THEN
-        ALTER TABLE public.proc_inst ADD COLUMN variables_data text null;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_inst' AND column_name='proc_def_id') THEN
-        ALTER TABLE public.proc_inst ADD COLUMN proc_def_id text null;
-    END IF;
-END;
-$$;
+CREATE POLICY proc_def_delete_policy
+    ON proc_def
+    FOR DELETE
+    TO authenticated
+    USING ((tenant_id = auth.tenant_id()) AND (EXISTS ( SELECT 1
+   FROM users
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
 
-create table if not exists public.chats (
-    uuid text not null,
-    id text not null,
-    messages jsonb null,
-    constraint chats_pkey primary key (uuid)
-) tablespace pg_default;
 
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chats' AND column_name='uuid') THEN
-        ALTER TABLE public.chats ADD COLUMN uuid text;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chats' AND column_name='id') THEN
-        ALTER TABLE public.chats ADD COLUMN id text;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chats' AND column_name='messages') THEN
-        ALTER TABLE public.chats ADD COLUMN messages jsonb null;
-    END IF;
-END;
-$$;
-
-create table if not exists public.calendar (
-  uid text not null,
-  data jsonb null,
-  constraint calendar_pkey primary key (uid)
-) tablespace pg_default;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='calendar' AND column_name='uid') THEN
-        ALTER TABLE public.calendar ADD COLUMN uid text;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='calendar' AND column_name='data') THEN
-        ALTER TABLE public.calendar ADD COLUMN data jsonb null;
-    END IF;
-END;
-$$;
-
-create table if not exists public.chat_rooms (
-  id text not null,
-  participants jsonb not null,
-  message jsonb null,
-  name text null,
-  constraint chat_rooms_pkey primary key (id)
-) tablespace pg_default;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chat_rooms' AND column_name='id') THEN
-        ALTER TABLE public.chat_rooms ADD COLUMN id text;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chat_rooms' AND column_name='participants') THEN
-        ALTER TABLE public.chat_rooms ADD COLUMN participants jsonb;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chat_rooms' AND column_name='message') THEN
-        ALTER TABLE public.chat_rooms ADD COLUMN message jsonb null;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chat_rooms' AND column_name='name') THEN
-        ALTER TABLE public.chat_rooms ADD COLUMN name text null;
-    END IF;
-END;
-$$;
-
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_views
-        WHERE viewname = 'chat_room_chats'
-        AND schemaname = 'public'
-    ) THEN
-        CREATE VIEW public.chat_room_chats AS
-        SELECT
-            cr.id,
-            cr.name,
-            cr.participants,
-            c.uuid,
-            c.messages
-        FROM
-            chat_rooms cr
-            JOIN chats c ON cr.id = c.id;
-    END IF;
-
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_views
-        WHERE viewname = 'worklist'
-        AND schemaname = 'public'
-    ) THEN
-        CREATE VIEW public.worklist AS
-        SELECT
-            t.*,
-            p.name AS proc_inst_name
-        FROM
-            todolist t
-            JOIN public.proc_inst p ON t.proc_inst_id = p.id;
-    END IF;
-END;
-$$;
 
 create table if not exists public.proc_def_arcv (
     arcv_id text not null,
@@ -356,25 +352,28 @@ create table if not exists public.proc_def_arcv (
     "timeStamp" timestamp without time zone null default current_timestamp,
     diff text null,
     message text null,
-    constraint proc_def_arcv_pkey primary key (arcv_id)
+    uuid uuid not null default gen_random_uuid (),
+    tenant_id text null,
+    constraint proc_def_arcv_pkey primary key (uuid),
+    constraint proc_def_arcv_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
 ) tablespace pg_default;
 
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='arcv_id') THEN
-        ALTER TABLE public.proc_def_arcv ADD COLUMN arcv_id text;
+        ALTER TABLE public.proc_def_arcv ADD COLUMN arcv_id text not null;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='proc_def_id') THEN
-        ALTER TABLE public.proc_def_arcv ADD COLUMN proc_def_id text;
+        ALTER TABLE public.proc_def_arcv ADD COLUMN proc_def_id text not null;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='version') THEN
-        ALTER TABLE public.proc_def_arcv ADD COLUMN version text;
+        ALTER TABLE public.proc_def_arcv ADD COLUMN version text not null;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='snapshot') THEN
         ALTER TABLE public.proc_def_arcv ADD COLUMN snapshot text null;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='timeStamp') THEN
-        ALTER TABLE public.proc_def_arcv ADD COLUMN "timeStamp" timestamp without time zone null default current_timestamp;
+        ALTER TABLE public.proc_def_arcv ADD COLUMN timeStamp timestamp without time zone null default current_timestamp;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='diff') THEN
         ALTER TABLE public.proc_def_arcv ADD COLUMN diff text null;
@@ -382,89 +381,412 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='message') THEN
         ALTER TABLE public.proc_def_arcv ADD COLUMN message text null;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='uuid') THEN
+        ALTER TABLE public.proc_def_arcv ADD COLUMN uuid uuid not null default gen_random_uuid ();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='tenant_id') THEN
+        ALTER TABLE public.proc_def_arcv ADD COLUMN tenant_id text null;
+    END IF;
 END;
 $$;
+
+ALTER TABLE proc_def_arcv ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY proc_def_arcv_insert_policy
+    ON proc_def_arcv
+    FOR INSERT
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY proc_def_arcv_select_policy
+    ON proc_def_arcv
+    FOR SELECT
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY proc_def_arcv_update_policy
+    ON proc_def_arcv
+    FOR UPDATE
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());;
+
+CREATE POLICY proc_def_arcv_delete_policy
+    ON proc_def_arcv
+    FOR DELETE
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+
+
+create table if not exists public.form_def (
+    uuid uuid not null default gen_random_uuid (),
+    html text not null,
+    proc_def_id text not null,
+    activity_id text not null,
+    tenant_id text null default auth.tenant_id (),
+    id text null default ''::text,
+    constraint form_def_pkey primary key (uuid),
+    constraint form_def_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
+) tablespace pg_default;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='uuid') THEN
+        ALTER TABLE public.form_def ADD COLUMN uuid uuid not null default gen_random_uuid ();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='html') THEN
+        ALTER TABLE public.form_def ADD COLUMN html text not null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='proc_def_id') THEN
+        ALTER TABLE public.form_def ADD COLUMN proc_def_id text not null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='activity_id') THEN
+        ALTER TABLE public.form_def ADD COLUMN activity_id text not null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='tenant_id') THEN
+        ALTER TABLE public.form_def ADD COLUMN tenant_id text null default auth.tenant_id();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='id') THEN
+        ALTER TABLE public.form_def ADD COLUMN id text null default ''::text;
+    END IF;
+END;
+$$;
+
+ALTER TABLE form_def ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY form_def_insert_policy
+    ON form_def
+    FOR INSERT
+    TO authenticated
+    USING (EXISTS ( SELECT 1
+   FROM users
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true))));
+
+CREATE POLICY form_def_select_policy
+    ON form_def
+    FOR SELECT
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY form_def_update_policy
+    ON form_def
+    FOR UPDATE
+    TO authenticated
+    USING (EXISTS ( SELECT 1
+   FROM users
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true))));
+
+CREATE POLICY form_def_delete_policy
+    ON form_def
+    FOR DELETE
+    TO authenticated
+    USING (EXISTS ( SELECT 1
+   FROM users
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true))));
+
+
+
+create table if not exists public.notifications (
+    id uuid not null,
+    title text null,
+    type text null,
+    description text null,
+    is_checked boolean null default false,
+    time_stamp timestamp with time zone null default now(),
+    user_id text null,
+    url text null,
+    tenant_id text null default auth.tenant_id (),
+    constraint notifications_pkey primary key (id),
+    constraint notifications_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
+) tablespace pg_default;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='id') THEN
+        ALTER TABLE public.notifications ADD COLUMN id uuid not null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='title') THEN
+        ALTER TABLE public.notifications ADD COLUMN title text null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='type') THEN
+        ALTER TABLE public.notifications ADD COLUMN type text null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='description') THEN
+        ALTER TABLE public.notifications ADD COLUMN description text null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='is_checked') THEN
+        ALTER TABLE public.notifications ADD COLUMN is_checked boolean null default false;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='time_stamp') THEN
+        ALTER TABLE public.notifications ADD COLUMN time_stamp timestamp with time zone null default now();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='user_id') THEN
+        ALTER TABLE public.notifications ADD COLUMN user_id text null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='url') THEN
+        ALTER TABLE public.notifications ADD COLUMN url text null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='tenant_id') THEN
+        ALTER TABLE public.notifications ADD COLUMN tenant_id text null default auth.tenant_id();
+    END IF;
+END;
+$$;
+
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY notifications_insert_policy
+    ON notifications
+    FOR INSERT
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY notifications_select_policy
+    ON notifications
+    FOR SELECT
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY notifications_update_policy
+    ON notifications
+    FOR UPDATE
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY notifications_delete_policy
+    ON notifications
+    FOR DELETE
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+
 
 create table if not exists public.lock (
     id text not null,
     user_id text null,
-    constraint lock_pkey primary key (id)
+    tenant_id text null default auth.tenant_id (),
+    uuid uuid not null default gen_random_uuid (),
+    constraint lock_pkey primary key (uuid),
+    constraint lock_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
 ) tablespace pg_default;
 
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='lock' AND column_name='id') THEN
-        ALTER TABLE public.lock ADD COLUMN id text;
+        ALTER TABLE public.lock ADD COLUMN id text not null;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='lock' AND column_name='user_id') THEN
         ALTER TABLE public.lock ADD COLUMN user_id text null;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='lock' AND column_name='tenant_id') THEN
+        ALTER TABLE public.lock ADD COLUMN tenant_id text null default auth.tenant_id();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='lock' AND column_name='uuid') THEN
+        ALTER TABLE public.lock ADD COLUMN uuid uuid not null default gen_random_uuid();
+    END IF;
 END;
 $$;
 
-create table if not exists form_def (
-  id text primary key,
-  html text not null,
-  proc_def_id text not null,
-  activity_id text not null
+ALTER TABLE lock ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY lock_insert_policy
+    ON lock
+    FOR INSERT
+    TO authenticated
+    USING (EXISTS ( SELECT 1
+   FROM users
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true))));
+
+CREATE POLICY lock_select_policy
+    ON lock
+    FOR SELECT
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY lock_update_policy
+    ON lock
+    FOR UPDATE
+    TO authenticated
+    USING (EXISTS ( SELECT 1
+   FROM users
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true))));
+
+CREATE POLICY lock_delete_policy
+    ON lock
+    FOR DELETE
+    TO authenticated
+    USING (EXISTS ( SELECT 1
+   FROM users
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true))));
+
+
+
+create table if not exists public.bpm_proc_inst (
+    proc_def_id text null,
+    proc_inst_id text not null,
+    proc_inst_name text null,
+    current_activity_ids text[] null,
+    current_user_ids text[] null,
+    role_bindings jsonb null,
+    variables_data jsonb null,
+    status text null,
+    tenant_id text null default auth.tenant_id (),
+    constraint bpm_proc_inst_pkey primary key (proc_inst_id),
+    constraint bpm_proc_inst_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
 ) tablespace pg_default;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='id') THEN
-        ALTER TABLE form_def ADD COLUMN id text;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bpm_proc_inst' AND column_name='proc_def_id') THEN
+        ALTER TABLE public.bpm_proc_inst ADD COLUMN proc_def_id text null;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='html') THEN
-        ALTER TABLE form_def ADD COLUMN html text;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bpm_proc_inst' AND column_name='proc_inst_id') THEN
+        ALTER TABLE public.bpm_proc_inst ADD COLUMN proc_inst_id text not null;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='proc_def_id') THEN
-        ALTER TABLE form_def ADD COLUMN proc_def_id text;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bpm_proc_inst' AND column_name='proc_inst_name') THEN
+        ALTER TABLE public.bpm_proc_inst ADD COLUMN proc_inst_name text null;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='activity_id') THEN
-        ALTER TABLE form_def ADD COLUMN activity_id text;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bpm_proc_inst' AND column_name='current_activity_ids') THEN
+        ALTER TABLE public.bpm_proc_inst ADD COLUMN current_activity_ids text[] null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bpm_proc_inst' AND column_name='current_user_ids') THEN
+        ALTER TABLE public.bpm_proc_inst ADD COLUMN current_user_ids text[] null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bpm_proc_inst' AND column_name='role_bindings') THEN
+        ALTER TABLE public.bpm_proc_inst ADD COLUMN role_bindings jsonb null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bpm_proc_inst' AND column_name='variables_data') THEN
+        ALTER TABLE public.bpm_proc_inst ADD COLUMN variables_data jsonb null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bpm_proc_inst' AND column_name='status') THEN
+        ALTER TABLE public.bpm_proc_inst ADD COLUMN status text null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bpm_proc_inst' AND column_name='tenant_id') THEN
+        ALTER TABLE public.bpm_proc_inst ADD COLUMN tenant_id text null default auth.tenant_id();
     END IF;
 END;
 $$;
 
-create table if not exists notifications (
-  id text primary key,
-  user_id text,
-  title text,
-  type text,
-  description text,
-  is_checked boolean null default false,
-  time_stamp timestamp with time zone null default now(),
-  url text
-);
+ALTER TABLE bpm_proc_inst ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY bpm_proc_inst_insert_policy
+    ON bpm_proc_inst
+    FOR INSERT
+    TO authenticated
+    USING ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
+   FROM users
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
+
+CREATE POLICY bpm_proc_inst_select_policy
+    ON bpm_proc_inst  
+    FOR SELECT
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY bpm_proc_inst_update_policy
+    ON bpm_proc_inst
+    FOR UPDATE
+    TO authenticated
+    USING ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
+   FROM users
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
+
+CREATE POLICY bpm_proc_inst_delete_policy
+    ON bpm_proc_inst
+    FOR DELETE
+    TO authenticated
+    USING ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
+   FROM users
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
+
+
+
+create table if not exists public.todolist (
+    id uuid not null,
+    user_id text null,
+    proc_inst_id text null,
+    proc_def_id text null,
+    activity_id text null,
+    activity_name text null,
+    start_date timestamp without time zone null,
+    end_date timestamp without time zone null,
+    status text null,
+    description text null,
+    tool text null,
+    due_date timestamp without time zone null,
+    tenant_id text null default auth.tenant_id (),
+    constraint todolist_pkey primary key (id),
+    constraint todolist_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
+) tablespace pg_default;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='id') THEN
-        ALTER TABLE notifications ADD COLUMN id text primary key;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='id') THEN
+        ALTER TABLE public.todolist ADD COLUMN id uuid not null;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='user_id') THEN
-        ALTER TABLE notifications ADD COLUMN user_id text;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='user_id') THEN
+        ALTER TABLE public.todolist ADD COLUMN user_id text null;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='title') THEN
-        ALTER TABLE notifications ADD COLUMN title text;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='proc_inst_id') THEN
+        ALTER TABLE public.todolist ADD COLUMN proc_inst_id text null;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='type') THEN
-        ALTER TABLE notifications ADD COLUMN type text;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='proc_def_id') THEN
+        ALTER TABLE public.todolist ADD COLUMN proc_def_id text null;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='description') THEN
-        ALTER TABLE notifications ADD COLUMN description text;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='activity_id') THEN
+        ALTER TABLE public.todolist ADD COLUMN activity_id text null;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='is_checked') THEN
-        ALTER TABLE notifications ADD COLUMN is_checked boolean null default false;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='activity_name') THEN
+        ALTER TABLE public.todolist ADD COLUMN activity_name text null;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='time_stamp') THEN
-        ALTER TABLE notifications ADD COLUMN time_stamp timestamp with time zone null default now();
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='start_date') THEN
+        ALTER TABLE public.todolist ADD COLUMN start_date timestamp without time zone null;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='notifications' AND column_name='url') THEN
-        ALTER TABLE notifications ADD COLUMN url text;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='end_date') THEN
+        ALTER TABLE public.todolist ADD COLUMN end_date timestamp without time zone null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='status') THEN
+        ALTER TABLE public.todolist ADD COLUMN status text null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='description') THEN
+        ALTER TABLE public.todolist ADD COLUMN description text null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='tool') THEN
+        ALTER TABLE public.todolist ADD COLUMN tool text null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='due_date') THEN
+        ALTER TABLE public.todolist ADD COLUMN due_date timestamp without time zone null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='tenant_id') THEN
+        ALTER TABLE public.todolist ADD COLUMN tenant_id text null default auth.tenant_id();
     END IF;
 END;
 $$;
+    
+ALTER TABLE todolist ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY todolist_insert_policy
+    ON todolist
+    FOR INSERT
+    TO authenticated
+    USING (auth.tenant_id() = tenant_id);
+
+CREATE POLICY todolist_select_policy
+    ON todolist
+    FOR SELECT
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY todolist_update_policy
+    ON todolist
+    FOR UPDATE
+    TO authenticated
+    USING (auth.tenant_id() = tenant_id);
+
+CREATE POLICY todolist_delete_policy
+    ON todolist
+    FOR DELETE
+    TO authenticated
+    USING (auth.tenant_id() = tenant_id);
 
 create or replace function handle_todolist_change()
 returns trigger as $$
@@ -503,6 +825,118 @@ create or replace trigger todolist_change_trigger
 after insert on todolist
 for each row
 execute function handle_todolist_change();
+
+
+
+create table if not exists public.chat_rooms (
+    id text not null,
+    participants jsonb not null,
+    message jsonb null,
+    name text null,
+    tenant_id text null default auth.tenant_id (),
+    constraint chat_rooms_pkey primary key (id),
+    constraint chat_rooms_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
+) tablespace pg_default;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chat_rooms' AND column_name='id') THEN
+        ALTER TABLE public.chat_rooms ADD COLUMN id text not null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chat_rooms' AND column_name='participants') THEN
+        ALTER TABLE public.chat_rooms ADD COLUMN participants jsonb not null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chat_rooms' AND column_name='message') THEN
+        ALTER TABLE public.chat_rooms ADD COLUMN message jsonb null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chat_rooms' AND column_name='name') THEN
+        ALTER TABLE public.chat_rooms ADD COLUMN name text null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chat_rooms' AND column_name='tenant_id') THEN
+        ALTER TABLE public.chat_rooms ADD COLUMN tenant_id text null default auth.tenant_id();
+    END IF;
+END;
+$$;
+
+ALTER TABLE chat_rooms ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY chat_rooms_insert_policy
+    ON chat_rooms
+    FOR INSERT
+    TO authenticated 
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY chat_rooms_select_policy
+    ON chat_rooms
+    FOR SELECT
+    TO authenticated 
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY chat_rooms_update_policy
+    ON chat_rooms
+    FOR UPDATE
+    TO authenticated 
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY chat_rooms_delete_policy
+    ON chat_rooms
+    FOR DELETE
+    TO authenticated 
+    USING (tenant_id = auth.tenant_id());
+
+
+
+create table if not exists public.chats (
+    uuid text not null,
+    id text not null,
+    messages jsonb null,
+    tenant_id text null default auth.tenant_id (),
+    constraint chats_pkey primary key (uuid),
+    constraint chats_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
+) tablespace pg_default;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chats' AND column_name='uuid') THEN
+        ALTER TABLE public.chats ADD COLUMN uuid text not null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chats' AND column_name='id') THEN
+        ALTER TABLE public.chats ADD COLUMN id text not null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chats' AND column_name='messages') THEN
+        ALTER TABLE public.chats ADD COLUMN messages jsonb null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chats' AND column_name='tenant_id') THEN
+        ALTER TABLE public.chats ADD COLUMN tenant_id text null default auth.tenant_id();
+    END IF;
+END;
+$$;
+
+ALTER TABLE chats ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY chats_insert_policy
+    ON chats
+    FOR INSERT
+    TO authenticated 
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY chats_select_policy
+    ON chats
+    FOR SELECT
+    TO authenticated 
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY chats_update_policy
+    ON chats
+    FOR UPDATE
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY chats_delete_policy
+    ON chats
+    FOR DELETE
+    TO authenticated 
+    USING (tenant_id = auth.tenant_id());
 
 create or replace function handle_chat_insert()
 returns trigger as $$
@@ -554,3 +988,42 @@ create or replace trigger chat_insert_trigger
 after insert on public.chats
 for each row
 execute function handle_chat_insert();
+
+
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_views
+        WHERE viewname = 'chat_room_chats'
+        AND schemaname = 'public'
+    ) THEN
+        CREATE VIEW public.chat_room_chats AS
+        SELECT
+            cr.id,
+            cr.name,
+            cr.participants,
+            c.uuid,
+            c.messages
+        FROM
+            chat_rooms cr
+            JOIN chats c ON cr.id = c.id;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_views
+        WHERE viewname = 'worklist'
+        AND schemaname = 'public'
+    ) THEN
+        CREATE VIEW public.worklist AS
+        SELECT
+            t.*,
+            p.name AS proc_inst_name
+        FROM
+            todolist t
+            JOIN public.proc_inst p ON t.proc_inst_id = p.id;
+    END IF;
+END;
+$$;

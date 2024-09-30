@@ -87,6 +87,17 @@ async def update_db_settings(subdomain):
     except Exception as e:
         print(f"An error occurred: {e}")
 
+def db_client_signin(user_info: dict):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.auth.sign_in_with_password({ "email": user_info.get('email'), "password": user_info.get('password') })
+        supabase.auth.set_session(response.session.access_token, response.session.refresh_token)
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while signing in: {e}")
 
 def execute_sql(sql_query):
     """
@@ -291,8 +302,10 @@ class ProcessInstance(BaseModel):
     role_bindings: Optional[List[Dict[str, str]]] = []
     current_activity_ids: List[str] = []
     current_user_ids: List[str] = []
+    variables_data: Dict[str, Any] = {}
     process_definition: ProcessDefinition = None  # Add a reference to ProcessDefinition
-
+    status: str = None
+    
     class Config:
         extra = "allow"
 
@@ -313,13 +326,6 @@ class ProcessInstance(BaseModel):
             variable_name = variable.name
             variable_map[variable_name] = getattr(self, variable_name, None)
         return variable_map
-
-class InstanceItem(BaseModel):
-    id: str
-    name: Optional[str] = None
-    status: Optional[str] = None
-    variables_data: Optional[str] = None
-    user_ids: Optional[List[str]] = None
     
 class WorkItem(BaseModel):
     id: str
@@ -376,7 +382,7 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
     if supabase is None:
         raise Exception("Supabase client is not configured for this request")
     
-    response = supabase.table(process_name).select("*").eq('proc_inst_id', full_id).execute()
+    response = supabase.table('bpm_proc_inst').select("*").eq('proc_inst_id', full_id).execute()
     
     if response.data:
         process_instance_data = response.data[0]
@@ -398,31 +404,21 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
     process_instance_data = process_instance.dict(exclude={'process_definition'})  # Convert Pydantic model to dict
     process_instance_data = convert_decimal(process_instance_data)
 
-    try:
-        # Fetch existing columns from the table
-        existing_columns = fetch_table_columns(process_name.lower())
-
-        # Filter out non-existing columns
-        filtered_data = {key.lower(): value for key, value in process_instance_data.items() if key.lower() in existing_columns}
-        
-        keys_to_exclude = {'proc_inst_id', 'proc_inst_name', 'role_bindings', 'current_activity_ids', 'current_user_ids'}
-        variables_data = {key: value for key, value in filtered_data.items() if key not in keys_to_exclude}
-        variables_data_json = json.dumps(variables_data, ensure_ascii=False)
-
+    try:        
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        supabase.table('proc_inst').upsert({
-            'id': process_instance.proc_inst_id,
-            'name': process_instance.proc_inst_name,
-            'user_ids': process_instance.current_user_ids,
+        response = supabase.table('bpm_proc_inst').upsert({
+            'proc_inst_id': process_instance.proc_inst_id,
+            'proc_inst_name': process_instance.proc_inst_name,
+            'current_activity_ids': process_instance.current_activity_ids,
+            'current_user_ids': process_instance.current_user_ids,
+            'role_bindings': process_instance.role_bindings,
+            'variables_data': process_instance.variables_data,
             'status': status,
-            'variables_data': variables_data_json,
             'proc_def_id': process_instance.get_def_id()
         }).execute()
-        # Upsert the filtered data into the table
-        response = supabase.table(process_name.lower()).upsert(filtered_data).execute()
         success = bool(response.data)
         return success, process_instance
     except Exception as e:
@@ -474,14 +470,14 @@ def fetch_organization_chart():
     else:
         return None
 
-def fetch_process_instance_list(user_id: str) -> Optional[List[InstanceItem]]:
+def fetch_process_instance_list(user_id: str) -> Optional[List[ProcessInstance]]:
     supabase = supabase_client_var.get()
     if supabase is None:
         raise Exception("Supabase client is not configured for this request")
     
-    response = supabase.table('proc_inst').select("*").filter('user_ids', 'cs', '{' + user_id + '}').execute()
+    response = supabase.table('bpm_proc_inst').select("*").filter('current_user_ids', 'cs', '{' + user_id + '}').execute()
     if response.data:
-        return [InstanceItem(**item) for item in response.data]
+        return [ProcessInstance(**item) for item in response.data]
     else:
         return None
 
@@ -731,8 +727,16 @@ def parse_token(request: Request) -> Dict[str, str]:
         return None
 
 def fetch_user_info(email: str) -> Dict[str, str]:
-    supabase = supabase_client_var.get()
-    if supabase is None:
-        raise Exception("Supabase client is not configured for this request")
-    response = supabase.table("users").select("*").eq('email', email).execute()
-    return response.data[0]
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table("users").select("*").eq('email', email).execute()
+        
+        if response.data:
+            return response.data[0]
+        else:
+            raise HTTPException(status_code=404, detail="User not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

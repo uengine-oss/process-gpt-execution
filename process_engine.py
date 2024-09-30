@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableLambda
 from datetime import datetime
 
 
-from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token, upsert_chat_message, fetch_ui_definition_by_activity_id, fetch_chat_history, upsert_todo_workitems
+from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token, upsert_chat_message, fetch_ui_definition_by_activity_id, fetch_chat_history, upsert_todo_workitems, fetch_user_info
 from database import ProcessInstance
 import uuid
 import json
@@ -192,10 +192,11 @@ def execute_next_activity(process_result_json: dict) -> str:
     try:
         process_result = ProcessResult(**process_result_json)
         process_instance = None
-
+        status = ""
         if not fetch_process_instance(process_result.instanceId):
             if process_result.instanceId == "new" or '.' not in process_result.instanceId:
                 instance_id = f"{process_result.processDefinitionId.lower()}.{str(uuid.uuid4())}"
+                status = "RUNNING"
             else:
                 instance_id = process_result.instanceId
             process_instance = ProcessInstance(
@@ -203,21 +204,27 @@ def execute_next_activity(process_result_json: dict) -> str:
                 proc_inst_name=f"{process_result.instanceName}",
                 role_bindings=[rb.model_dump() for rb in (process_result.roleBindingChanges or [])],
                 current_activity_ids=[],
-                current_user_ids=[]
+                current_user_ids=[],
+                variables_data={},
+                status=status
             )
         else:
             process_instance = fetch_process_instance(process_result.instanceId)
         
         process_definition = process_instance.process_definition
 
-        for data_change in process_result.dataChanges or []:
-            setattr(process_instance, data_change.key, data_change.value)
+        if process_result.dataChanges:
+            for data_change in process_result.dataChanges:
+                process_instance.variables_data[data_change.key] = data_change.value
+        # for data_change in process_result.dataChanges or []:
+        #     setattr(process_instance, data_change.key, data_change.value)
             
         all_user_emails = set()
         if process_result.nextActivities:
             for activity in process_result.nextActivities:
                 if activity.result == "IN_PROGRESS":
                     process_instance.current_activity_ids = [activity.nextActivityId]
+                    process_instance.status = "RUNNING"
             if not process_instance.current_activity_ids:
                 process_instance.current_activity_ids.append(process_result.nextActivities[0].nextActivityId)
             all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
@@ -429,7 +436,8 @@ async def combine_input_with_token(request: Request):
     
     token_data = parse_token(request)
     if token_data:
-        input['userInfo'] = token_data
+        user_info = fetch_user_info(token_data.get('email'))
+        input['userInfo'] = user_info
     elif input.get('userInfo'):
         input['userInfo'] = input.get('userInfo')
         
