@@ -130,19 +130,19 @@ CREATE POLICY users_select_policy
     ON users
     FOR SELECT
     TO public
-    USING (auth.tenant_id() = current_tenant);
+    USING (auth.tenant_id() = current_tenant OR auth.uid() = id);
 
 CREATE POLICY users_update_policy
     ON users
     FOR UPDATE
     TO authenticated
-    USING (auth.uid() = id);
+    USING (auth.tenant_id() = current_tenant);
 
 CREATE POLICY users_delete_policy
     ON users
     FOR DELETE
     TO authenticated
-    USING (auth.uid() = id);
+    USING (auth.tenant_id() = current_tenant);
 
 
 
@@ -991,6 +991,55 @@ execute function handle_chat_insert();
 
 
 
+create table if not exists public.calendar (
+    uid text not null,
+    data jsonb null,
+    tenant_id text null default auth.tenant_id (),
+    constraint calendar_pkey primary key (uid)
+) tablespace pg_default;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='calendar' AND column_name='uid') THEN
+        ALTER TABLE public.calendar ADD COLUMN uid text not null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='calendar' AND column_name='data') THEN
+        ALTER TABLE public.calendar ADD COLUMN data jsonb null;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='calendar' AND column_name='tenant_id') THEN
+        ALTER TABLE public.calendar ADD COLUMN tenant_id text null default auth.tenant_id();
+    END IF;
+END;
+$$;
+
+ALTER TABLE calendar ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY calendar_insert_policy
+    ON calendar
+    FOR INSERT  
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY calendar_select_policy
+    ON calendar
+    FOR SELECT
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY calendar_update_policy
+    ON calendar
+    FOR UPDATE
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+CREATE POLICY calendar_delete_policy
+    ON calendar
+    FOR DELETE
+    TO authenticated
+    USING (tenant_id = auth.tenant_id());
+
+
+
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -1018,12 +1067,13 @@ BEGIN
         AND schemaname = 'public'
     ) THEN
         CREATE VIEW public.worklist AS
-        SELECT
-            t.*,
-            p.name AS proc_inst_name
-        FROM
-            todolist t
-            JOIN public.proc_inst p ON t.proc_inst_id = p.id;
+            SELECT
+                t.*,
+                p.proc_inst_name AS proc_inst_name,
+                p.current_user_ids AS current_user_ids
+            FROM
+                todolist t
+                JOIN public.bpm_proc_inst p ON t.proc_inst_id = p.proc_inst_id;
     END IF;
 END;
 $$;
