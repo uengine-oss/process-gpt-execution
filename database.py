@@ -58,20 +58,30 @@ async def update_db_settings(subdomain):
     try:
         if subdomain and "localhost" not in subdomain:
             supabase: Client = create_client('https://qivmgbtrzgnjcpyynpam.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpdm1nYnRyemduamNweXlucGFtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcxNTU4ODc3NSwiZXhwIjoyMDMxMTY0Nzc1fQ.z8LIo50hs1gWcerWxx1dhjri-DMoDw9z0luba_Ap4cI')
-            response = supabase.table("tenant_def").select("*").eq('id', subdomain).execute()
+            supabase_client_var.set(supabase)
+            db_config = {
+                'dbname': 'postgres',
+                'user': 'postgres.qivmgbtrzgnjcpyynpam',
+                'password': 'rl3d3s6BZrxHvi6F',
+                'host': 'aws-0-ap-northeast-2.pooler.supabase.com',
+                'port': '6543'
+            }
+            db_config_var.set(db_config)
+       
+            # response = supabase.table("tenant_def").select("*").eq('id', subdomain).execute()
 
-            if response.data:
-                data = response.data[0]
-                supabase: Client = create_client(data['url'], data['secret'])
-                supabase_client_var.set(supabase)
-                db_config = {
-                    'dbname': data['dbname'],
-                    'user': data['user'],
-                    'password': data['pw'],
-                    'host': data['host'],
-                    'port': data['port']
-                }
-                db_config_var.set(db_config)
+            # if response.data:
+            #     data = response.data[0]
+            #     supabase: Client = create_client(data['url'], data['secret'])
+            #     supabase_client_var.set(supabase)
+            #     db_config = {
+            #         'dbname': data['dbname'],
+            #         'user': data['user'],
+            #         'password': data['pw'],
+            #         'host': data['host'],
+            #         'port': data['port']
+            #     }
+            #     db_config_var.set(db_config)
         else:
             supabase: Client = create_client('http://127.0.0.1:54321', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0')
             supabase_client_var.set(supabase)

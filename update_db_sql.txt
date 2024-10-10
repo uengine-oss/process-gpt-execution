@@ -21,7 +21,7 @@ CREATE POLICY tenants_insert_policy
     ON tenants
     FOR INSERT
     TO authenticated
-    USING (true);
+    WITH CHECK (true);
 
 CREATE POLICY tenants_select_policy
     ON tenants
@@ -124,7 +124,7 @@ CREATE POLICY users_insert_policy
     ON users
     FOR INSERT
     TO authenticated
-    USING (true);
+    WITH CHECK (true);
 
 CREATE POLICY users_select_policy
     ON users
@@ -181,7 +181,7 @@ CREATE POLICY configuration_insert_policy
     ON configuration
     FOR INSERT
     TO authenticated
-    USING (tenant_id = auth.tenant_id());
+    WITH CHECK (tenant_id = auth.tenant_id());
 
 CREATE POLICY configuration_select_policy
     ON configuration
@@ -237,7 +237,7 @@ CREATE POLICY proc_map_history_insert_policy
     ON proc_map_history
     FOR INSERT
     TO authenticated
-    USING (tenant_id = auth.tenant_id());
+    WITH CHECK (tenant_id = auth.tenant_id());
 
 CREATE POLICY proc_map_history_select_policy
     ON proc_map_history
@@ -316,7 +316,7 @@ CREATE POLICY proc_def_insert_policy
     ON proc_def
     FOR INSERT
     TO authenticated
-    USING ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
+    WITH CHECK ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
    FROM users
   WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
 
@@ -396,7 +396,7 @@ CREATE POLICY proc_def_arcv_insert_policy
     ON proc_def_arcv
     FOR INSERT
     TO authenticated
-    USING (tenant_id = auth.tenant_id());
+    WITH CHECK (tenant_id = auth.tenant_id());
 
 CREATE POLICY proc_def_arcv_select_policy
     ON proc_def_arcv
@@ -458,7 +458,7 @@ CREATE POLICY form_def_insert_policy
     ON form_def
     FOR INSERT
     TO authenticated
-    USING (EXISTS ( SELECT 1
+    WITH CHECK (EXISTS ( SELECT 1
    FROM users
   WHERE ((users.id = auth.uid()) AND (users.is_admin = true))));
 
@@ -538,7 +538,7 @@ CREATE POLICY notifications_insert_policy
     ON notifications
     FOR INSERT
     TO authenticated
-    USING (tenant_id = auth.tenant_id());
+    WITH CHECK (tenant_id = auth.tenant_id());
 
 CREATE POLICY notifications_select_policy
     ON notifications
@@ -592,7 +592,7 @@ CREATE POLICY lock_insert_policy
     ON lock
     FOR INSERT
     TO authenticated
-    USING (EXISTS ( SELECT 1
+    WITH CHECK (EXISTS ( SELECT 1
    FROM users
   WHERE ((users.id = auth.uid()) AND (users.is_admin = true))));
 
@@ -672,7 +672,7 @@ CREATE POLICY bpm_proc_inst_insert_policy
     ON bpm_proc_inst
     FOR INSERT
     TO authenticated
-    USING ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
+    WITH CHECK ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
    FROM users
   WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
 
@@ -768,7 +768,7 @@ CREATE POLICY todolist_insert_policy
     ON todolist
     FOR INSERT
     TO authenticated
-    USING (auth.tenant_id() = tenant_id);
+    WITH CHECK (auth.tenant_id() = tenant_id);
 
 CREATE POLICY todolist_select_policy
     ON todolist
@@ -791,10 +791,10 @@ CREATE POLICY todolist_delete_policy
 create or replace function handle_todolist_change()
 returns trigger as $$
 declare
-    proc_inst_name text;
+    v_proc_inst_name text;
 begin
     if (TG_OP = 'INSERT') then
-        select name into proc_inst_name from proc_inst where id = NEW.proc_inst_id;
+        select proc_inst_name into v_proc_inst_name from bpm_proc_inst where proc_inst_id = NEW.proc_inst_id;
         
         insert into notifications (id, user_id, title, type, description, is_checked, time_stamp, url)
         values (
@@ -802,7 +802,7 @@ begin
             NEW.user_id,
             NEW.activity_name,
             'workitem',
-            coalesce(proc_inst_name, ''),
+            coalesce(v_proc_inst_name, ''),
             case when NEW.status = 'DONE' then true else false end,
             now(),
             '/todolist/' || NEW.id
@@ -863,8 +863,8 @@ ALTER TABLE chat_rooms ENABLE ROW LEVEL SECURITY;
 CREATE POLICY chat_rooms_insert_policy
     ON chat_rooms
     FOR INSERT
-    TO authenticated 
-    USING (tenant_id = auth.tenant_id());
+    TO authenticated
+    WITH CHECK (tenant_id = auth.tenant_id());
 
 CREATE POLICY chat_rooms_select_policy
     ON chat_rooms
@@ -917,8 +917,8 @@ ALTER TABLE chats ENABLE ROW LEVEL SECURITY;
 CREATE POLICY chats_insert_policy
     ON chats
     FOR INSERT
-    TO authenticated 
-    USING (tenant_id = auth.tenant_id());
+    TO authenticated
+    WITH CHECK (tenant_id = auth.tenant_id());
 
 CREATE POLICY chats_select_policy
     ON chats
@@ -1016,9 +1016,9 @@ ALTER TABLE calendar ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY calendar_insert_policy
     ON calendar
-    FOR INSERT  
+    FOR INSERT
     TO authenticated
-    USING (tenant_id = auth.tenant_id());
+    WITH CHECK (tenant_id = auth.tenant_id());
 
 CREATE POLICY calendar_select_policy
     ON calendar
