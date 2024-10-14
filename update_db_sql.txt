@@ -135,8 +135,8 @@ CREATE POLICY users_select_policy
 CREATE POLICY users_update_policy
     ON users
     FOR UPDATE
-    TO authenticated
-    USING (auth.tenant_id() = current_tenant);
+    TO public
+    USING ((auth.tenant_id() = current_tenant) OR (auth.uid() = id));
 
 CREATE POLICY users_delete_policy
     ON users
