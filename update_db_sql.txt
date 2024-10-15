@@ -169,9 +169,6 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='configuration' AND column_name='tenant_id') THEN
         ALTER TABLE public.configuration ADD COLUMN tenant_id text null default auth.tenant_id ();
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='configuration' AND column_name='tenant_id') THEN
-        ALTER TABLE public.configuration ADD COLUMN tenant_id text null default auth.tenant_id ();
-    END IF;
 END;
 $$;
 
@@ -223,7 +220,7 @@ BEGIN
         ALTER TABLE public.proc_map_history ADD COLUMN created_at timestamp with time zone not null default now();
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_map_history' AND column_name='tenant_id') THEN
-        ALTER TABLE public.proc_map_history ADD COLUMN tenant_id text null;
+        ALTER TABLE public.proc_map_history ADD COLUMN tenant_id text null default auth.tenant_id();
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_map_history' AND column_name='uuid') THEN
         ALTER TABLE public.proc_map_history ADD COLUMN uuid uuid not null default gen_random_uuid ();
@@ -385,7 +382,7 @@ BEGIN
         ALTER TABLE public.proc_def_arcv ADD COLUMN uuid uuid not null default gen_random_uuid ();
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def_arcv' AND column_name='tenant_id') THEN
-        ALTER TABLE public.proc_def_arcv ADD COLUMN tenant_id text null;
+        ALTER TABLE public.proc_def_arcv ADD COLUMN tenant_id text null default auth.tenant_id();
     END IF;
 END;
 $$;
