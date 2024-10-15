@@ -63,12 +63,16 @@ create table if not exists public.users (
     email text null,
     is_admin boolean not null default false,
     role text null,
-    current_tenant text not null default auth.tenant_id(),
+    current_tenant text null,
+    tenants text[] null,
     constraint users_pkey primary key (id)
 ) tablespace pg_default;
 
 DO $$
 BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='tenants') THEN
+        ALTER TABLE public.users ADD COLUMN tenants text[] null;
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='id') THEN
         ALTER TABLE public.users ADD COLUMN id uuid not null primary key;
     END IF;
@@ -88,7 +92,7 @@ BEGIN
         ALTER TABLE public.users ADD COLUMN role text null;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='current_tenant') THEN
-        ALTER TABLE public.users ADD COLUMN current_tenant text not null default auth.tenant_id();
+        ALTER TABLE public.users ADD COLUMN current_tenant text null;
     END IF;
 END;
 $$;
