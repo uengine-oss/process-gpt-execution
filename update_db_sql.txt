@@ -209,7 +209,7 @@ CREATE POLICY configuration_delete_policy
 create table if not exists public.proc_map_history (
     value jsonb not null,
     created_at timestamp with time zone not null default now(),
-    tenant_id text null,
+    tenant_id text null default auth.tenant_id(),
     uuid uuid not null default gen_random_uuid (),
     constraint proc_map_history_pkey primary key (uuid),
     constraint proc_map_history_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
@@ -354,7 +354,7 @@ create table if not exists public.proc_def_arcv (
     diff text null,
     message text null,
     uuid uuid not null default gen_random_uuid (),
-    tenant_id text null,
+    tenant_id text null default auth.tenant_id(),
     constraint proc_def_arcv_pkey primary key (uuid),
     constraint proc_def_arcv_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
 ) tablespace pg_default;
