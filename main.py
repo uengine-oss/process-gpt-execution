@@ -38,7 +38,7 @@ app.add_middleware(
 )
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from database import update_db_settings, update_db, db_client_signin
+from database import update_db_settings, update_db
 
 class DBConfigMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
