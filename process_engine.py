@@ -225,6 +225,9 @@ def execute_next_activity(process_result_json: dict) -> str:
                 if activity.result == "IN_PROGRESS":
                     process_instance.current_activity_ids = [activity.nextActivityId]
                     process_instance.status = "RUNNING"
+                if activity.nextActivityId == "endEvent" or activity.nextActivityId == "END_PROCESS" or activity.nextActivityId == "end_event":
+                    process_instance.status = "COMPLETED"
+                    process_instance.current_activity_ids = []
             if not process_instance.current_activity_ids:
                 process_instance.current_activity_ids.append(process_result.nextActivities[0].nextActivityId)
             all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)

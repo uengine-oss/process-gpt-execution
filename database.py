@@ -83,7 +83,7 @@ async def update_db_settings(subdomain):
             #     }
             #     db_config_var.set(db_config)
         else:
-            supabase: Client = create_client('http://127.0.0.1:54321', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0')
+            supabase: Client = create_client('http://127.0.0.1:54321', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU')
             supabase_client_var.set(supabase)
             db_config = {
                 'dbname': 'postgres',
@@ -382,8 +382,6 @@ def fetch_and_apply_system_data_sources(process_instance: ProcessInstance) -> No
 def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
     if full_id == "new" or '.' not in full_id:
         return None
-    
-    process_name = full_id.split('.')[0]  # Extract only the process definition name
 
     if not full_id:
         raise HTTPException(status_code=404, detail="Instance Id should be provided")
@@ -405,8 +403,7 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
         return None
 
 def upsert_process_instance(process_instance: ProcessInstance) -> (bool, ProcessInstance):
-    process_name = process_instance.proc_inst_id.split('.')[0]  # Extract the process definition name
-    if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids:
+    if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids or 'end_event' in process_instance.current_activity_ids:
         process_instance.current_activity_ids = []
         status = 'COMPLETED'
     else:
@@ -570,7 +567,7 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
 def upsert_next_workitems(process_instance_data, process_result_data, process_definition) -> List[WorkItem]:
     workitems = []
     for activity_data in process_result_data['nextActivities']:
-        if activity_data['nextActivityId'] in ["END_PROCESS", "endEvent"]:
+        if activity_data['nextActivityId'] in ["END_PROCESS", "endEvent", "end_event"]:
             continue
         
         workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity_data['nextActivityId'])

@@ -43,7 +43,10 @@ from database import update_db_settings, update_db, db_client_signin
 class DBConfigMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         host_name = request.headers.get('X-Forwarded-Host')
-        subdomain = host_name.split('.')[0] if host_name else None
+        if any(substring in host_name for substring in ['localhost', '127.0.0.1', '192.168']):
+            subdomain = 'localhost'
+        else:
+            subdomain = host_name.split('.')[0] if host_name else None
         await update_db_settings(subdomain)
         # 요청을 다음 미들웨어 또는 엔드포인트로 전달
         response = await call_next(request)
@@ -53,7 +56,6 @@ class DBConfigMiddleware(BaseHTTPMiddleware):
 app = FastAPI()
 
 app.post("/update_db")(update_db)
-app.post("/signin")(db_client_signin)
     
 # 미들웨어 추가
 app.add_middleware(DBConfigMiddleware)

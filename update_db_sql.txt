@@ -134,7 +134,11 @@ CREATE POLICY users_select_policy
     ON users
     FOR SELECT
     TO public
-    USING (auth.tenant_id() = current_tenant OR auth.uid() = id);
+    USING (
+        (auth.tenant_id() = ANY(tenants)) 
+        OR 
+        (auth.uid() = id)
+    );
 
 CREATE POLICY users_update_policy
     ON users
@@ -200,7 +204,7 @@ CREATE POLICY configuration_delete_policy
     ON configuration
     FOR DELETE
     TO authenticated
-    USING ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
+    USING ((tenant_id = auth.tenant_id()) AND (EXISTS ( SELECT 1
    FROM users
   WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
 
@@ -317,7 +321,7 @@ CREATE POLICY proc_def_insert_policy
     ON proc_def
     FOR INSERT
     TO authenticated
-    WITH CHECK ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
+    WITH CHECK ((tenant_id = auth.tenant_id()) AND (EXISTS ( SELECT 1
    FROM users
   WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
 
@@ -673,7 +677,7 @@ CREATE POLICY bpm_proc_inst_insert_policy
     ON bpm_proc_inst
     FOR INSERT
     TO authenticated
-    WITH CHECK ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
+    WITH CHECK ((tenant_id = auth.tenant_id()) AND (EXISTS ( SELECT 1
    FROM users
   WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
 
@@ -687,7 +691,7 @@ CREATE POLICY bpm_proc_inst_update_policy
     ON bpm_proc_inst
     FOR UPDATE
     TO authenticated
-    USING ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
+    USING ((tenant_id = auth.tenant_id()) AND (EXISTS ( SELECT 1
    FROM users
   WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
 
@@ -695,7 +699,7 @@ CREATE POLICY bpm_proc_inst_delete_policy
     ON bpm_proc_inst
     FOR DELETE
     TO authenticated
-    USING ((auth.tenant_id() = tenant_id) AND (EXISTS ( SELECT 1
+    USING ((tenant_id = auth.tenant_id()) AND (EXISTS ( SELECT 1
    FROM users
   WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
 
@@ -769,7 +773,7 @@ CREATE POLICY todolist_insert_policy
     ON todolist
     FOR INSERT
     TO authenticated
-    WITH CHECK (auth.tenant_id() = tenant_id);
+    WITH CHECK (tenant_id = auth.tenant_id());
 
 CREATE POLICY todolist_select_policy
     ON todolist
@@ -781,13 +785,13 @@ CREATE POLICY todolist_update_policy
     ON todolist
     FOR UPDATE
     TO authenticated
-    USING (auth.tenant_id() = tenant_id);
+    USING (tenant_id = auth.tenant_id());
 
 CREATE POLICY todolist_delete_policy
     ON todolist
     FOR DELETE
     TO authenticated
-    USING (auth.tenant_id() = tenant_id);
+    USING (tenant_id = auth.tenant_id());
 
 create or replace function handle_todolist_change()
 returns trigger as $$
@@ -1078,3 +1082,19 @@ BEGIN
     END IF;
 END;
 $$;
+
+
+
+CREATE OR REPLACE FUNCTION search_bpm_proc_inst(keyword TEXT, user_email TEXT)
+RETURNS SETOF bpm_proc_inst AS $$
+BEGIN
+    RETURN QUERY
+    SELECT *
+    FROM bpm_proc_inst
+    WHERE (proc_def_id ILIKE '%' || keyword || '%'
+       OR proc_inst_id ILIKE '%' || keyword || '%'
+       OR proc_inst_name ILIKE '%' || keyword || '%'
+       OR variables_data::text ILIKE '%' || keyword || '%')
+      AND user_email = ANY(current_user_ids);
+END;
+$$ LANGUAGE plpgsql;
