@@ -15,6 +15,7 @@ app = FastAPI()
 
 db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
+subdomain_var = ContextVar('subdomain', default=None)
 
 # url = "http://127.0.0.1:54321"
 # key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
@@ -67,6 +68,7 @@ async def update_db_settings(subdomain):
                 'port': '6543'
             }
             db_config_var.set(db_config)
+            subdomain_var.set(subdomain)
        
             # response = supabase.table("tenant_def").select("*").eq('id', subdomain).execute()
 
@@ -93,6 +95,7 @@ async def update_db_settings(subdomain):
                 'port': '54322'
             }
             db_config_var.set(db_config)
+            subdomain_var.set('localhost')
        
     except Exception as e:
         print(f"An error occurred: {e}")
@@ -150,55 +153,33 @@ def execute_sql(sql_query):
 
 def fetch_all_process_definitions():
     try:
-        db_config = db_config_var.get()
-        # Establish a connection to the database
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
         
-        # Execute the SQL query to fetch all process definition
-        cursor.execute("SELECT definition FROM proc_def")
+        subdomain = subdomain_var.get()
+        response = supabase.table('proc_def').select('*').eq('tenant_id', subdomain).execute()
         
-        # Fetch all rows
-        rows = cursor.fetchall()
-        
-        # Extract the definitions from the rows
-        process_definitions = [row['definition'] for row in rows]
-        
-        return process_definitions
+        return response.data
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching process definitions: {e}")
-    
-    finally:
-        # Close the cursor and connection to clean up
-        if connection:
-            connection.close()
+
 
 def fetch_all_process_definition_ids():
     try:
-        db_config = db_config_var.get()
-        # Establish a connection to the database
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
         
-        # Execute the SQL query to fetch all process definition ids
-        cursor.execute("SELECT id FROM proc_def")
+        subdomain = subdomain_var.get()
+        response = supabase.table('proc_def').select('id').eq('tenant_id', subdomain).execute()
         
-        # Fetch all rows
-        rows = cursor.fetchall()
-        
-        # Extract the ids from the rows
-        process_definition_ids = [row['id'] for row in rows]
-        
-        return process_definition_ids
+        return response.data
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching process definition ids: {e}")
-    
-    finally:
-        # Close the cursor and connection to clean up
-        if connection:
-            connection.close()
+
 
 def generate_create_statement_for_table(table_name):
     """

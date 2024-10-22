@@ -43,10 +43,11 @@ from database import update_db_settings, update_db
 class DBConfigMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         host_name = request.headers.get('X-Forwarded-Host')
-        if any(substring in host_name for substring in ['localhost', '127.0.0.1', '192.168']):
+        if host_name is None or any(substring in host_name for substring in ['localhost', '127.0.0.1', '192.168']):
             subdomain = 'localhost'
         else:
-            subdomain = host_name.split('.')[0] if host_name else None
+            subdomain = host_name.split('.')[0]
+            
         await update_db_settings(subdomain)
         # 요청을 다음 미들웨어 또는 엔드포인트로 전달
         response = await call_next(request)

@@ -626,7 +626,8 @@ def create_audio_stream(data, email):
             part = word[:split_index]
             word = word[split_index+1:]
             result += part
-            yield generate_speech(part)
+            speech = generate_speech(part)
+            yield speech
     
     result_json = json.dumps({"description": result})
     if chat_room_id:
