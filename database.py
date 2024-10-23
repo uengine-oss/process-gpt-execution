@@ -15,7 +15,7 @@ app = FastAPI()
 
 db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
-subdomain_var = ContextVar('subdomain', default=None)
+subdomain_var = ContextVar('subdomain', default='localhost')
 
 # url = "http://127.0.0.1:54321"
 # key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
@@ -237,55 +237,75 @@ def fetch_process_definition(def_id):
     Returns:
         dict: The process definition as a JSON object if found, else None.
     """
-    supabase = supabase_client_var.get()
-    if supabase is None:
-        raise Exception("Supabase client is not configured for this request")
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
     
-    response = supabase.table('proc_def').select('*').eq('id', def_id.lower()).execute()
-    
-    # Check if the response contains data
-    if response.data:
-        # Assuming the first match is the desired one since ID should be unique
-        process_definition = response.data[0].get('definition', None)
-        return process_definition
-    else:
-        raise ValueError(f"No process definition found with ID {def_id}")
+        subdomain = subdomain_var.get()
+        response = supabase.table('proc_def').select('*').eq('id', def_id.lower()).eq('tenant_id', subdomain).execute()
+        
+        # Check if the response contains data
+        if response.data:
+            # Assuming the first match is the desired one since ID should be unique
+            process_definition = response.data[0].get('definition', None)
+            return process_definition
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No process definition found with ID {def_id}: {e}")
 
 def fetch_all_ui_definition():
-    supabase = supabase_client_var.get()
-    if supabase is None:
-        raise Exception("Supabase client is not configured for this request")
-    
-    response = supabase.table('form_def').select('*').execute()
-    
-    if response.data:
-        return response.data
-    else:
-        return []
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        response = supabase.table('form_def').select('*').eq('tenant_id', subdomain).execute()
+        
+        if response.data:
+            return response.data
+        else:
+            return []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching UI definitions: {e}")
 
 def fetch_ui_definition(def_id):
-    supabase = supabase_client_var.get()
-    if supabase is None:
-        raise Exception("Supabase client is not configured for this request")
-    
-    response = supabase.table('form_def').select('*').eq('id', def_id.lower()).execute()
-    
-    if response.data:
-        # Assuming the first match is the desired one since ID should be unique
-        ui_definition = UIDefinition(**response.data[0])
-        return ui_definition
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        response = supabase.table('form_def').select('*').eq('id', def_id.lower()).eq('tenant_id', subdomain).execute()
+        
+        if response.data:
+            # Assuming the first match is the desired one since ID should be unique
+            ui_definition = UIDefinition(**response.data[0])
+            return ui_definition
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No UI definition found with ID {def_id}: {e}")
 
 def fetch_ui_definition_by_activity_id(def_id, proc_def_id, activity_id):
-    supabase = supabase_client_var.get()
-    if supabase is None:
-        raise Exception("Supabase client is not configured for this request")
-    
-    response = supabase.table('form_def').select('*').eq('id', def_id.lower()).eq('proc_def_id', proc_def_id).eq('activity_id', activity_id).execute()
-    
-    if response.data:
-        # Assuming the first match is the desired one since ID should be unique
-        ui_definition = UIDefinition(**response.data[0])
-        return ui_definition
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        response = supabase.table('form_def').select('*').eq('id', def_id.lower()).eq('proc_def_id', proc_def_id).eq('activity_id', activity_id).eq('tenant_id', subdomain).execute()
+        
+        if response.data:
+            # Assuming the first match is the desired one since ID should be unique
+            ui_definition = UIDefinition(**response.data[0])
+            return ui_definition
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No UI definition found with ID {def_id}: {e}")
 
 class ProcessInstance(BaseModel):
     proc_inst_id: str
@@ -361,27 +381,30 @@ def fetch_and_apply_system_data_sources(process_instance: ProcessInstance) -> No
     return process_instance
 
 def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
-    if full_id == "new" or '.' not in full_id:
-        return None
+    try:
+        if full_id == "new" or '.' not in full_id:
+            return None
 
-    if not full_id:
-        raise HTTPException(status_code=404, detail="Instance Id should be provided")
+        if not full_id:
+            raise HTTPException(status_code=404, detail="Instance Id should be provided")
 
-    supabase = supabase_client_var.get()
-    if supabase is None:
-        raise Exception("Supabase client is not configured for this request")
-    
-    response = supabase.table('bpm_proc_inst').select("*").eq('proc_inst_id', full_id).execute()
-    
-    if response.data:
-        process_instance_data = response.data[0]
-        # Apply system data sources
-        process_instance = ProcessInstance(**process_instance_data)
-        process_instance = fetch_and_apply_system_data_sources(process_instance)
-        # Convert the dictionary to a ProcessInstance object
-        return process_instance
-    else:
-        return None
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table('bpm_proc_inst').select("*").eq('proc_inst_id', full_id).execute()
+        
+        if response.data:
+            process_instance_data = response.data[0]
+            # Apply system data sources
+            process_instance = ProcessInstance(**process_instance_data)
+            process_instance = fetch_and_apply_system_data_sources(process_instance)
+            # Convert the dictionary to a ProcessInstance object
+            return process_instance
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 def upsert_process_instance(process_instance: ProcessInstance) -> (bool, ProcessInstance):
     if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids or 'end_event' in process_instance.current_activity_ids:
@@ -443,94 +466,110 @@ def convert_decimal(data):
     return data
 
 def fetch_organization_chart():
-    supabase = supabase_client_var.get()
-    if supabase is None:
-        raise Exception("Supabase client is not configured for this request")
-    
-    response = supabase.table("configuration").select("*").eq('key', 'organization').execute()
-    
-    # Check if the response contains data
-    if response.data:
-        # Assuming the first match is the desired one since ID should be unique
-        value = response.data[0].get('value', None)
-        organization_chart = value.get('chart', None)
-        return organization_chart
-    else:
-        return None
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        response = supabase.table("configuration").select("*").eq('key', 'organization').eq('tenant_id', subdomain).execute()
+        
+        # Check if the response contains data
+        if response.data:
+            # Assuming the first match is the desired one since ID should be unique
+            value = response.data[0].get('value', None)
+            organization_chart = value.get('chart', None)
+            return organization_chart
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 def fetch_process_instance_list(user_id: str) -> Optional[List[ProcessInstance]]:
-    supabase = supabase_client_var.get()
-    if supabase is None:
-        raise Exception("Supabase client is not configured for this request")
-    
-    response = supabase.table('bpm_proc_inst').select("*").filter('current_user_ids', 'cs', '{' + user_id + '}').execute()
-    if response.data:
-        return [ProcessInstance(**item) for item in response.data]
-    else:
-        return None
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table('bpm_proc_inst').select("*").filter('current_user_ids', 'cs', '{' + user_id + '}').execute()
+        if response.data:
+            return [ProcessInstance(**item) for item in response.data]
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 def fetch_todolist_by_user_id(user_id: str) -> Optional[List[WorkItem]]:
-    supabase = supabase_client_var.get()
-    if supabase is None:
-        raise Exception("Supabase client is not configured for this request")
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
     
-    response = supabase.table('todolist').select("*").eq('user_id', user_id).execute()
-    if response.data:
-        return [WorkItem(**item) for item in response.data]
-    else:
-        return None
+        response = supabase.table('todolist').select("*").eq('user_id', user_id).execute()
+        if response.data:
+            return [WorkItem(**item) for item in response.data]
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 def fetch_todolist_by_proc_inst_id(proc_inst_id: str) -> Optional[List[WorkItem]]:
-    supabase = supabase_client_var.get()
-    if supabase is None:
-        raise Exception("Supabase client is not configured for this request")
-    
-    response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).execute()
-    if response.data:
-        return [WorkItem(**item) for item in response.data]
-    else:
-        return None
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).execute()
+        if response.data:
+            return [WorkItem(**item) for item in response.data]
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str) -> Optional[WorkItem]:
-    supabase = supabase_client_var.get()
-    if supabase is None:
-        raise Exception("Supabase client is not configured for this request")
-    
-    response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('activity_id', activity_id).execute()
-    if response.data:
-        return WorkItem(**response.data[0])
-    else:
-        return None
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('activity_id', activity_id).execute()
+        if response.data:
+            return WorkItem(**response.data[0])
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 # todolist 업데이트
 def upsert_completed_workitem(prcess_instance_data, process_result_data, process_definition):
-    if not process_result_data['completedActivities']:
-        return
-    
-    workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], process_result_data['completedActivities'][0]['completedActivityId'])
-    
-    if workitem:
-        workitem.status = process_result_data['completedActivities'][0]['result']
-        workitem.end_date = datetime.now()
-    else:
-        activity = process_definition.find_activity_by_id(process_result_data['completedActivities'][0]['completedActivityId'])
-        start_date = datetime.now()
-        due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
-        workitem = WorkItem(
-            id=f"{str(uuid.uuid4())}",
-            proc_inst_id=prcess_instance_data['proc_inst_id'],
-            proc_def_id=process_result_data['processDefinitionId'].lower(),
-            activity_id=process_result_data['completedActivities'][0]['completedActivityId'],
-            activity_name=activity.name,
-            user_id=process_result_data['completedActivities'][0]['completedUserEmail'],
-            status=process_result_data['completedActivities'][0]['result'],
-            tool=activity.tool,
-            start_date=start_date,
-            end_date=datetime.now() if process_result_data['completedActivities'][0]['result'] == 'DONE' else None,
-            due_date=due_date
-        )
-
     try:
+        if not process_result_data['completedActivities']:
+            return
+        
+        workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], process_result_data['completedActivities'][0]['completedActivityId'])
+        
+        if workitem:
+            workitem.status = process_result_data['completedActivities'][0]['result']
+            workitem.end_date = datetime.now()
+        else:
+            activity = process_definition.find_activity_by_id(process_result_data['completedActivities'][0]['completedActivityId'])
+            start_date = datetime.now()
+            due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
+            workitem = WorkItem(
+                id=f"{str(uuid.uuid4())}",
+                proc_inst_id=prcess_instance_data['proc_inst_id'],
+                proc_def_id=process_result_data['processDefinitionId'].lower(),
+                activity_id=process_result_data['completedActivities'][0]['completedActivityId'],
+                activity_name=activity.name,
+                user_id=process_result_data['completedActivities'][0]['completedUserEmail'],
+                status=process_result_data['completedActivities'][0]['result'],
+                tool=activity.tool,
+                start_date=start_date,
+                end_date=datetime.now() if process_result_data['completedActivities'][0]['result'] == 'DONE' else None,
+                due_date=due_date
+            )
+        
         workitem_dict = workitem.dict()
         workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
         workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
@@ -648,15 +687,18 @@ class ChatItem(BaseModel):
     messages: Optional[ChatMessage] = None
 
 def fetch_chat_history(chat_room_id: str) -> List[ChatItem]:
-    supabase = supabase_client_var.get()
-    if supabase is None:
-        raise Exception("Supabase client is not configured for this request")
-    response = supabase.table("chats").select("*").eq('id', chat_room_id).execute()
-    chatHistory = []
-    for chat in response.data:
-        chat.pop('jsonContent', None)
-        chatHistory.append(ChatItem(**chat))
-    return chatHistory
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        response = supabase.table("chats").select("*").eq('id', chat_room_id).execute()
+        chatHistory = []
+        for chat in response.data:
+            chat.pop('jsonContent', None)
+            chatHistory.append(ChatItem(**chat))
+        return chatHistory
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool) -> None:
     try:
