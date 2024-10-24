@@ -317,6 +317,7 @@ class ProcessInstance(BaseModel):
     variables_data: Dict[str, Any] = {}
     process_definition: ProcessDefinition = None  # Add a reference to ProcessDefinition
     status: str = None
+    tenant_id: str
     
     class Config:
         extra = "allow"
@@ -352,6 +353,7 @@ class WorkItem(BaseModel):
     status: str
     description: Optional[str] = None
     tool: Optional[str] = None
+    tenant_id: str
     
     @validator('start_date', 'end_date', pre=True)
     def parse_datetime(cls, value):
@@ -393,7 +395,8 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        response = supabase.table('bpm_proc_inst').select("*").eq('proc_inst_id', full_id).execute()
+        subdomain = subdomain_var.get()
+        response = supabase.table('bpm_proc_inst').select("*").eq('proc_inst_id', full_id).eq('tenant_id', subdomain).execute()
         
         if response.data:
             process_instance_data = response.data[0]
@@ -421,6 +424,7 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
+        subdomain = subdomain_var.get()
         response = supabase.table('bpm_proc_inst').upsert({
             'proc_inst_id': process_instance.proc_inst_id,
             'proc_inst_name': process_instance.proc_inst_name,
@@ -429,7 +433,8 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
             'role_bindings': process_instance.role_bindings,
             'variables_data': process_instance.variables_data,
             'status': status,
-            'proc_def_id': process_instance.get_def_id()
+            'proc_def_id': process_instance.get_def_id(),
+            'tenant_id': subdomain
         }).execute()
         success = bool(response.data)
         return success, process_instance
@@ -492,7 +497,9 @@ def fetch_process_instance_list(user_id: str) -> Optional[List[ProcessInstance]]
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        response = supabase.table('bpm_proc_inst').select("*").filter('current_user_ids', 'cs', '{' + user_id + '}').execute()
+        subdomain = subdomain_var.get()
+        response = supabase.table('bpm_proc_inst').select("*").eq('tenant_id', subdomain).filter('current_user_ids', 'cs', '{' + user_id + '}').execute()
+        
         if response.data:
             return [ProcessInstance(**item) for item in response.data]
         else:
@@ -505,8 +512,10 @@ def fetch_todolist_by_user_id(user_id: str) -> Optional[List[WorkItem]]:
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
-    
-        response = supabase.table('todolist').select("*").eq('user_id', user_id).execute()
+
+        subdomain = subdomain_var.get()
+        response = supabase.table('todolist').select("*").eq('user_id', user_id).eq('tenant_id', subdomain).execute()
+        
         if response.data:
             return [WorkItem(**item) for item in response.data]
         else:
@@ -520,7 +529,9 @@ def fetch_todolist_by_proc_inst_id(proc_inst_id: str) -> Optional[List[WorkItem]
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).execute()
+        subdomain = subdomain_var.get()
+        response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('tenant_id', subdomain).execute()
+        
         if response.data:
             return [WorkItem(**item) for item in response.data]
         else:
@@ -534,7 +545,9 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('activity_id', activity_id).execute()
+        subdomain = subdomain_var.get()
+        response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('activity_id', activity_id).eq('tenant_id', subdomain).execute()
+        
         if response.data:
             return WorkItem(**response.data[0])
         else:
@@ -557,6 +570,7 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
             activity = process_definition.find_activity_by_id(process_result_data['completedActivities'][0]['completedActivityId'])
             start_date = datetime.now(pytz.timezone('Asia/Seoul'))
             due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
+            subdomain = subdomain_var.get()
             workitem = WorkItem(
                 id=f"{str(uuid.uuid4())}",
                 proc_inst_id=prcess_instance_data['proc_inst_id'],
@@ -568,7 +582,8 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
                 tool=activity.tool,
                 start_date=start_date,
                 end_date=datetime.now(pytz.timezone('Asia/Seoul')) if process_result_data['completedActivities'][0]['result'] == 'DONE' else None,
-                due_date=due_date
+                due_date=due_date,
+                tenant_id=subdomain
             )
         
         workitem_dict = workitem.dict()
@@ -604,6 +619,7 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     for prev_activity in prev_activities:
                         start_date = start_date + timedelta(days=prev_activity.duration)
                 due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
+                subdomain = subdomain_var.get()
                 workitem = WorkItem(
                     id=str(uuid.uuid4()),
                     proc_inst_id=process_instance_data['proc_inst_id'],
@@ -614,7 +630,8 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     status=activity_data['result'],
                     start_date=start_date,
                     due_date=due_date,
-                    tool=activity.tool
+                    tool=activity.tool,
+                    tenant_id=subdomain
                 )
         
         try:
@@ -648,6 +665,7 @@ def upsert_todo_workitems(prcess_instance_data, process_result_data, process_def
             due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
             workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], activity.id)
             if not workitem:
+                subdomain = subdomain_var.get()
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     proc_inst_id=prcess_instance_data['proc_inst_id'],
@@ -658,7 +676,8 @@ def upsert_todo_workitems(prcess_instance_data, process_result_data, process_def
                     status="TODO",
                     tool=activity.tool,
                     start_date=start_date,
-                    due_date=due_date
+                    due_date=due_date,
+                    tenant_id=subdomain
                 )
                 workitem_dict = workitem.dict()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
@@ -686,13 +705,17 @@ class ChatItem(BaseModel):
     id: str
     uuid: str
     messages: Optional[ChatMessage] = None
+    tenant_id: str
 
 def fetch_chat_history(chat_room_id: str) -> List[ChatItem]:
     try:
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
-        response = supabase.table("chats").select("*").eq('id', chat_room_id).execute()
+
+        subdomain = subdomain_var.get()
+        response = supabase.table("chats").select("*").eq('id', chat_room_id).eq('tenant_id', subdomain).execute()
+
         chatHistory = []
         for chat in response.data:
             chat.pop('jsonContent', None)
@@ -723,16 +746,21 @@ def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool) -> None:
                 content=data["command"],
                 timeStamp=datetime.now(pytz.timezone('Asia/Seoul'))
             )
+
         message.timeStamp = message.timeStamp.isoformat() if message.timeStamp else None        
+        subdomain = subdomain_var.get()
         chat_item = ChatItem(
             id=chat_room_id,
             uuid=str(uuid.uuid4()),
-            messages=message
+            messages=message,
+            tenant_id=subdomain
         )
         chat_item_dict = chat_item.dict()
+
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
+
         supabase.table("chats").upsert(chat_item_dict).execute();
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

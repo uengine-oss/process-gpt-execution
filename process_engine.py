@@ -206,7 +206,8 @@ def execute_next_activity(process_result_json: dict) -> str:
                 current_activity_ids=[],
                 current_user_ids=[],
                 variables_data={},
-                status=status
+                status=status,
+                tenant_id=""
             )
         else:
             process_instance = fetch_process_instance(process_result.instanceId)

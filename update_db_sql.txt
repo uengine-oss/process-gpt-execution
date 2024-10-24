@@ -157,7 +157,7 @@ CREATE POLICY users_delete_policy
 create table if not exists public.configuration (
     key text not null,
     value jsonb null,
-    tenant_id text null default auth.tenant_id (),
+    tenant_id text null default auth.tenant_id(),
     uuid uuid not null default gen_random_uuid (),
     constraint configuration_pkey primary key (uuid),
     constraint configuration_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
@@ -175,7 +175,7 @@ BEGIN
         ALTER TABLE public.configuration ADD COLUMN uuid uuid not null default gen_random_uuid ();
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='configuration' AND column_name='tenant_id') THEN
-        ALTER TABLE public.configuration ADD COLUMN tenant_id text null default auth.tenant_id ();
+        ALTER TABLE public.configuration ADD COLUMN tenant_id text null default auth.tenant_id();
     END IF;
 END;
 $$;
@@ -287,7 +287,7 @@ create table if not exists public.proc_def (
     definition jsonb null,
     bpmn text null,
     uuid uuid not null default gen_random_uuid (),
-    tenant_id text null default auth.tenant_id (),
+    tenant_id text null default auth.tenant_id(),
     constraint proc_def_pkey primary key (uuid),
     constraint proc_def_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
 ) tablespace pg_default;
@@ -310,7 +310,7 @@ BEGIN
         ALTER TABLE public.proc_def ADD COLUMN uuid uuid not null default gen_random_uuid ();
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='proc_def' AND column_name='tenant_id') THEN
-        ALTER TABLE public.proc_def ADD COLUMN tenant_id text null default auth.tenant_id ();
+        ALTER TABLE public.proc_def ADD COLUMN tenant_id text null default auth.tenant_id();
     END IF;
 END;
 $$;
@@ -428,7 +428,7 @@ create table if not exists public.form_def (
     html text not null,
     proc_def_id text not null,
     activity_id text not null,
-    tenant_id text null default auth.tenant_id (),
+    tenant_id text null default auth.tenant_id(),
     id text null default ''::text,
     constraint form_def_pkey primary key (uuid),
     constraint form_def_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
@@ -500,7 +500,7 @@ create table if not exists public.notifications (
     time_stamp timestamp with time zone null default now(),
     user_id text null,
     url text null,
-    tenant_id text null default auth.tenant_id (),
+    tenant_id text null default auth.tenant_id(),
     constraint notifications_pkey primary key (id),
     constraint notifications_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
 ) tablespace pg_default;
@@ -568,7 +568,7 @@ CREATE POLICY notifications_delete_policy
 create table if not exists public.lock (
     id text not null,
     user_id text null,
-    tenant_id text null default auth.tenant_id (),
+    tenant_id text null default auth.tenant_id(),
     uuid uuid not null default gen_random_uuid (),
     constraint lock_pkey primary key (uuid),
     constraint lock_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
@@ -634,6 +634,7 @@ create table if not exists public.bpm_proc_inst (
     role_bindings jsonb null,
     variables_data jsonb null,
     status text null,
+    tenant_id text null default auth.tenant_id(),
     constraint bpm_proc_inst_pkey primary key (proc_inst_id),
     constraint bpm_proc_inst_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
 ) tablespace pg_default;
@@ -664,6 +665,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bpm_proc_inst' AND column_name='status') THEN
         ALTER TABLE public.bpm_proc_inst ADD COLUMN status text null;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bpm_proc_inst' AND column_name='tenant_id') THEN
+        ALTER TABLE public.bpm_proc_inst ADD COLUMN tenant_id text null default auth.tenant_id();
+    END IF;
 END;
 $$;
 
@@ -673,31 +677,31 @@ CREATE POLICY bpm_proc_inst_insert_policy
     ON bpm_proc_inst
     FOR INSERT
     TO authenticated
-    WITH CHECK (EXISTS ( SELECT 1
+    WITH CHECK ((tenant_id = auth.tenant_id()) AND (EXISTS ( SELECT 1
    FROM users
-  WHERE ((users.id = auth.uid()) AND (users.is_admin = true))));
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
 
 CREATE POLICY bpm_proc_inst_select_policy
     ON bpm_proc_inst  
     FOR SELECT
     TO authenticated
-    USING (true);
+    USING (tenant_id = auth.tenant_id());
 
 CREATE POLICY bpm_proc_inst_update_policy
     ON bpm_proc_inst
     FOR UPDATE
     TO authenticated
-    USING (EXISTS ( SELECT 1
+    USING ((tenant_id = auth.tenant_id()) AND (EXISTS ( SELECT 1
    FROM users
-  WHERE ((users.id = auth.uid()) AND (users.is_admin = true))));
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
 
 CREATE POLICY bpm_proc_inst_delete_policy
     ON bpm_proc_inst
     FOR DELETE
     TO authenticated
-    USING (EXISTS ( SELECT 1
+    USING ((tenant_id = auth.tenant_id()) AND (EXISTS ( SELECT 1
    FROM users
-  WHERE ((users.id = auth.uid()) AND (users.is_admin = true))));
+  WHERE ((users.id = auth.uid()) AND (users.is_admin = true)))));
 
 
 
@@ -714,7 +718,9 @@ create table if not exists public.todolist (
     description text null,
     tool text null,
     due_date timestamp without time zone null,
+    tenant_id text null default auth.tenant_id(),
     constraint todolist_pkey primary key (id),
+    constraint todolist_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
 ) tablespace pg_default;
 
 DO $$
@@ -755,34 +761,37 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='due_date') THEN
         ALTER TABLE public.todolist ADD COLUMN due_date timestamp without time zone null;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='todolist' AND column_name='tenant_id') THEN
+        ALTER TABLE public.todolist ADD COLUMN tenant_id text null default auth.tenant_id();
+    END IF;
 END;
 $$;
-    
+
 ALTER TABLE todolist ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY todolist_insert_policy
     ON todolist
     FOR INSERT
     TO authenticated
-    WITH CHECK (true);
+    WITH CHECK (tenant_id = auth.tenant_id());
 
 CREATE POLICY todolist_select_policy
     ON todolist
     FOR SELECT
     TO authenticated
-    USING (true);
+    USING (tenant_id = auth.tenant_id());
 
 CREATE POLICY todolist_update_policy
     ON todolist
     FOR UPDATE
     TO authenticated
-    USING (true);
+    USING (tenant_id = auth.tenant_id());
 
 CREATE POLICY todolist_delete_policy
     ON todolist
     FOR DELETE
     TO authenticated
-    USING (true);
+    USING (tenant_id = auth.tenant_id());
 
 create or replace function handle_todolist_change()
 returns trigger as $$
@@ -829,7 +838,7 @@ create table if not exists public.chat_rooms (
     participants jsonb not null,
     message jsonb null,
     name text null,
-    tenant_id text null default auth.tenant_id (),
+    tenant_id text null default auth.tenant_id(),
     constraint chat_rooms_pkey primary key (id),
     constraint chat_rooms_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
 ) tablespace pg_default;
@@ -886,6 +895,7 @@ create table if not exists public.chats (
     uuid text not null,
     id text not null,
     messages jsonb null,
+    tenant_id text null default auth.tenant_id(),
     constraint chats_pkey primary key (uuid),
     constraint chats_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
 ) tablespace pg_default;
@@ -901,6 +911,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chats' AND column_name='messages') THEN
         ALTER TABLE public.chats ADD COLUMN messages jsonb null;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chats' AND column_name='tenant_id') THEN
+        ALTER TABLE public.chats ADD COLUMN tenant_id text null default auth.tenant_id();
+    END IF;
 END;
 $$;
 
@@ -910,25 +923,25 @@ CREATE POLICY chats_insert_policy
     ON chats
     FOR INSERT
     TO authenticated
-    WITH CHECK (true);
+    WITH CHECK (tenant_id = auth.tenant_id());
 
 CREATE POLICY chats_select_policy
     ON chats
     FOR SELECT
     TO authenticated 
-    USING (true);
+    USING (tenant_id = auth.tenant_id());
 
 CREATE POLICY chats_update_policy
     ON chats
     FOR UPDATE
     TO authenticated
-    USING (true);
+    USING (tenant_id = auth.tenant_id());
 
 CREATE POLICY chats_delete_policy
     ON chats
     FOR DELETE
     TO authenticated 
-    USING (true);
+    USING (tenant_id = auth.tenant_id());
 
 create or replace function handle_chat_insert()
 returns trigger as $$
@@ -986,7 +999,7 @@ execute function handle_chat_insert();
 create table if not exists public.calendar (
     uid text not null,
     data jsonb null,
-    tenant_id text null default auth.tenant_id (),
+    tenant_id text null default auth.tenant_id(),
     constraint calendar_pkey primary key (uid)
 ) tablespace pg_default;
 
