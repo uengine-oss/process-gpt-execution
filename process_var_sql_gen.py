@@ -229,27 +229,27 @@ def clean_html_string(html_string):
     return cleaned_string
 
 def execute_process(process_json):
-    process_definition_id = process_json["processDefinitionId"]
-    process_instance_id = process_json["processInstanceId"]
-    email = process_json["email"]
-    answer = process_json["answer"]
-    activity_id = process_json["activity_id"]
-    chat_room_id = process_json["chatRoomId"]
-    
-    data = {
-        "input": {
-            "answer": answer,
-            "process_instance_id": process_instance_id,
-            "process_definition_id": process_definition_id,
-            "userInfo": {
-                "email": email
-            },
-            "activity_id": activity_id,
-            "chat_room_id": chat_room_id
-        }
-    }
-            
     try:
+        process_definition_id = process_json["processDefinitionId"]
+        process_instance_id = process_json["processInstanceId"]
+        email = process_json["email"]
+        answer = process_json["answer"]
+        activity_id = process_json["activity_id"]
+        chat_room_id = process_json["chatRoomId"]
+        
+        data = {
+            "input": {
+                "answer": answer,
+                "process_instance_id": process_instance_id,
+                "process_definition_id": process_definition_id,
+                "userInfo": {
+                    "email": email
+                },
+                "activity_id": activity_id,
+                "chat_room_id": chat_room_id
+            }
+        }
+        
         url = f"http://localhost:8000/complete"
         response = requests.post(url, json=data)
         
@@ -621,28 +621,21 @@ def create_audio_stream(data, email):
 
     word = ""
     result = ""
+    buffer = []
     for chunk in chain.stream(input):
         word += chunk
-
-        if ',' in word or '.' in word:
-            # Find the position of the first comma or period
-            first_comma = word.find(',')
-            first_period = word.find('.')
-            
-            # Determine the earliest punctuation mark
-            if first_comma == -1:
-                split_index = first_period
-            elif first_period == -1:
-                split_index = first_comma
-            else:
-                split_index = min(first_comma, first_period)
-            
-            # Split the word at the earliest punctuation mark
-            part = word[:split_index]
-            word = word[split_index+1:]
+        
+        # 문장 단위로 분할
+        if '.' in word:
+            split_index = word.find('.')
+            part = word[:split_index + 1].strip()  # 마침표 포함
+            word = word[split_index + 1:].strip()
             result += part
-            speech = generate_speech(part)
-            yield speech
+            buffer.append(part)
+            
+    for part in buffer:
+        speech = generate_speech(part)
+        yield speech
     
     result_json = json.dumps({"description": result})
     if chat_room_id:

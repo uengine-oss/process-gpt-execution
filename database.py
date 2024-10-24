@@ -9,6 +9,7 @@ from psycopg2.extras import RealDictCursor
 from fastapi import FastAPI, Request, HTTPException
 from decimal import Decimal
 from datetime import datetime, timedelta
+import pytz
 from contextvars import ContextVar
 
 app = FastAPI()
@@ -551,10 +552,10 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
         
         if workitem:
             workitem.status = process_result_data['completedActivities'][0]['result']
-            workitem.end_date = datetime.now()
+            workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul'))
         else:
             activity = process_definition.find_activity_by_id(process_result_data['completedActivities'][0]['completedActivityId'])
-            start_date = datetime.now()
+            start_date = datetime.now(pytz.timezone('Asia/Seoul'))
             due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
             workitem = WorkItem(
                 id=f"{str(uuid.uuid4())}",
@@ -566,7 +567,7 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
                 status=process_result_data['completedActivities'][0]['result'],
                 tool=activity.tool,
                 start_date=start_date,
-                end_date=datetime.now() if process_result_data['completedActivities'][0]['result'] == 'DONE' else None,
+                end_date=datetime.now(pytz.timezone('Asia/Seoul')) if process_result_data['completedActivities'][0]['result'] == 'DONE' else None,
                 due_date=due_date
             )
         
@@ -593,12 +594,12 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
         workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity_data['nextActivityId'])
         if workitem:
             workitem.status = activity_data['result']
-            workitem.end_date = datetime.now() if activity_data['result'] == 'DONE' else None
+            workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul')) if activity_data['result'] == 'DONE' else None
         else:
             activity = process_definition.find_activity_by_id(activity_data['nextActivityId'])
             if activity:
                 prev_activities = process_definition.find_prev_activities(activity.id, [])
-                start_date = datetime.now()
+                start_date = datetime.now(pytz.timezone('Asia/Seoul'))
                 if prev_activities:
                     for prev_activity in prev_activities:
                         start_date = start_date + timedelta(days=prev_activity.duration)
@@ -640,7 +641,7 @@ def upsert_todo_workitems(prcess_instance_data, process_result_data, process_def
         next_activities = [activity for activity in process_definition.activities if activity.id != initial_activity.id]
         for activity in next_activities:
             prev_activities = process_definition.find_prev_activities(activity.id, [])
-            start_date = datetime.now()
+            start_date = datetime.now(pytz.timezone('Asia/Seoul'))
             if prev_activities:
                 for prev_activity in prev_activities:
                     start_date = start_date + timedelta(days=prev_activity.duration)
@@ -710,7 +711,7 @@ def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool) -> None:
                 email="system@uengine.org",
                 image="",
                 content=json_data["description"],
-                timeStamp=datetime.now()
+                timeStamp=datetime.now(pytz.timezone('Asia/Seoul'))
             )
         else:
             user_info = fetch_user_info(data["email"])
@@ -720,7 +721,7 @@ def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool) -> None:
                 email=data["email"],
                 image="",
                 content=data["command"],
-                timeStamp=datetime.now()
+                timeStamp=datetime.now(pytz.timezone('Asia/Seoul'))
             )
         message.timeStamp = message.timeStamp.isoformat() if message.timeStamp else None        
         chat_item = ChatItem(
