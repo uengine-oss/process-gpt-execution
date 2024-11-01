@@ -1064,22 +1064,6 @@ BEGIN
             chat_rooms cr
             JOIN chats c ON cr.id = c.id;
     END IF;
-
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_views
-        WHERE viewname = 'worklist'
-        AND schemaname = 'public'
-    ) THEN
-        CREATE VIEW public.worklist AS
-            SELECT
-                t.*,
-                p.proc_inst_name AS proc_inst_name,
-                p.current_user_ids AS current_user_ids
-            FROM
-                todolist t
-                JOIN public.bpm_proc_inst p ON t.proc_inst_id = p.proc_inst_id;
-    END IF;
 END;
 $$;
 
@@ -1096,5 +1080,19 @@ BEGIN
        OR proc_inst_name ILIKE '%' || keyword || '%'
        OR variables_data::text ILIKE '%' || keyword || '%')
       AND user_email = ANY(current_user_ids);
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+CREATE OR REPLACE FUNCTION search_chat_room_chats(keyword TEXT)
+RETURNS SETOF chat_room_chats AS $$
+BEGIN
+    RETURN QUERY
+    SELECT *
+    FROM chat_room_chats
+    WHERE messages->>'content' ILIKE '%' || keyword || '%'
+       OR messages->>'name' ILIKE '%' || keyword || '%'
+       OR messages->>'email' ILIKE '%' || keyword || '%';
 END;
 $$ LANGUAGE plpgsql;

@@ -442,10 +442,10 @@ async def combine_input_with_token(request: Request):
     if token_data:
         user_info = fetch_user_info(token_data.get('email'))
         input['userInfo'] = user_info
-    elif input.get('userInfo'):
-        input['userInfo'] = input.get('userInfo')
         
-    return combine_input_with_process_definition(input)
+        return combine_input_with_process_definition(input)
+    else:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 ### role binding
 role_binding_prompt = PromptTemplate.from_template(

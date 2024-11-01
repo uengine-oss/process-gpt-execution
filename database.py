@@ -18,6 +18,9 @@ db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
 subdomain_var = ContextVar('subdomain', default='localhost')
 
+secret_key_var = ContextVar('secret_key', default='')
+algorithm_var = ContextVar('algorithm', default='HS256')
+
 # url = "http://127.0.0.1:54321"
 # key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
 # supabase: Client = create_client(url, key)
@@ -69,22 +72,10 @@ async def update_db_settings(subdomain):
                 'port': '6543'
             }
             db_config_var.set(db_config)
+            
             subdomain_var.set(subdomain)
-       
-            # response = supabase.table("tenant_def").select("*").eq('id', subdomain).execute()
-
-            # if response.data:
-            #     data = response.data[0]
-            #     supabase: Client = create_client(data['url'], data['secret'])
-            #     supabase_client_var.set(supabase)
-            #     db_config = {
-            #         'dbname': data['dbname'],
-            #         'user': data['user'],
-            #         'password': data['pw'],
-            #         'host': data['host'],
-            #         'port': data['port']
-            #     }
-            #     db_config_var.set(db_config)
+            secret_key_var.set("h28kkwMIJ7jWnUiBFmC0md//JavwHBaIlv39PH0NmM9vplJHNw5TRwrKDnOIadLp7+ySFiJMNoSi5jW5p9zb8w==")
+            
         else:
             supabase: Client = create_client('http://127.0.0.1:54321', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU')
             supabase_client_var.set(supabase)
@@ -96,7 +87,10 @@ async def update_db_settings(subdomain):
                 'port': '54322'
             }
             db_config_var.set(db_config)
-            subdomain_var.set('localhost')
+            
+            # subdomain_var.set('localhost')
+            subdomain_var.set(subdomain)
+            secret_key_var.set("super-secret-jwt-token-with-at-least-32-characters-long")
        
     except Exception as e:
         print(f"An error occurred: {e}")
@@ -566,6 +560,7 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
         if workitem:
             workitem.status = process_result_data['completedActivities'][0]['result']
             workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul'))
+            workitem.user_id = process_result_data['completedActivities'][0]['completedUserEmail']
         else:
             activity = process_definition.find_activity_by_id(process_result_data['completedActivities'][0]['completedActivityId'])
             start_date = datetime.now(pytz.timezone('Asia/Seoul'))
@@ -610,6 +605,7 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
         if workitem:
             workitem.status = activity_data['result']
             workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul')) if activity_data['result'] == 'DONE' else None
+            workitem.user_id = activity_data['nextUserEmail']
         else:
             activity = process_definition.find_activity_by_id(activity_data['nextActivityId'])
             if activity:
@@ -767,6 +763,7 @@ def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool) -> None:
 
 
 import jwt
+from jwt import ExpiredSignatureError, InvalidTokenError
 
 def parse_token(request: Request) -> Dict[str, str]:
     if request.headers:
@@ -774,16 +771,23 @@ def parse_token(request: Request) -> Dict[str, str]:
         if auth_header:
             token = auth_header.split(" ")[1]
             try:
-                payload = jwt.decode(token, options={"verify_signature": False})
+                secret_key = secret_key_var.get()
+                algorithm = algorithm_var.get()
+                payload = jwt.decode(token, secret_key, algorithms=[algorithm], audience='authenticated')
+                
+                subdomain = subdomain_var.get()
+                if payload['app_metadata']['tenant_id'] != subdomain:
+                    raise HTTPException(status_code=401, detail="Invalid tenant")
+                
                 return payload
-            except jwt.ExpiredSignatureError:
+            except ExpiredSignatureError:
                 raise HTTPException(status_code=401, detail="Token expired")
-            except jwt.InvalidTokenError:
-                raise HTTPException(status_code=401, detail="Invalid token")
+            except InvalidTokenError as e:
+                raise HTTPException(status_code=401, detail=f"Invalid token {e}")
         else:
-            return None
+            raise HTTPException(status_code=401, detail="Authorization header missing")
     else:
-        return None
+        raise HTTPException(status_code=401, detail="Authorization header not provided")
 
 def fetch_user_info(email: str) -> Dict[str, str]:
     try:
@@ -791,7 +795,8 @@ def fetch_user_info(email: str) -> Dict[str, str]:
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        response = supabase.table("users").select("*").eq('email', email).execute()
+        subdomain = subdomain_var.get()
+        response = supabase.table("users").select("*").eq('email', email).filter('tenants', 'cs', '{' + subdomain + '}').execute()
         
         if response.data:
             return response.data[0]
