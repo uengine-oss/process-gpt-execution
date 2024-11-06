@@ -4,7 +4,10 @@
 ```
 pipenv install
 pipenv shell
-set OPENAI_API_KEY=<KEY>
+set OPENAI_API_KEY=<OPENAI_API_KEY>
+set SUPABASE_SECRET_KEY_DEV=<JWT_SECRET_KEY>
+set SUPABASE_URL_DEV=<SUPABASE_URL>
+set SUPABASE_KEY_DEV=<SERVICE_ROLE_KEY>
 python main.py
 
 ```

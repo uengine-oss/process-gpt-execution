@@ -43,6 +43,7 @@ CREATE POLICY tenants_delete_policy
 
 
 
+SET request.jwt.claims = '{"app_metadata": {"tenant_id": "your_tenant_id"}}';
 create or replace function auth.tenant_id() 
 returns text
 language sql stable

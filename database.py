@@ -62,8 +62,15 @@ def update_db():
 async def update_db_settings(subdomain):
     try:
         if subdomain and "localhost" not in subdomain:
-            supabase: Client = create_client('https://qivmgbtrzgnjcpyynpam.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFpdm1nYnRyemduamNweXlucGFtIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTcxNTU4ODc3NSwiZXhwIjoyMDMxMTY0Nzc1fQ.z8LIo50hs1gWcerWxx1dhjri-DMoDw9z0luba_Ap4cI')
+            subdomain_var.set(subdomain)
+            secret_key = os.getenv("SUPABASE_SECRET_KEY_PROD")
+            secret_key_var.set(secret_key)
+            
+            url = os.getenv("SUPABASE_URL_PROD")
+            key = os.getenv("SUPABASE_KEY_PROD")
+            supabase: Client = create_client(url, key)
             supabase_client_var.set(supabase)
+            
             db_config = {
                 'dbname': 'postgres',
                 'user': 'postgres.qivmgbtrzgnjcpyynpam',
@@ -73,12 +80,17 @@ async def update_db_settings(subdomain):
             }
             db_config_var.set(db_config)
             
-            subdomain_var.set(subdomain)
-            secret_key_var.set("h28kkwMIJ7jWnUiBFmC0md//JavwHBaIlv39PH0NmM9vplJHNw5TRwrKDnOIadLp7+ySFiJMNoSi5jW5p9zb8w==")
-            
         else:
-            supabase: Client = create_client('http://127.0.0.1:54321', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU')
+            # subdomain_var.set('localhost')
+            subdomain_var.set(subdomain)
+            secret_key = os.getenv("SUPABASE_SECRET_KEY_DEV")
+            secret_key_var.set(secret_key)
+            
+            url = os.getenv("SUPABASE_URL_DEV")
+            key = os.getenv("SUPABASE_KEY_DEV")
+            supabase: Client = create_client(url, key)
             supabase_client_var.set(supabase)
+            
             db_config = {
                 'dbname': 'postgres',
                 'user': 'postgres',
@@ -87,10 +99,6 @@ async def update_db_settings(subdomain):
                 'port': '54322'
             }
             db_config_var.set(db_config)
-            
-            # subdomain_var.set('localhost')
-            subdomain_var.set(subdomain)
-            secret_key_var.set("super-secret-jwt-token-with-at-least-32-characters-long")
        
     except Exception as e:
         print(f"An error occurred: {e}")
@@ -483,7 +491,7 @@ def fetch_organization_chart():
         else:
             return None
     except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise HTTPException(status_code=404, detail=f"Failed to fetch organization chart: {e}")
 
 def fetch_process_instance_list(user_id: str) -> Optional[List[ProcessInstance]]:
     try:
