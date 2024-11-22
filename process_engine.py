@@ -88,7 +88,7 @@ prompt = PromptTemplate.from_template(
     
       activityId: "{activity_id}",  // the activityId is not included in the Currently Running Activities or is the next activityId than Current Running Activities, it must never be added to completedActivities to return the activityId as complete and must be reported in cannotProceedErrors.
       user: "{user_email}",
-      submitted data: "{answer}"    // Based on the current running activity form definition, make sure that the content of the submitted data has entered all the fields in the form. If all are not entered, return the "DATA_FIELD_NOT_EXIST" error.
+      submitted data: "{answer}"    // Based on the current running activity form definition html, make sure that the content of the submitted data has entered fields with readonly="false" in the form. If the readonly="true" fields are not entered, never return an error and ignore it. But if fields with readonly="false" are not entered, return the error "DATA_FIELD_NOT_EXIST".
     
     - Chat History:
     {chat_history}
@@ -100,7 +100,6 @@ prompt = PromptTemplate.from_template(
     Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
     The data changes and role binding changes should be derived from the user submitted data or attached image OCR. 
     At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
-    If the submitted data is in a form definition format, dataChanges must be returned for each field of the form definition.
     Information about completed activities must be returned.
     The completedUserEmail included in completedActivities must be found in the role bindings and returned. If not, find the organization chart and return it.
     The nextUserEmail included in nextActivities must be found in the role bindings and returned. If not, find the organization chart and return it.
@@ -358,11 +357,11 @@ def combine_input_with_process_definition(input):
             process_definition_id = input.get('process_definition_id')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
             
             form_definition = None
-            if processDefinitionJson.get("data"):
-                for data_item in processDefinitionJson["data"]:
-                    if data_item["type"] == "Form":
-                        ui_definition = fetch_ui_definition_by_activity_id(data_item["name"], process_definition_id, activity_id)
-                        form_definition = ui_definition
+            if processDefinitionJson.get("activities"):
+                for activity in processDefinitionJson["activities"]:
+                    if activity["tool"]:
+                        ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id)
+                        form_definition = ui_definition.html
 
             chain_input = {
                 "answer": input['answer'],
@@ -398,8 +397,8 @@ def combine_input_with_process_definition(input):
             if processDefinitionJson.get("data"):
                 for data_item in processDefinitionJson["data"]:
                     if data_item["type"] == "Form":
-                        ui_definition = fetch_ui_definition_by_activity_id(data_item["name"], process_definition_id, activity_id)
-                        form_definition = ui_definition
+                        ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id)
+                        form_definition = ui_definition.html
 
             chain_input = {
                 "answer": input['answer'],  

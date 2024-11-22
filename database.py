@@ -292,14 +292,14 @@ def fetch_ui_definition(def_id):
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"No UI definition found with ID {def_id}: {e}")
 
-def fetch_ui_definition_by_activity_id(def_id, proc_def_id, activity_id):
+def fetch_ui_definition_by_activity_id(proc_def_id, activity_id):
     try:
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
         subdomain = subdomain_var.get()
-        response = supabase.table('form_def').select('*').eq('id', def_id.lower()).eq('proc_def_id', proc_def_id).eq('activity_id', activity_id).eq('tenant_id', subdomain).execute()
+        response = supabase.table('form_def').select('*').eq('proc_def_id', proc_def_id).eq('activity_id', activity_id).eq('tenant_id', subdomain).execute()
         
         if response.data:
             # Assuming the first match is the desired one since ID should be unique
