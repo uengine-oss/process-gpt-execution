@@ -8,7 +8,7 @@ from langchain_core.runnables import RunnableLambda
 from langserve import add_routes
 from pydantic import BaseModel
 
-from database import fetch_all_process_definitions
+from database import fetch_all_process_definitions, parse_token, fetch_user_info
 
 
 
@@ -87,6 +87,13 @@ def process_search(process_result_json: dict) -> str:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+chain = (
+    prompt | model | parser | process_search
+)
+
+vision_chain = (
+    vision_model_chain | parser | process_search
+)
 
 def combine_input_with_process_definition(input):
     try:
@@ -94,30 +101,52 @@ def combine_input_with_process_definition(input):
         message = input.get("answer")
         image = input.get("image")
         
-        return {
+        chain_input = {
             "processDefinitionList": processDefinitionList,
             "message": message,
             "image": image
         }
+        
+        if image:
+            return vision_chain.invoke(chain_input)
+        else:
+            return chain.invoke(chain_input)
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with_process_definition)
 
+from fastapi import Request
 
+async def combine_input_with_token(request: Request):
+    json_data = await request.json()
+    input = json_data.get('input')
+    
+    token_data = parse_token(request)
+    if token_data:
+        user_info = fetch_user_info(token_data.get('email'))
+        input['userInfo'] = user_info
+        
+        return combine_input_with_process_definition(input)
+    else:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 def add_routes_to_app(app) :
-    add_routes(
-        app,
-        combine_input_with_process_definition_lambda | prompt | model | parser | process_search,
-        path="/process-search",
-    )
+    app.add_api_route("/process-search", combine_input_with_token, methods=["POST"])
+    app.add_api_route("/vision-process-search", combine_input_with_token, methods=["POST"])
     
-    add_routes(
-        app,
-        combine_input_with_process_definition_lambda | vision_model_chain | parser | process_search,
-        path="/vision-process-search",
-    )
+    # add_routes(
+    #     app,
+    #     combine_input_with_process_definition_lambda | prompt | model | parser | process_search,
+    #     path="/process-search",
+    # )
+    
+    # add_routes(
+    #     app,
+    #     combine_input_with_process_definition_lambda | vision_model_chain | parser | process_search,
+    #     path="/vision-process-search",
+    # )
 
 
 
