@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableLambda
 from datetime import datetime
 
 
-from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token, upsert_chat_message, fetch_ui_definition_by_activity_id, fetch_chat_history, upsert_todo_workitems, fetch_user_info
+from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token, upsert_chat_message, fetch_ui_definition_by_activity_id, upsert_todo_workitems, fetch_user_info
 from database import ProcessInstance
 import uuid
 import json
@@ -26,13 +26,12 @@ vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096)
 import re
 class CustomJsonOutputParser(SimpleJsonOutputParser):
     def parse(self, text: str) -> dict:
-        # Remove comments
-        text = re.sub(r'//.*?\n|/\*.*?\*/', '', text, flags=re.S)
-        
         # Extract JSON from markdown if present
         match = re.search(r'```json\n(.*?)\n```', text, re.DOTALL)
         if match:
             text = match.group(1)
+        else:
+            raise ValueError("No JSON content found within backticks.")
         
         try:
             return json.loads(text)
@@ -63,35 +62,25 @@ prompt = PromptTemplate.from_template(
 
     - Process Instance Id: {instance_id}
     
-    - Process Data:
-    {data}
+    - Process Data: {data}
     
-    - Organization Chart:
-    {organizationChart}
+    - Organization Chart: {organizationChart}
     
-    - User Information:
-    {user_info}
+    - User Information: {user_info}
     
-    - Role Bindings:
-    {role_bindings}
+    - Role Bindings: {role_bindings}
 
-    - Currently Running Activities: 
-    {current_activity_ids}
+    - Currently Running Activities: {current_activity_ids}
 
-    - Users Currently Running Activities:
-    {current_user_ids}
+    - Users Currently Running Activities: {current_user_ids}
     
-    - Currently Running Activity's Form Definition:
-    {form_definition}
+    - Currently Running Activity's Form Fields: {form_fields}
     
     - Received Message From Current Step:
     
       activityId: "{activity_id}",  // the activityId is not included in the Currently Running Activities or is the next activityId than Current Running Activities, it must never be added to completedActivities to return the activityId as complete and must be reported in cannotProceedErrors.
       user: "{user_email}",
-      submitted data: "{answer}"    // Based on the current running activity form definition html, make sure that the content of the submitted data has entered fields with readonly="false" in the form. If the readonly="true" fields are not entered, never return an error and ignore it. But if fields with readonly="false" are not entered, return the error "DATA_FIELD_NOT_EXIST".
-    
-    - Chat History:
-    {chat_history}
+      submitted data: "{answer}"    // Based on the current running activity form fields, make sure that the content of the submitted data. If the readonly="true" fields are not entered, never return an error and ignore it. But if fields with readonly="false" are not entered, return the error "DATA_FIELD_NOT_EXIST".
     
     - Today is:  {today}
     
@@ -105,7 +94,7 @@ prompt = PromptTemplate.from_template(
     The nextUserEmail included in nextActivities must be found in the role bindings and returned. If not, find the organization chart and return it.
     If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
     startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
-    If the user-submitted data is insufficient, refer to the chat history to extract the process data values.
+    If the user-submitted data is insufficient, refer to the process data to extract the value.
     
     result should be in this JSON format:
     {{
@@ -345,7 +334,6 @@ def combine_input_with_process_definition(input):
         
         if process_instance_id!="new":
             process_instance = fetch_process_instance(process_instance_id)
-            chat_history = fetch_chat_history(process_instance_id)
             
             message_json = json.dumps({"description": f"워크아이템 '{activity_id}' 을/를 실행합니다."})        
             upsert_chat_message(process_instance_id, message_json, True)
@@ -356,12 +344,12 @@ def combine_input_with_process_definition(input):
             processDefinitionJson = fetch_process_definition(process_instance.get_def_id())
             process_definition_id = input.get('process_definition_id')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
             
-            form_definition = None
+            form_fields = None
             if processDefinitionJson.get("activities"):
                 for activity in processDefinitionJson["activities"]:
                     if activity["tool"]:
                         ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id)
-                        form_definition = ui_definition.html
+                        form_fields = ui_definition.fields_json
 
             chain_input = {
                 "answer": input['answer'],
@@ -380,12 +368,10 @@ def combine_input_with_process_definition(input):
                 "today": today,
                 "organizationChart": organizationChart,
                 "instance_name_pattern": processDefinitionJson.get("instanceNamePattern") or "",
-                "form_definition": form_definition,
-                "chat_history": chat_history
+                "form_fields": form_fields
             }
         else:
             process_definition_id = input.get('process_definition_id')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
-            chat_history = fetch_chat_history(input['chat_room_id'])
 
             if not process_definition_id:
                 raise HTTPException(status_code=404, detail="Neither process definition ID nor process instance ID was provided. Cannot start or proceed with the process.")
@@ -393,12 +379,12 @@ def combine_input_with_process_definition(input):
             processDefinitionJson = fetch_process_definition(process_definition_id)
             # processDefinition = load_process_definition(processDefinitionJson)
 
-            form_definition = None  
-            if processDefinitionJson.get("data"):
-                for data_item in processDefinitionJson["data"]:
-                    if data_item["type"] == "Form":
-                        ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id)
-                        form_definition = ui_definition.html
+            form_fields = None
+            if processDefinitionJson["activities"][0]:
+                activity = processDefinitionJson["activities"][0]
+                if activity["tool"]:
+                    ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity["id"])
+                    form_fields = ui_definition.fields_json
 
             chain_input = {
                 "answer": input['answer'],  
@@ -417,8 +403,7 @@ def combine_input_with_process_definition(input):
                 "today": today,
                 "organizationChart": organizationChart,
                 "instance_name_pattern": processDefinitionJson.get("instanceNamePattern") or "",
-                "form_definition": form_definition,
-                "chat_history": chat_history
+                "form_fields": form_fields
             }
 
         if image:

@@ -308,7 +308,7 @@ def fetch_ui_definition_by_activity_id(proc_def_id, activity_id):
         else:
             return None
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"No UI definition found with ID {def_id}: {e}")
+        raise HTTPException(status_code=404, detail=f"No UI definition found with ID {proc_def_id}: {e}")
 
 class ProcessInstance(BaseModel):
     proc_inst_id: str

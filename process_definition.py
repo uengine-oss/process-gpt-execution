@@ -202,3 +202,4 @@ if __name__ == "__main__":
 class UIDefinition(BaseModel):
     id: str
     html: str
+    fields_json: Optional[List[Dict[str, Any]]] = None
