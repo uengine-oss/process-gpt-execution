@@ -95,6 +95,7 @@ prompt = PromptTemplate.from_template(
     If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
     startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
     If the user-submitted data is insufficient, refer to the process data to extract the value.
+    When an image is input, the process activity is completed based on the analyzed contents by analyzing the image.
     
     result should be in this JSON format:
     {{
