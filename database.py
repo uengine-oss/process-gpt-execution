@@ -61,16 +61,16 @@ def update_db():
 
 async def update_db_settings(subdomain):
     try:
+        secret_key = os.getenv("SUPABASE_SECRET_KEY")
+        secret_key_var.set(secret_key)
+        
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_KEY")
+        supabase: Client = create_client(url, key)
+        supabase_client_var.set(supabase)
+        
+        subdomain_var.set(subdomain)    
         if subdomain and "localhost" not in subdomain:
-            subdomain_var.set(subdomain)
-            secret_key = os.getenv("SUPABASE_SECRET_KEY_PROD")
-            secret_key_var.set(secret_key)
-            
-            url = os.getenv("SUPABASE_URL_PROD")
-            key = os.getenv("SUPABASE_KEY_PROD")
-            supabase: Client = create_client(url, key)
-            supabase_client_var.set(supabase)
-            
             db_config = {
                 'dbname': 'postgres',
                 'user': 'postgres.qivmgbtrzgnjcpyynpam',
@@ -81,16 +81,6 @@ async def update_db_settings(subdomain):
             db_config_var.set(db_config)
             
         else:
-            # subdomain_var.set('localhost')
-            subdomain_var.set(subdomain)
-            secret_key = os.getenv("SUPABASE_SECRET_KEY_DEV")
-            secret_key_var.set(secret_key)
-            
-            url = os.getenv("SUPABASE_URL_DEV")
-            key = os.getenv("SUPABASE_KEY_DEV")
-            supabase: Client = create_client(url, key)
-            supabase_client_var.set(supabase)
-            
             db_config = {
                 'dbname': 'postgres',
                 'user': 'postgres',
