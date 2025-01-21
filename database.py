@@ -18,7 +18,7 @@ db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
 subdomain_var = ContextVar('subdomain', default='localhost')
 
-secret_key_var = ContextVar('secret_key', default='')
+jwt_secret_var = ContextVar('jwt_secret', default='')
 algorithm_var = ContextVar('algorithm', default='HS256')
 
 # url = "http://127.0.0.1:54321"
@@ -61,11 +61,17 @@ def update_db():
 
 async def update_db_settings(subdomain):
     try:
-        secret_key = os.getenv("SUPABASE_SECRET_KEY")
-        secret_key_var.set(secret_key)
+        jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
+        if not jwt_secret:
+            jwt_secret = "super-secret-jwt-token-with-at-least-32-characters-long"
+        jwt_secret_var.set(jwt_secret)
         
         url = os.getenv("SUPABASE_URL")
+        if not url:
+            url = "http://127.0.0.1:54321"
         key = os.getenv("SUPABASE_KEY")
+        if not key:
+            key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
         supabase: Client = create_client(url, key)
         supabase_client_var.set(supabase)
         
@@ -769,9 +775,9 @@ def parse_token(request: Request) -> Dict[str, str]:
         if auth_header:
             token = auth_header.split(" ")[1]
             try:
-                secret_key = secret_key_var.get()
+                jwt_secret = jwt_secret_var.get()
                 algorithm = algorithm_var.get()
-                payload = jwt.decode(token, secret_key, algorithms=[algorithm], audience='authenticated')
+                payload = jwt.decode(token, jwt_secret, algorithms=[algorithm], audience='authenticated')
                 
                 subdomain = subdomain_var.get()
                 if payload['app_metadata']['tenant_id'] != subdomain:
