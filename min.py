@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
 from langchain.schema.output_parser import StrOutputParser
 from langchain.output_parsers.json import SimpleJsonOutputParser

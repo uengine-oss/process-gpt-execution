@@ -15,10 +15,10 @@ os.environ["PYTHONIOENCODING"] = "utf-8"
 
 #캐시 적용
 #from langchain.cache import InMemoryCache
-from langchain.globals import set_llm_cache
+# from langchain.globals import set_llm_cache
 
 # set_llm_cache(InMemoryCache())
-from langchain.cache import SQLiteCache
+# from langchain.cache import SQLiteCache
 
 #set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 

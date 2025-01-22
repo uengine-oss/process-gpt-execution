@@ -15,7 +15,11 @@ supabase = "*"
 psycopg2-binary = "*"
 python-multipart = "*"
 flask = "*"
-jwt = "*"
+chromadb = "*"
+pyjwt = "*"
+pydantic = "*"
+langchain-openai = "*"
+langchain-community = "*"
 
 [dev-packages]
 

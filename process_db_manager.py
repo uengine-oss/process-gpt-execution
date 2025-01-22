@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 from langchain.prompts import PromptTemplate
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda
 from database import fetch_process_definition, execute_sql, generate_create_statement_for_table

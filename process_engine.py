@@ -1,6 +1,6 @@
 from fastapi import HTTPException
 from langchain.prompts import PromptTemplate
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langserve import add_routes
 from langchain.output_parsers.json import SimpleJsonOutputParser  # JsonOutputParser 임포트
 from pydantic import BaseModel

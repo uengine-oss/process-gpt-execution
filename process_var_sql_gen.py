@@ -1,6 +1,6 @@
 from fastapi import HTTPException, Request
 from langchain.prompts import PromptTemplate
-from langchain_community.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, fetch_chat_history, upsert_chat_message, parse_token, fetch_todolist_by_user_id, fetch_process_instance_list, fetch_process_instance, fetch_process_definition
@@ -16,7 +16,15 @@ from pathlib import Path
 import openai
 
 import os
+os.environ["OPENAI_API_KEY"] = "sk-QOLA8c64nteaxPOdRlNeeJbrZla9KGkt66UnwBmok3T3BlbkFJfYoWc-q3K7-knvf99y6oWnc8IdUBgsmcfzsK6hzfgA"
 openai_api_key = os.getenv("OPENAI_API_KEY")
+
+# vector
+from langchain_openai import OpenAIEmbeddings
+from langchain.vectorstores import Chroma
+from langchain.schema import Document
+embedding_function = OpenAIEmbeddings(model="text-embedding-3-large")
+persist_directory = "db/speech_embedding_db"
 
 
 parser = SimpleJsonOutputParser()
@@ -102,10 +110,18 @@ def combine_input_with_instance_start(input):
 def combine_input_with_process_definition(input):
     try:
         query = input["query"]
-        processDefinitionList = fetch_all_process_definitions()
+        
+        vectordb = Chroma("process_definitions", embedding_function, persist_directory)
+        
+        if vectordb.__len__() == 0:
+            processDefinitionList = fetch_all_process_definitions()
+            docs = [Document(page_content=item.get("bpmn")) for item in processDefinitionList]
+            vectordb = Chroma.from_documents(docs, embedding_function, collection_name="process_definitions", persist_directory=persist_directory)
+        # Perform similarity search
+        results = vectordb.similarity_search(query)
         
         return {
-            "processDefinitionList": processDefinitionList,
+            "processDefinitionList": results,
             "query": query
         }
     except Exception as e:
@@ -616,8 +632,10 @@ def create_audio_stream(data, email):
         
     # TODO: QUERY_INFO 인 경우 작업 필요   
     elif intent == "QUERY_INFO":
+        chain = process_definition_query_chain
+        input = {"query": input_text}
         # chain = info_query_chain
-        input = {"var_name": input_text, "resolution_rule": "요청된 프로세스 정의와 해당 건에 대한 프로세스 인스턴스 정보를 읽어야. 가능한 하나의 테이블에서 데이터를 조회. UNION 사용하지 말것."}
+        # input = {"var_name": input_text, "resolution_rule": "요청된 프로세스 정의와 해당 건에 대한 프로세스 인스턴스 정보를 읽어야. 가능한 하나의 테이블에서 데이터를 조회. UNION 사용하지 말것."}
 
     word = ""
     result = ""
