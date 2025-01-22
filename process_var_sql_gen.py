@@ -16,7 +16,6 @@ from pathlib import Path
 import openai
 
 import os
-os.environ["OPENAI_API_KEY"] = "sk-QOLA8c64nteaxPOdRlNeeJbrZla9KGkt66UnwBmok3T3BlbkFJfYoWc-q3K7-knvf99y6oWnc8IdUBgsmcfzsK6hzfgA"
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
 # vector
