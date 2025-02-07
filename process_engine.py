@@ -350,7 +350,8 @@ def combine_input_with_process_definition(input):
                 for activity in processDefinitionJson["activities"]:
                     if activity["tool"]:
                         ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id)
-                        form_fields = ui_definition.fields_json
+                        if ui_definition:
+                            form_fields = ui_definition.fields_json
 
             chain_input = {
                 "answer": input['answer'],
@@ -385,7 +386,8 @@ def combine_input_with_process_definition(input):
                 activity = processDefinitionJson["activities"][0]
                 if activity["tool"]:
                     ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity["id"])
-                    form_fields = ui_definition.fields_json
+                    if ui_definition:
+                        form_fields = ui_definition.fields_json
 
             chain_input = {
                 "answer": input['answer'],  
@@ -472,6 +474,9 @@ async def combine_input_with_role_binding(request: Request):
             my_email = token_data.get('email')
         roles = input.get('roles')
         organizationChart = fetch_organization_chart()
+        
+        if not organizationChart:
+            raise HTTPException(status_code=404, detail="Organization chart not found")
         
         chain_input = {
             "roles": roles,
