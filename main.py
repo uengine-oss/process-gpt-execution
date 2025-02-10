@@ -1,3 +1,7 @@
+import os
+
+os.environ["PYTHONIOENCODING"] = "utf-8"
+
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,10 +12,6 @@ from process_var_sql_gen import add_routes_to_app as add_var_sql_gen_routes_to_a
 from audio_input import add_routes_to_app as add_audio_input_routes_to_app
 from min import add_routes_to_app as add_min_routes_to_app
 from process_def_search import add_routes_to_app as add_process_def_search_routes_to_app
-
-import os
-
-os.environ["PYTHONIOENCODING"] = "utf-8"
 
 #캐시 적용
 #from langchain.cache import InMemoryCache
@@ -43,7 +43,7 @@ from database import update_db_settings, update_db
 class DBConfigMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         host_name = request.headers.get('X-Forwarded-Host')
-        if host_name is None or any(substring in host_name for substring in ['localhost', '127.0.0.1', '192.168']):
+        if host_name is None or any(substring in host_name for substring in ['localhost']):
             subdomain = 'localhost'
         else:
             subdomain = host_name.split('.')[0]
