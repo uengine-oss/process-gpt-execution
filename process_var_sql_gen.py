@@ -3,7 +3,7 @@ from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
-from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, fetch_chat_history, upsert_chat_message, parse_token, fetch_todolist_by_user_id, fetch_process_instance_list, fetch_process_instance, fetch_process_definition
+from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, upsert_chat_message, parse_token, fetch_todolist_by_user_id, fetch_process_instance_list, fetch_chat_history, subdomain_var
 import re
 import json
 from decimal import Decimal
@@ -48,6 +48,94 @@ prompt = PromptTemplate.from_template(
                                       
     """)
 
+def get_process_definitions(input):
+    try:
+        query = input.get("query")
+        tenant_id = subdomain_var.get()
+        
+        proc_def_vector_store = Chroma("process_definitions", embedding_function, persist_directory)
+        
+        if proc_def_vector_store.__len__() == 0:
+            process_definitions = fetch_all_process_definitions()
+            docs = [Document(page_content=item.get("bpmn"), metadata={"tenant_id": tenant_id}) for item in process_definitions]
+            proc_def_vector_store = Chroma.from_documents(
+                docs, 
+                embedding_function, 
+                collection_name="process_definitions", 
+                persist_directory=persist_directory
+            )
+        # similarity search
+        proc_def_list = proc_def_vector_store.similarity_search(
+            query, 
+            k=3, 
+            filter={"tenant_id": tenant_id}
+        )
+        
+        return proc_def_list
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+def get_process_instances(input):
+    try:
+        query = input.get("query")
+        email = input.get("email")
+        tenant_id = subdomain_var.get()
+        
+        proc_inst_vector_store = Chroma("process_instances", embedding_function, persist_directory)
+        
+        if proc_inst_vector_store.__len__() == 0:
+            process_instances = fetch_process_instance_list(email)
+            docs = [Document(page_content=str(item), metadata={"tenant_id": tenant_id}) for item in process_instances]
+            proc_inst_vector_store = Chroma.from_documents(
+                docs, 
+                embedding_function, 
+                collection_name="process_instances", 
+                persist_directory=persist_directory
+            )
+        # similarity search
+        proc_inst_list = proc_inst_vector_store.similarity_search(
+            query, 
+            k=3, 
+            filter={"tenant_id": tenant_id}
+        )
+        
+        return proc_inst_list
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+def get_chat_history(input):
+    try:
+        query = input.get("query")
+        chat_room_id = input.get("chat_room_id")
+        tenant_id = subdomain_var.get()
+        
+        chat_vector_store = Chroma("chat_history", embedding_function, persist_directory)
+
+        if chat_vector_store.__len__() == 0:
+            chat_history = fetch_chat_history(chat_room_id)
+            docs = [Document(page_content=str(item), metadata={"tenant_id": tenant_id}) for item in chat_history]
+            chat_vector_store = Chroma.from_documents(
+                docs, 
+                embedding_function, 
+                collection_name="chat_history", 
+                persist_directory=persist_directory
+            )
+        # similarity search
+        chat_history = chat_vector_store.similarity_search(
+            query, 
+            k=3, 
+            filter={"$and": [
+                {"tenant_id": tenant_id}, 
+                {"chat_room_id": chat_room_id}
+            ]}
+        )
+        
+        return chat_history
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 def combine_input_with_process_table_schema(input):
     
@@ -79,8 +167,7 @@ def combine_input_with_process_table_schema(input):
 def combine_input_with_instance_data_query(input):
     try:
         query = input["query"]
-        email = input["email"]
-        instance_list = fetch_process_instance_list(email)
+        instance_list = get_process_instances(input)
 
         return {
             "query": query,
@@ -91,13 +178,15 @@ def combine_input_with_instance_data_query(input):
 
 def combine_input_with_instance_start(input):
     try:
+        query = input["query"]
         chat_room_id = input["chat_room_id"]
-        processDefinitionList = fetch_all_process_definitions()
-        chat_history = fetch_chat_history(chat_room_id)
+        processDefinitionList = get_process_definitions(input)
+        if chat_room_id:
+            chat_history = get_chat_history(input)
 
         return {
             "processDefinitionList": processDefinitionList,
-            "command": input["command"],
+            "command": query,
             "chat_history": chat_history,
             "email": input["email"],
             "chat_room_id": chat_room_id
@@ -109,18 +198,10 @@ def combine_input_with_instance_start(input):
 def combine_input_with_process_definition(input):
     try:
         query = input["query"]
-        
-        vectordb = Chroma("process_definitions", embedding_function, persist_directory)
-        
-        if vectordb.__len__() == 0:
-            processDefinitionList = fetch_all_process_definitions()
-            docs = [Document(page_content=item.get("bpmn")) for item in processDefinitionList]
-            vectordb = Chroma.from_documents(docs, embedding_function, collection_name="process_definitions", persist_directory=persist_directory)
-        # Perform similarity search
-        results = vectordb.similarity_search(query)
+        processDefinitionList = get_process_definitions(input)
         
         return {
-            "processDefinitionList": results,
+            "processDefinitionList": processDefinitionList,
             "query": query
         }
     except Exception as e:
@@ -142,7 +223,7 @@ def combine_input_with_todolist(input):
         query = input["query"]
         user_id = input["email"]
         todolist = fetch_todolist_by_user_id(user_id)
-        instance_list = fetch_process_instance_list(user_id)
+        instance_list = get_process_instances(input)
         
         return {
             "query": query,
@@ -154,13 +235,15 @@ def combine_input_with_todolist(input):
 
 def combine_input_with_workitem_complete(input):
     try:
+        query = input["query"]
         email = input["email"]
         chat_room_id = input["chat_room_id"]
         todolist = fetch_todolist_by_user_id(email)
-        instance_list = fetch_process_instance_list(email)
+        
+        instance_list = get_process_instances(input)
         
         return {
-            "command": input["command"],
+            "command": query,
             "email": email,
             "todolist": todolist,
             "chat_room_id": chat_room_id,
@@ -169,30 +252,16 @@ def combine_input_with_workitem_complete(input):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def combine_input_with_process_instance_chat_history(input):
-    try:
-        query = input["query"]
-        chat_room_id = input["chat_room_id"]
-        chat_history = input["chat_history"]
-        instance = fetch_process_instance(chat_room_id)
-        
-        return {
-            "query": query,
-            "chat_history": chat_history,
-            "process_instance": instance
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 def combine_input_with_process_input_data(input):
     try:
-        processDefinitionList = fetch_all_process_definitions()
-        chat_room_id = input["chat_room_id"]
-        chat_history = fetch_chat_history(chat_room_id)
+        query = input["query"]
+        processDefinitionList = get_process_definitions(input)
+        chat_history = get_chat_history(input)
+        
         today = str(date.today())
         
         return {
-            "command": input["command"],
+            "command": query,
             "processDefinitionList": processDefinitionList,
             "chat_history": chat_history,
             "today": today
@@ -208,7 +277,6 @@ combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with
 combine_input_with_schedule_lambda = RunnableLambda(combine_input_with_schedule)
 combine_input_with_todolist_lambda = RunnableLambda(combine_input_with_todolist)
 combine_input_with_workitem_complete_lambda = RunnableLambda(combine_input_with_workitem_complete)
-combine_input_with_process_instance_chat_history_lambda = RunnableLambda(combine_input_with_process_instance_chat_history)
 combine_input_with_process_input_data_lambda = RunnableLambda(combine_input_with_process_input_data)
 
 def extract_markdown_code_blocks(markdown_text):
@@ -450,29 +518,6 @@ workitem_complete_prompt = PromptTemplate.from_template(
     """
     )
 
-process_instance_with_chat_history_query_prompt = PromptTemplate.from_template(
-    """
-        Please describe the process instance data like this:
-
-        example: 현재의 프로세스는 영업활동프로세스이며, 진행상태는 영업 제안서 작성단계에서 정체가 발생하고 있으며 담당자는 장진영입니다. 영업 담당자는 강서구입니다. 
-        (현재 진행단계 설명, 진행상태 설명, 각 담당자 등 프로세스 인스턴스 데이터와 채팅 내역에서 얻어진 다양한 정보를 바탕으로 설명)
-        
-        here is user query:
-        {query}
-
-        here is process instance data:
-        {process_instance}
-        
-        here is chat history so far:
-        {chat_history} 
-
-        * 만약 데이터가 오류인 경우는, 그냥 해당 정보가 없다고 답해.
-        * 인스턴스 ID는 설명할 필요 없어.
-        * 결과는 개조식이 아닌 서술식으로 설명해
-        * please describe in Korean Language
-    """
-    )
-
 process_instance_data_query_chain = (
         combine_input_with_instance_data_query_lambda | 
         describe_result_prompt | 
@@ -524,20 +569,12 @@ workitem_complete_chain = (
         execute_process 
     )
 
-process_instance_with_chat_history_query_chain = (
-        combine_input_with_process_instance_chat_history_lambda | 
-        process_instance_with_chat_history_query_prompt | 
-        model | 
-        StrOutputParser() 
-    )
-
 
 intent_classification = PromptTemplate.from_template(
     """
         Please classify the user's intent among the following:
 
         QUERY_PROCESS_INSTANCE: query for status of a specific process instance. (e.g., 현재 영업활동 프로세스 인스턴스들의 상태를 알려줘)
-        QUERY_PROCESS_INSTANCE_WITH_CHAT_HISTORY: query for status of a specific process instance with chat history. (e.g., 현재 영업활동 프로세스 인스턴스들의 상태를 알려줘)
         QUERY_PROCESS_DEFINITION: query for process definition, its activities, and checkpoints for the activity. (e.g., 휴가 신청 프로세스에 대해 알려줘)
         QUERY_TODO_LIST: query for the to-do list or specific work items. (e.g., 내 할일 목록을 알려줘)
         COMMAND_WORK_ITEM: command for completing a process instance work item. (e.g., 휴가 신청을 승인 할게)
@@ -585,7 +622,8 @@ import uuid
 def create_audio_stream(data, email):
     input_text = data.get("query")
     chat_room_id = data.get("chat_room_id")
-    chat_history = fetch_chat_history(chat_room_id)
+    if  chat_room_id:
+        chat_history = get_chat_history(data)
 
     intent = intent_classification_chain.invoke({"query": input_text, "chat_history": chat_history})
 
@@ -605,13 +643,9 @@ def create_audio_stream(data, email):
         chain = process_instance_data_query_chain
         input = {"query": input_text, "email": email}
     
-    elif intent == "QUERY_PROCESS_INSTANCE_WITH_CHAT_HISTORY":
-        chain = process_instance_with_chat_history_query_chain
-        input = {"query": input_text, "chat_room_id": chat_room_id, "chat_history": chat_history}
-        
-    elif intent == "COMMAND_PROCESS_START" or intent == "COMMAND_PROCESS_START_WITH_CHAT_HISTORY":
+    elif intent == "COMMAND_PROCESS_START":
         chain = process_instance_start_chain
-        input = {"command": input_text, "chat_room_id": chat_room_id, "email": email}
+        input = {"query": input_text, "chat_room_id": chat_room_id, "email": email}
 
     elif intent == "QUERY_PROCESS_DEFINITION":
         chain = process_definition_query_chain
@@ -623,11 +657,11 @@ def create_audio_stream(data, email):
     
     elif intent == "COMMAND_WORK_ITEM":
         chain = workitem_complete_chain
-        input = {"command": input_text, "chat_room_id": chat_room_id, "email": email}
+        input = {"query": input_text, "chat_room_id": chat_room_id, "email": email}
         
     elif intent == "COMMAND_PROCESS_INPUT_DATA":
         chain = process_input_data_chain
-        input = {"command": input_text, "chat_room_id": chat_room_id, "email": email}
+        input = {"query": input_text, "chat_room_id": chat_room_id, "email": email}
         
     # TODO: QUERY_INFO 인 경우 작업 필요   
     elif intent == "QUERY_INFO":
