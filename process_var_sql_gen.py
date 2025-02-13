@@ -4,6 +4,7 @@ from langchain_openai import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, upsert_chat_message, parse_token, fetch_todolist_by_user_id, fetch_process_instance_list, fetch_chat_history, subdomain_var
+from process_engine import combine_input_with_process_definition
 import re
 import json
 from decimal import Decimal
@@ -33,9 +34,8 @@ model = ChatOpenAI(model="gpt-4o", streaming=True)
 
 prompt = PromptTemplate.from_template(
     """
-     아래의 데이터베이스 스키마를 참고하여  "{var_name}" 의 값을 얻어올 수 있도록 하는 SQL을 생성해줘:
+    아래의 데이터베이스 스키마를 참고하여  "{var_name}" 의 값을 얻어올 수 있도록 하는 SQL을 생성해줘:
 
-  
     - Existing Table Schemas:
     {process_table_schema}
     - 규칙은 이러함:
@@ -53,52 +53,57 @@ def get_process_definitions(input):
         query = input.get("query")
         tenant_id = subdomain_var.get()
         
-        proc_def_vector_store = Chroma("process_definitions", embedding_function, persist_directory)
+        vector_store = Chroma(tenant_id, embedding_function, persist_directory)
         
-        if proc_def_vector_store.__len__() == 0:
+        if vector_store.__len__() == 0:
             process_definitions = fetch_all_process_definitions()
-            docs = [Document(page_content=item.get("bpmn"), metadata={"tenant_id": tenant_id}) for item in process_definitions]
-            proc_def_vector_store = Chroma.from_documents(
+            docs = [Document(page_content=str(item.get("definition"))) for item in process_definitions]
+            vector_store = Chroma.from_documents(
                 docs, 
                 embedding_function, 
-                collection_name="process_definitions", 
+                collection_name=tenant_id,
                 persist_directory=persist_directory
             )
         # similarity search
-        proc_def_list = proc_def_vector_store.similarity_search(
+        proc_def_list = vector_store.similarity_search(
             query, 
             k=3, 
-            filter={"tenant_id": tenant_id}
         )
         
         return proc_def_list
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+process_definition_prompt = PromptTemplate.from_template(
+    """
+    다음 질의를 기반으로 프로세스 정의 아이디를 추출해줘:
+
+    사용자 질의: {query}
+    프로세스 정의 목록: {proc_def_list}
+
+    결과는 프로세스 정의 아이디만 출력해줘. (ex: vacation_request_process)
+    """
+)
+
+get_process_definition_id_chain = (
+    RunnablePassthrough() | 
+    process_definition_prompt | 
+    model | 
+    StrOutputParser()
+)
 
 def get_process_instances(input):
     try:
         query = input.get("query")
         email = input.get("email")
-        tenant_id = subdomain_var.get()
+        proc_def_list = input.get("proc_def_list")
         
-        proc_inst_vector_store = Chroma("process_instances", embedding_function, persist_directory)
-        
-        if proc_inst_vector_store.__len__() == 0:
-            process_instances = fetch_process_instance_list(email)
-            docs = [Document(page_content=str(item), metadata={"tenant_id": tenant_id}) for item in process_instances]
-            proc_inst_vector_store = Chroma.from_documents(
-                docs, 
-                embedding_function, 
-                collection_name="process_instances", 
-                persist_directory=persist_directory
-            )
-        # similarity search
-        proc_inst_list = proc_inst_vector_store.similarity_search(
-            query, 
-            k=3, 
-            filter={"tenant_id": tenant_id}
-        )
+        # 프롬프트 템플릿을 사용하여 입력 생성
+        process_definition_id = get_process_definition_id_chain.invoke({"query": query, "proc_def_list": proc_def_list})
+                
+        # 추출된 프로세스 정의 아이디를 사용하여 인스턴스 조회
+        proc_inst_list = fetch_process_instance_list(email, process_definition_id)
         
         return proc_inst_list
     
@@ -164,10 +169,11 @@ def combine_input_with_process_table_schema(input):
         "process_table_schema": process_table_schema
     }
 
+# 프로세스 인스턴스 데이터 조회
 def combine_input_with_instance_data_query(input):
     try:
-        query = input["query"]
         instance_list = get_process_instances(input)
+        query = input["query"]
 
         return {
             "query": query,
@@ -176,11 +182,12 @@ def combine_input_with_instance_data_query(input):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# 프로세스 인스턴스 시작
 def combine_input_with_instance_start(input):
     try:
         query = input["query"]
         chat_room_id = input["chat_room_id"]
-        processDefinitionList = get_process_definitions(input)
+        processDefinitionList = input["proc_def_list"]
         if chat_room_id:
             chat_history = get_chat_history(input)
 
@@ -195,10 +202,11 @@ def combine_input_with_instance_start(input):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def combine_input_with_process_definition(input):
+# 프로세스 정의 조회
+def combine_input_with_process_definitions(input):
     try:
         query = input["query"]
-        processDefinitionList = get_process_definitions(input)
+        processDefinitionList = input["proc_def_list"]
         
         return {
             "processDefinitionList": processDefinitionList,
@@ -207,17 +215,7 @@ def combine_input_with_process_definition(input):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def combine_input_with_schedule(input):
-    try:
-        query = input["query"]
-        
-        return {
-            "query": query,
-            "today": str(date.today())
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
+# 프로세스 인스턴스 할일 목록 조회
 def combine_input_with_todolist(input): 
     try:
         query = input["query"]
@@ -233,6 +231,7 @@ def combine_input_with_todolist(input):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# 프로세스 인스턴스 워크아이템
 def combine_input_with_workitem_complete(input):
     try:
         query = input["query"]
@@ -252,10 +251,11 @@ def combine_input_with_workitem_complete(input):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# 프로세스 인스턴스 입력 데이터
 def combine_input_with_process_input_data(input):
     try:
         query = input["query"]
-        processDefinitionList = get_process_definitions(input)
+        processDefinitionList = input["proc_def_list"]
         chat_history = get_chat_history(input)
         
         today = str(date.today())
@@ -273,8 +273,7 @@ combine_input_with_process_table_schema_lambda = RunnableLambda(combine_input_wi
 
 combine_input_with_instance_data_query_lambda = RunnableLambda(combine_input_with_instance_data_query)
 combine_input_with_instance_start_lambda = RunnableLambda(combine_input_with_instance_start)
-combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with_process_definition)
-combine_input_with_schedule_lambda = RunnableLambda(combine_input_with_schedule)
+combine_input_with_process_definitions_lambda = RunnableLambda(combine_input_with_process_definitions)
 combine_input_with_todolist_lambda = RunnableLambda(combine_input_with_todolist)
 combine_input_with_workitem_complete_lambda = RunnableLambda(combine_input_with_workitem_complete)
 combine_input_with_process_input_data_lambda = RunnableLambda(combine_input_with_process_input_data)
@@ -320,24 +319,20 @@ def execute_process(process_json):
         activity_id = process_json["activity_id"]
         chat_room_id = process_json["chatRoomId"]
         
-        data = {
-            "input": {
-                "answer": answer,
-                "process_instance_id": process_instance_id,
-                "process_definition_id": process_definition_id,
-                "userInfo": {
-                    "email": email
-                },
-                "activity_id": activity_id,
-                "chat_room_id": chat_room_id
-            }
+        input = {
+            "answer": answer,
+            "process_instance_id": process_instance_id,
+            "process_definition_id": process_definition_id,
+            "userInfo": {
+                "email": email
+            },
+            "activity_id": activity_id,
+            "chat_room_id": chat_room_id
         }
         
-        url = f"http://localhost:8000/complete"
-        response = requests.post(url, json=data)
-        
-        if response.status_code == 200:
-            json_data = json.loads(response.json())
+        response = combine_input_with_process_definition(input)        
+        if response:
+            json_data = json.loads(response)
             if json_data:
                 return json_data["description"]
             
@@ -407,7 +402,7 @@ process_input_data_prompt = PromptTemplate.from_template(
 
         example: 
         - user: 오늘 프로세스 실행 에러가 발생했어. 해당 내용으로 장애 내역 접수할게.
-        - system: 장애 관리 프로세스에 의하면, 장애 내역 접수 활동의 입력 데이터는 장애 접수폼으로 장애 접수폼은, 장애 제목, 장애 발생 일자, 장애 유형, 보고자, 장애 설명 작성이 필요합니다. 요청하신 내용을 바탕으로 장애 접수폼을 작성하면 장애 제목은 프로세스 실행 에러, 장애 발생 일자는 오늘 날짜인 2024년 7월 25일, 장애 유형은 소프트웨어, 보고자는 홍길동, 장애 설명은 프로세스 실행 에러 발생 입니다.
+        - system: 장애 관리 프로세스에 의하면, 장애 내역 접수 활동은 장애 접수폼의 장애 제목, 장애 발생 일자, 장애 유형, 보고자, 장애 설명 작성이 필요합니다. 요청하신 내용을 바탕으로 장애 접수폼을 작성하면 장애 제목은 프로세스 실행 에러, 장애 발생 일자는 오늘 날짜인 2024년 7월 25일, 장애 유형은 소프트웨어, 보고자는 홍길동, 장애 설명은 프로세스 실행 에러 발생 입니다. 수정할 내용이 없으시다면 장애 관리 프로세스를 시작하겠습니다.
         
         here is user command:
         {command}
@@ -446,27 +441,6 @@ process_definition_prompt = PromptTemplate.from_template(
         * 결과는 개조식이 아닌 서술식으로 설명해
 
         * please describe in Korean Language                                    
-    """
-    )
-
-schedule_prompt = PromptTemplate.from_template(
-    """
-        아래 달력 정보를 확인하여 유저가 요청한 일정 내의 스케쥴 정보나 해야할 일을 요약해서 알려줘:
-    
-        here is user query:
-        {query}
-
-        here is the user's schedule data:
-        1. 2024-05-27: 주간회의, 장소는 zoom
-        2. 2024-05-28: SW공학관련 신제품 관련 자료 제출
-        3. 2024-05-29: 지인들과 골프약속. 장소: 아시아나cc
-        4. 2024-05-30: 예전 고객과 저녁회동. 장소: 광교신도시
-
-        오늘의 날짜:
-        {today}
-
-        * 결과는 개조식이 아닌 서술식으로 설명해
-        * please describe in Korean Language
     """
     )
 
@@ -518,6 +492,7 @@ workitem_complete_prompt = PromptTemplate.from_template(
     """
     )
 
+# QUERY_PROCESS_INSTANCE
 process_instance_data_query_chain = (
         combine_input_with_instance_data_query_lambda | 
         describe_result_prompt | 
@@ -541,17 +516,10 @@ process_input_data_chain = (
     )
 
 process_definition_query_chain = (
-        combine_input_with_process_definition_lambda | 
+        combine_input_with_process_definitions_lambda | 
         process_definition_prompt | 
         model | 
         StrOutputParser() 
-    )
-
-schedule_query_chain = (
-        combine_input_with_schedule_lambda | 
-        schedule_prompt | 
-        model | 
-        StrOutputParser()
     )
 
 todolist_query_chain = (
@@ -638,30 +606,32 @@ def create_audio_stream(data, email):
     else:
         chat_room_id = str(uuid.uuid4())
         upsert_chat_message(chat_room_id, message_data, False)
+    
+    proc_def_list = get_process_definitions(data)
 
     if intent == "QUERY_PROCESS_INSTANCE":
         chain = process_instance_data_query_chain
-        input = {"query": input_text, "email": email}
+        input = {"query": input_text, "email": email, "proc_def_list": proc_def_list}
     
     elif intent == "COMMAND_PROCESS_START":
         chain = process_instance_start_chain
-        input = {"query": input_text, "chat_room_id": chat_room_id, "email": email}
+        input = {"query": input_text, "chat_room_id": chat_room_id, "email": email, "proc_def_list": proc_def_list}
 
     elif intent == "QUERY_PROCESS_DEFINITION":
         chain = process_definition_query_chain
-        input = {"query": input_text}
+        input = {"query": input_text, "proc_def_list": proc_def_list}
     
     elif intent == "QUERY_TODO_LIST":
         chain = todolist_query_chain
-        input = {"query": input_text, "email": email}
+        input = {"query": input_text, "email": email, "proc_def_list": proc_def_list}
     
     elif intent == "COMMAND_WORK_ITEM":
         chain = workitem_complete_chain
-        input = {"query": input_text, "chat_room_id": chat_room_id, "email": email}
+        input = {"query": input_text, "chat_room_id": chat_room_id, "email": email, "proc_def_list": proc_def_list}
         
     elif intent == "COMMAND_PROCESS_INPUT_DATA":
         chain = process_input_data_chain
-        input = {"query": input_text, "chat_room_id": chat_room_id, "email": email}
+        input = {"query": input_text, "chat_room_id": chat_room_id, "email": email, "proc_def_list": proc_def_list}
         
     # TODO: QUERY_INFO 인 경우 작업 필요   
     elif intent == "QUERY_INFO":

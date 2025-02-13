@@ -20,6 +20,7 @@ pyjwt = "*"
 pydantic = "*"
 langchain-openai = "*"
 langchain-community = "*"
+pytz = "*"
 
 [dev-packages]
 

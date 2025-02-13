@@ -91,26 +91,14 @@ from langchain.schema import Document
 embedding_function = OpenAIEmbeddings(model="text-embedding-3-large")
 persist_directory = "db/speech_embedding_db"
 
-proc_def_vector_store = Chroma("process_definitions", embedding_function, persist_directory)
-proc_inst_vector_store = Chroma("process_instances", embedding_function, persist_directory)
-chat_vector_store = Chroma("chat_history", embedding_function, persist_directory)
-
 async def update_vector_store(request: Request):
     try:
         input = await request.json();
-        collection_name = input.get("collection_name");
         content = input.get("content");
         tenant_id = subdomain_var.get();
-        documents = [Document(page_content=content, metadata={"tenant_id": tenant_id})];
- 
-        if collection_name == "process_definitions":
-            proc_def_vector_store.add_documents(documents=documents, metadata={"tenant_id": tenant_id});
-        elif collection_name == "process_instances":
-            proc_inst_vector_store.add_documents(documents=documents, metadata={"tenant_id": tenant_id});
-        elif collection_name == "chat_history":
-            chat_room_id = input.get("chat_room_id");
-            chat_vector_store.add_documents(documents=documents, metadata={"tenant_id": tenant_id, "chat_room_id": chat_room_id});
-        
+        vector_store = Chroma(tenant_id, embedding_function, persist_directory)
+        documents = [Document(page_content=content)];
+        vector_store.add_documents(documents=documents);        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f" {e}")
 

@@ -489,14 +489,17 @@ def fetch_organization_chart():
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Failed to fetch organization chart: {e}")
 
-def fetch_process_instance_list(user_id: str) -> Optional[List[ProcessInstance]]:
+def fetch_process_instance_list(user_id: str, process_definition_id: Optional[str] = None) -> Optional[List[ProcessInstance]]:
     try:
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
         subdomain = subdomain_var.get()
-        response = supabase.table('bpm_proc_inst').select("*").eq('tenant_id', subdomain).filter('current_user_ids', 'cs', '{' + user_id + '}').execute()
+        if process_definition_id:
+            response = supabase.table('bpm_proc_inst').select("*").eq('tenant_id', subdomain).eq('proc_def_id', process_definition_id).filter('current_user_ids', 'cs', '{' + user_id + '}').execute()
+        else:
+            response = supabase.table('bpm_proc_inst').select("*").eq('tenant_id', subdomain).filter('current_user_ids', 'cs', '{' + user_id + '}').execute()
         
         if response.data:
             return [ProcessInstance(**item) for item in response.data]
