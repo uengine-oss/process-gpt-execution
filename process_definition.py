@@ -15,8 +15,9 @@ class Variable(BaseModel):
 
 class ProcessData(BaseModel):
     name: str
-    description: str
     type: str
+    table: Optional[str] = None
+    description: Optional[str] = None
     dataSource: Optional[DataSource] = None
 
 class ProcessRole(BaseModel):
@@ -72,7 +73,7 @@ class ProcessGateway(BaseModel):
 class ProcessDefinition(BaseModel):
     processDefinitionName: str
     processDefinitionId: str
-    description: str
+    description: Optional[str] = None
     data: Optional[List[ProcessData]] = []
     roles: Optional[List[ProcessRole]] = []
     activities: Optional[List[ProcessActivity]] = []
@@ -165,6 +166,22 @@ class ProcessDefinition(BaseModel):
         """
         next_activities_ids = [sequence.target for sequence in self.sequences if sequence.source == current_activity_id]
         return [activity for activity in self.activities if activity.id in next_activities_ids]
+    
+    def find_end_activity(self) -> Optional[ProcessActivity]:
+        """
+        Finds and returns the end activity of the process, which is the one with no outgoing sequences.
+
+        Returns:
+            Optional[Activity]: The initial activity if found, None otherwise.
+        """
+        # Find the sequence with "end_event" as the source
+        end_sequence = next((seq for seq in self.sequences if "end_event" in seq.target.lower()), None)
+        
+        if end_sequence:
+            # Find the activity that matches the target of the start sequence
+            return next((activity for activity in self.activities if activity.id == end_sequence.source), None)
+        
+        return None
 
     def find_activity_by_id(self, activity_id: str) -> Optional[ProcessActivity]:
         for activity in self.activities:

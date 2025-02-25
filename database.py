@@ -312,7 +312,7 @@ class ProcessInstance(BaseModel):
     role_bindings: Optional[List[Dict[str, str]]] = []
     current_activity_ids: List[str] = []
     current_user_ids: List[str] = []
-    variables_data: Dict[str, Any] = {}
+    variables_data: Optional[List[Dict[str, Any]]] = []
     process_definition: ProcessDefinition = None  # Add a reference to ProcessDefinition
     status: str = None
     tenant_id: str
@@ -562,42 +562,46 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
         if not process_result_data['completedActivities']:
             return
         
-        workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], process_result_data['completedActivities'][0]['completedActivityId'])
-        
-        if workitem:
-            workitem.status = process_result_data['completedActivities'][0]['result']
-            workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul'))
-            workitem.user_id = process_result_data['completedActivities'][0]['completedUserEmail']
-        else:
-            activity = process_definition.find_activity_by_id(process_result_data['completedActivities'][0]['completedActivityId'])
-            start_date = datetime.now(pytz.timezone('Asia/Seoul'))
-            due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
-            subdomain = subdomain_var.get()
-            workitem = WorkItem(
-                id=f"{str(uuid.uuid4())}",
-                proc_inst_id=prcess_instance_data['proc_inst_id'],
-                proc_def_id=process_result_data['processDefinitionId'].lower(),
-                activity_id=process_result_data['completedActivities'][0]['completedActivityId'],
-                activity_name=activity.name,
-                user_id=process_result_data['completedActivities'][0]['completedUserEmail'],
-                status=process_result_data['completedActivities'][0]['result'],
-                tool=activity.tool,
-                start_date=start_date,
-                end_date=datetime.now(pytz.timezone('Asia/Seoul')) if process_result_data['completedActivities'][0]['result'] == 'DONE' else None,
-                due_date=due_date,
-                tenant_id=subdomain
+        for completed_activity in process_result_data['completedActivities']:
+            workitem = fetch_workitem_by_proc_inst_and_activity(
+                prcess_instance_data['proc_inst_id'], 
+                completed_activity['completedActivityId']
             )
-        
-        workitem_dict = workitem.dict()
-        workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
-        workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
-        workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
+            
+            if workitem:
+                workitem.status = completed_activity['result']
+                workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul'))
+                workitem.user_id = completed_activity['completedUserEmail']
+            else:
+                activity = process_definition.find_activity_by_id(completed_activity['completedActivityId'])
+                start_date = datetime.now(pytz.timezone('Asia/Seoul'))
+                due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
+                subdomain = subdomain_var.get()
+                workitem = WorkItem(
+                    id=f"{str(uuid.uuid4())}",
+                    proc_inst_id=prcess_instance_data['proc_inst_id'],
+                    proc_def_id=process_result_data['processDefinitionId'].lower(),
+                    activity_id=completed_activity['completedActivityId'],
+                    activity_name=activity.name,
+                    user_id=completed_activity['completedUserEmail'],
+                    status=completed_activity['result'],
+                    tool=activity.tool,
+                    start_date=start_date,
+                    end_date=datetime.now(pytz.timezone('Asia/Seoul')) if completed_activity['result'] == 'DONE' else None,
+                    due_date=due_date,
+                    tenant_id=subdomain
+                )
+            
+            workitem_dict = workitem.dict()
+            workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
+            workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
+            workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
 
-        supabase = supabase_client_var.get()
-        if supabase is None:
-            raise Exception("Supabase client is not configured for this request")
-        
-        supabase.table('todolist').upsert(workitem_dict).execute()
+            supabase = supabase_client_var.get()
+            if supabase is None:
+                raise Exception("Supabase client is not configured for this request")
+            
+            supabase.table('todolist').upsert(workitem_dict).execute()
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 

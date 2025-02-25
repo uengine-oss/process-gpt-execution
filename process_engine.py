@@ -61,9 +61,7 @@ prompt = PromptTemplate.from_template(
     - Process Definition: {processDefinitionJson}
 
     - Process Instance Id: {instance_id}
-    
-    - Process Data: {data}
-    
+        
     - Organization Chart: {organizationChart}
     
     - User Information: {user_info}
@@ -102,9 +100,10 @@ prompt = PromptTemplate.from_template(
         "instanceId": "{instance_id}",
         "instanceName": "process instance name",
         "processDefinitionId": "{process_definition_id}",
-        "dataChanges":
+        "fieldMappings":
         [{{
-            "key": "process data name", // Replace with _ if there is a space, Process Definition 에서 없는 데이터는 추가하지 않음.
+            "key": "process data key", // Replace with _ if there is a space, Process Definition 에서 없는 데이터는 추가하지 않음. 프로세스 정의 데이터에 이메일이나 이름 같은 변수가 존재하지만 값이 누락된 경우 역할 바인딩에서 적절한 값을 알아서 지정하여 필드 매핑해줄 것.
+            "name": "process data name",
             "value": <value for changed data>  // Refer to the data type of this process variable. For example, if the type of the process variable is Date, calculate and assign today's date.
         }}],
 
@@ -157,8 +156,9 @@ class RoleBindingChange(BaseModel):
     roleName: str
     userId: str
 
-class DataChange(BaseModel):
+class FieldMapping(BaseModel):
     key: str
+    name: str
     value: Any
 
 class ProceedError(BaseModel):
@@ -167,8 +167,8 @@ class ProceedError(BaseModel):
 
 class ProcessResult(BaseModel):
     instanceId: str
-    instanceName: str
-    dataChanges: Optional[List[DataChange]] = None
+    instanceName: str   
+    fieldMappings: Optional[List[FieldMapping]] = None
     roleBindingChanges: Optional[List[RoleBindingChange]] = None
     nextActivities: List[Activity]
     completedActivities: List[CompletedActivity]
@@ -194,7 +194,7 @@ def execute_next_activity(process_result_json: dict) -> str:
                 role_bindings=[rb.model_dump() for rb in (process_result.roleBindingChanges or [])],
                 current_activity_ids=[],
                 current_user_ids=[],
-                variables_data={},
+                variables_data=[],
                 status=status,
                 tenant_id=""
             )
@@ -203,10 +203,15 @@ def execute_next_activity(process_result_json: dict) -> str:
         
         process_definition = process_instance.process_definition
 
-        if process_result.dataChanges:
-            for data_change in process_result.dataChanges:
-                process_instance.variables_data[data_change.key] = data_change.value
-        # for data_change in process_result.dataChanges or []:
+        if process_result.fieldMappings:
+            for data_change in process_result.fieldMappings:
+                variable = {
+                    "key": data_change.key,
+                    "name": data_change.name,
+                    "value": data_change.value
+                }
+                process_instance.variables_data.append(variable)
+        # for data_change in process_result.fieldMappings or []:
         #     setattr(process_instance, data_change.key, data_change.value)
             
         all_user_emails = set()
@@ -233,22 +238,58 @@ def execute_next_activity(process_result_json: dict) -> str:
 
         for activity in process_result.nextActivities:
             activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
-            if activity_obj and activity_obj.type == "ScriptActivity":
-                env_vars = {key.upper(): value for key, value in process_instance.get_data().items()}
+            if activity_obj and activity_obj.type == "scriptTask":
+                env_vars = {}
+                for variable in process_instance.variables_data:
+                    if variable["value"] is None:
+                        continue
+                    if isinstance(variable["value"], list):
+                        variable["value"] = ', '.join(map(str, variable["value"]))
+                    env_vars[variable["key"]] = variable["value"]
                 result = execute_python_code(activity_obj.pythonCode, env_vars=env_vars)
-
-                process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
+                
+                if result.returncode != 0:
+                    # script task 의 python code 실행 에러
+                    process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
+                else:
+                    # script task 의 python code 실행 성공
+                    process_instance.current_activity_ids = [
+                        act_id for act_id in process_instance.current_activity_ids
+                        if act_id != activity_obj.id
+                    ]
+                    
+                    end_activity = process_definition.find_end_activity()
+                    if end_activity and activity_obj.id == end_activity.id:
+                        process_instance.status = "COMPLETED"
+                        process_instance.current_activity_ids = ['end_event']
+                        
+                    process_result_json["nextActivities"] = [
+                        Activity(**act) for act in process_result_json.get("nextActivities", [])
+                        if act.get("nextActivityId") != activity_obj.id
+                    ]
+                    completed_activity = CompletedActivity(
+                        completedActivityId=activity_obj.id,
+                        completedUserEmail=activity.nextUserEmail,
+                        result="DONE"
+                    )
+                    completed_activity_dict = completed_activity.dict()
+                    process_result_json["completedActivities"].append(completed_activity_dict)
+                    
+                # process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
+                process_result_json["result"] = result.stdout
             else:
                 result = (f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found.")
+                process_result_json["result"] = result
                 
-        upsert_todo_workitems(process_instance.dict(), process_result.dict(), process_definition)
+                
+        upsert_todo_workitems(process_instance.dict(), process_result_json, process_definition)
         
         workitems = None
         message_json = json.dumps({"description": ""})
         if not process_result.cannotProceedErrors:
+            upsert_completed_workitem(process_instance.dict(), process_result_json, process_definition)
+            workitems = upsert_next_workitems(process_instance.dict(), process_result_json, process_definition)
             _, process_instance = upsert_process_instance(process_instance)
-            upsert_completed_workitem(process_instance.dict(), process_result.dict(), process_definition)
-            workitems = upsert_next_workitems(process_instance.dict(), process_result.dict(), process_definition)
             message_json = json.dumps({"description": process_result.description})
         else:
             reason = ""
@@ -260,13 +301,12 @@ def execute_next_activity(process_result_json: dict) -> str:
         # Updating process_result_json with the latest process instance details and execution result
         process_result_json["instanceId"] = process_instance.proc_inst_id
         process_result_json["instanceName"] = process_instance.proc_inst_name
-        process_result_json["result"] = result
         # Ensure workitem is not None before accessing its id
         if workitems:
             process_result_json["workitemIds"] = [workitem.id for workitem in workitems]
         else:
             process_result_json["workitemIds"] = []
-
+        
         return json.dumps(process_result_json)
     except Exception as e:
         message_json = json.dumps({"description": str(e)})
@@ -358,7 +398,7 @@ def combine_input_with_process_definition(input):
                 "instance_id": process_instance.proc_inst_id,
                 "instance_name": process_instance.proc_inst_name,
                 "role_bindings": process_instance.role_bindings,
-                "data": process_instance.model_dump_json(),   #TODO 속성 중에 processdefinition 은 불필요한데 들어있어서 사이즈를 차지 하니 제외처리필요
+                # "data": process_instance.model_dump_json(),   #TODO 속성 중에 processdefinition 은 불필요한데 들어있어서 사이즈를 차지 하니 제외처리필요
                 "current_activity_ids": process_instance.current_activity_ids,
                 "current_user_ids": process_instance.current_user_ids,
                 "processDefinitionJson": processDefinitionJson,
@@ -394,7 +434,7 @@ def combine_input_with_process_definition(input):
                 "instance_id": input['chat_room_id'] or "new",
                 "instance_name": "",
                 "role_bindings": role_bindings or "no bindings",
-                "data": "no data",
+                # "data": "no data",
                 "current_activity_ids": "there's no currently running activities",
                 "current_user_ids": "there's no user currently running activities",
                 "processDefinitionJson": processDefinitionJson,

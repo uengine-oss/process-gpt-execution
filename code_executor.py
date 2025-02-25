@@ -72,12 +72,14 @@ def execute_python_file(
         cwd=str(workding_dir),
         env=env
     )
+    
+    return result
 
-    if result.returncode != 0:
-        logger.error(f"Error executing Python file: {result.stderr}")
-        raise Exception(f"Error executing Python file: {result.stderr}")
+    # if result.returncode != 0:
+    #     logger.error(f"Error executing Python file: {result.stderr}")
+    #     raise Exception(f"Error executing Python file: {result.stderr}")
 
-    return result.stdout
+    # return result.stdout
 
 # Example usage
 if __name__ == "__main__":
