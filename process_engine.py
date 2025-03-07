@@ -286,12 +286,11 @@ def execute_next_activity(process_result_json: dict) -> str:
         
         workitems = None
         message_json = json.dumps({"description": ""})
-        if not process_result.cannotProceedErrors:
-            upsert_completed_workitem(process_instance.dict(), process_result_json, process_definition)
-            workitems = upsert_next_workitems(process_instance.dict(), process_result_json, process_definition)
-            _, process_instance = upsert_process_instance(process_instance)
-            message_json = json.dumps({"description": process_result.description})
-        else:
+        upsert_completed_workitem(process_instance.dict(), process_result_json, process_definition)
+        workitems = upsert_next_workitems(process_instance.dict(), process_result_json, process_definition)
+        _, process_instance = upsert_process_instance(process_instance)
+        message_json = json.dumps({"description": process_result.description})
+        if process_result.cannotProceedErrors:
             reason = ""
             for error in process_result.cannotProceedErrors:
                 reason += error.reason + "\n"
