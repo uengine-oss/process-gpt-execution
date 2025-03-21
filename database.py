@@ -792,13 +792,13 @@ def parse_token(request: Request) -> Dict[str, str]:
                 
                 return payload
             except ExpiredSignatureError:
-                raise HTTPException(status_code=401, detail="Token expired")
+                raise HTTPException(status_code=401, detail={"message": "Token expired", "status_code": 401})
             except InvalidTokenError as e:
-                raise HTTPException(status_code=401, detail=f"Invalid token {e}")
+                raise HTTPException(status_code=401, detail={"message": f"Invalid token {e}", "status_code": 401})
         else:
-            raise HTTPException(status_code=401, detail="Authorization header missing")
+            raise HTTPException(status_code=401, detail={"message": "Authorization header missing", "status_code": 401})
     else:
-        raise HTTPException(status_code=401, detail="Authorization header not provided")
+        raise HTTPException(status_code=401, detail={"message": "Authorization header not provided", "status_code": 401})
 
 def fetch_user_info(email: str) -> Dict[str, str]:
     try:

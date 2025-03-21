@@ -469,7 +469,10 @@ async def combine_input_with_token(request: Request):
         user_info = fetch_user_info(token_data.get('email'))
         input['userInfo'] = user_info
         
-        return combine_input_with_process_definition(input)
+        if request.url.path == "/role-binding":
+            return combine_input_with_role_binding(input)
+        else:
+            return combine_input_with_process_definition(input)
     else:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -504,14 +507,10 @@ role_binding_chain = (
     role_binding_prompt | model | parser | process_role_binding
 )
 
-async def combine_input_with_role_binding(request: Request):
+def combine_input_with_role_binding(input):
     try:
-        json_data = await request.json()
-        input = json_data.get('input')
-        token_data = parse_token(request)
-        if token_data:
-            my_email = token_data.get('email')
         roles = input.get('roles')
+        my_email = input.get('userInfo').get('email')
         organizationChart = fetch_organization_chart()
         
         if not organizationChart:
@@ -533,7 +532,7 @@ async def combine_input_with_role_binding(request: Request):
 def add_routes_to_app(app) :
     app.add_api_route("/complete", combine_input_with_token, methods=["POST"])
     app.add_api_route("/vision-complete", combine_input_with_token, methods=["POST"])
-    app.add_api_route("/role-binding", combine_input_with_role_binding, methods=["POST"])
+    app.add_api_route("/role-binding", combine_input_with_token, methods=["POST"])
     
     # add_routes(
     #     app,
