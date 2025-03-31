@@ -83,25 +83,6 @@ prompt = PromptTemplate.from_template(
                                       
     """)
 
-# vector store
-from langchain_openai import OpenAIEmbeddings
-from langchain.vectorstores import Chroma
-from langchain.schema import Document
-
-embedding_function = OpenAIEmbeddings(model="text-embedding-3-large")
-persist_directory = "db/speech_embedding_db"
-
-async def update_vector_store(request: Request):
-    try:
-        input = await request.json();
-        content = input.get("content");
-        tenant_id = subdomain_var.get();
-        vector_store = Chroma(tenant_id, embedding_function, persist_directory)
-        documents = [Document(page_content=content)];
-        vector_store.add_documents(documents=documents);        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f" {e}")
-
 
 async def combine_input_with_process_definition(input):
     # 프로세스 인스턴스를 DB에서 검색
@@ -169,8 +150,6 @@ def add_routes_to_app(app) :
         generate_drop_table_sql_lambda | execute_drop_table_sql_lambda,
         path="/drop-process-table",
     )
-    
-    app.add_api_route("/update-vs", update_vector_store, methods=["POST"])
     
 
 """

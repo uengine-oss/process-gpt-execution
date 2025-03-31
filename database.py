@@ -398,10 +398,13 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
         
         if response.data:
             process_instance_data = response.data[0]
-            # Apply system data sources
+
+            if isinstance(process_instance_data.get('variables_data'), dict):
+                process_instance_data['variables_data'] = [process_instance_data['variables_data']]
+            
             process_instance = ProcessInstance(**process_instance_data)
             process_instance = fetch_and_apply_system_data_sources(process_instance)
-            # Convert the dictionary to a ProcessInstance object
+            
             return process_instance
         else:
             return None
@@ -815,3 +818,20 @@ def fetch_user_info(email: str) -> Dict[str, str]:
             raise HTTPException(status_code=404, detail="User not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import SupabaseVectorStore
+
+def get_vector_store():
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        raise Exception("Supabase client is not configured")
+    
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small", deployment="text-embedding-3-small")
+    
+    return SupabaseVectorStore(
+        client=supabase,
+        embedding=embeddings,
+        table_name="documents",
+        query_name="match_documents",
+    )

@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
+from langchain.schema import Document
 from langserve import add_routes
 from langchain.output_parsers.json import SimpleJsonOutputParser  # JsonOutputParser 임포트
 from pydantic import BaseModel
@@ -10,7 +11,7 @@ from langchain_core.runnables import RunnableLambda
 from datetime import datetime
 
 
-from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token, upsert_chat_message, fetch_ui_definition_by_activity_id, upsert_todo_workitems, fetch_user_info
+from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token, upsert_chat_message, fetch_ui_definition_by_activity_id, upsert_todo_workitems, fetch_user_info, get_vector_store
 from database import ProcessInstance
 import uuid
 import json
@@ -306,6 +307,20 @@ def execute_next_activity(process_result_json: dict) -> str:
         else:
             process_result_json["workitemIds"] = []
         
+        content_str = json.dumps(process_instance.dict(exclude={'process_definition'}), ensure_ascii=False, indent=2)
+        metadata = {
+            "tenant_id": process_instance.tenant_id,
+            "type": "process_instance"
+        }
+
+        vector_store = get_vector_store()
+        vector_store.add_documents([
+            Document(
+                page_content=content_str,
+                metadata=metadata
+            )
+        ])
+        
         return json.dumps(process_result_json)
     except Exception as e:
         message_json = json.dumps({"description": str(e)})
@@ -369,6 +384,8 @@ def combine_input_with_process_definition(input):
         today = now.date()
         
         organizationChart = fetch_organization_chart()
+        if not organizationChart:
+            organizationChart = "There is no organization chart"
 
         processDefinitionJson = None
         
@@ -514,7 +531,7 @@ def combine_input_with_role_binding(input):
         organizationChart = fetch_organization_chart()
         
         if not organizationChart:
-            raise HTTPException(status_code=404, detail="Organization chart not found")
+            organizationChart = "There is no organization chart"
         
         chain_input = {
             "roles": roles,

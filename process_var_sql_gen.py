@@ -3,7 +3,7 @@ from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
-from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, upsert_chat_message, parse_token, fetch_todolist_by_user_id, fetch_process_instance_list, fetch_chat_history, subdomain_var
+from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, upsert_chat_message, parse_token, fetch_todolist_by_user_id, fetch_process_instance_list, subdomain_var, fetch_ui_definition, get_vector_store
 from process_engine import combine_input_with_process_definition
 import re
 import json
@@ -20,12 +20,11 @@ import os
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
 # vector
-from langchain_openai import OpenAIEmbeddings
-from langchain.vectorstores import Chroma
-from langchain.schema import Document
-embedding_function = OpenAIEmbeddings(model="text-embedding-3-large")
-persist_directory = "db/speech_embedding_db"
-
+# from langchain_openai import OpenAIEmbeddings
+# from langchain.vectorstores import Chroma
+# from langchain.schema import Document
+# embedding_function = OpenAIEmbeddings(model="text-embedding-3-large")
+# persist_directory = "db/speech_embedding_db"
 
 parser = SimpleJsonOutputParser()
 
@@ -48,26 +47,27 @@ prompt = PromptTemplate.from_template(
                                       
     """)
 
+form_definition_prompt = PromptTemplate.from_template(
+    """
+    아래의 사용자 질의와 프로세스 정의 목록을 기반으로 폼 아이디 값을 추출해줘:
+
+    사용자 질의: {query}
+    프로세스 정의 목록: {proc_def_list}
+    
+    결과는 폼 정의 아이디 값만 출력해줘. (ex: leave_request_and_approval_process_submit_leave_request_form)
+    """
+)
+
 def get_process_definitions(input):
     try:
         query = input.get("query")
         tenant_id = subdomain_var.get()
-        
-        vector_store = Chroma(tenant_id, embedding_function, persist_directory)
-        
-        if vector_store.__len__() == 0:
-            process_definitions = fetch_all_process_definitions()
-            docs = [Document(page_content=str(item.get("definition"))) for item in process_definitions]
-            vector_store = Chroma.from_documents(
-                docs, 
-                embedding_function, 
-                collection_name=tenant_id,
-                persist_directory=persist_directory
-            )
         # similarity search
+        vector_store = get_vector_store()
         proc_def_list = vector_store.similarity_search(
             query, 
             k=3, 
+            filter={"tenant_id": tenant_id, "type": "process_definition"}
         )
         
         return proc_def_list
@@ -96,14 +96,21 @@ get_process_definition_id_chain = (
 def get_process_instances(input):
     try:
         query = input.get("query")
-        email = input.get("email")
-        proc_def_list = input.get("proc_def_list")
+        # email = input.get("email")
+        # proc_def_list = input.get("proc_def_list")
         
-        # 프롬프트 템플릿을 사용하여 입력 생성
-        process_definition_id = get_process_definition_id_chain.invoke({"query": query, "proc_def_list": proc_def_list})
+        # # 프롬프트 템플릿을 사용하여 입력 생성
+        # process_definition_id = get_process_definition_id_chain.invoke({"query": query, "proc_def_list": proc_def_list})
                 
-        # 추출된 프로세스 정의 아이디를 사용하여 인스턴스 조회
-        proc_inst_list = fetch_process_instance_list(email, process_definition_id)
+        # # 추출된 프로세스 정의 아이디를 사용하여 인스턴스 조회
+        # proc_inst_list = fetch_process_instance_list(email, process_definition_id)
+        tenant_id = subdomain_var.get()
+        vector_store = get_vector_store()
+        proc_inst_list = vector_store.similarity_search(
+            query, 
+            k=3, 
+            filter={"tenant_id": tenant_id, "type": "process_instance"}
+        )
         
         return proc_inst_list
     
@@ -116,25 +123,12 @@ def get_chat_history(input):
         chat_room_id = input.get("chat_room_id")
         tenant_id = subdomain_var.get()
         
-        chat_vector_store = Chroma("chat_history", embedding_function, persist_directory)
-
-        if chat_vector_store.__len__() == 0:
-            chat_history = fetch_chat_history(chat_room_id)
-            docs = [Document(page_content=str(item), metadata={"tenant_id": tenant_id}) for item in chat_history]
-            chat_vector_store = Chroma.from_documents(
-                docs, 
-                embedding_function, 
-                collection_name="chat_history", 
-                persist_directory=persist_directory
-            )
         # similarity search
-        chat_history = chat_vector_store.similarity_search(
+        vector_store = get_vector_store()
+        chat_history = vector_store.similarity_search(
             query, 
             k=3, 
-            filter={"$and": [
-                {"tenant_id": tenant_id}, 
-                {"chat_room_id": chat_room_id}
-            ]}
+            filter={"tenant_id": tenant_id, "chat_room_id": chat_room_id}
         )
         
         return chat_history
@@ -142,32 +136,37 @@ def get_chat_history(input):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def combine_input_with_process_table_schema(input):
-    
-    var_name = input.get('var_name')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
-    resolution_rule = input.get('resolution_rule')  # 'process_definition_id'bytes: \xedbytes:\x82\xa4에 대한bytes: \xec\xa0bytes:\x91bytes:\xea\xb7bytes:\xbc 추가
+def combine_input_with_process_table_schema(input, path):
+    if path == "/process-var-sql":
+        var_name = input.get('var_name')
+        resolution_rule = input.get('resolution_rule')
+        
+        process_table_schemas = []
+        for process_definition_id in fetch_all_process_definition_ids():
+            process_table_schema = generate_create_statement_for_table(process_definition_id)
+            process_table_schemas.append(process_table_schema)
+        
+        process_table_schema = "\n".join(process_table_schemas)
+            
+        var_sql_input = {
+            "var_name": var_name,
+            "resolution_rule": resolution_rule,
+            "process_table_schema": process_table_schema
+        }
+        
+        return process_var_sql_chain.invoke(var_sql_input)
 
-    if not var_name:
-        raise HTTPException(status_code=404, detail="No process Variable name was provided.")
-    
-    
-    # processDefinitionJson = fetch_process_definition(process_definition_id)
+    elif path == "/process-data-query":
+        query = input.get("query")
+        proc_def_list = get_process_definitions(input)
+        
+        data_query_input = {
+            "query": query,
+            "proc_def_list": proc_def_list
+        }
+        
+        return process_data_query_chain.invoke(data_query_input)
 
-    # if not processDefinitionJson:
-    #     raise HTTPException(status_code=404, detail=f"No process definition where definition id = {process_definition_id}")
-    
-    process_table_schemas = []
-    for process_definition_id in fetch_all_process_definition_ids():
-        process_table_schema = generate_create_statement_for_table(process_definition_id)
-        process_table_schemas.append(process_table_schema)
-    
-    process_table_schema = "\n".join(process_table_schemas)
-
-    return {
-        "var_name": var_name,
-        "resolution_rule": resolution_rule,
-        "process_table_schema": process_table_schema
-    }
 
 # 프로세스 인스턴스 데이터 조회
 def combine_input_with_instance_data_query(input):
@@ -296,19 +295,40 @@ def runsql(sql):
     return {"result": json.dumps(result, default=default)}
 
 def extract_html_table(markdown_text):
-    # Extract HTML table code block from markdown text
-    start = markdown_text.find("```html")
-    end = markdown_text.find("```", start + 1)
-    if start != -1 and end != -1:
-        return markdown_text[start + 7:end].strip()
-    return markdown_text
+    try:
+        if markdown_text is None:
+            return None
+        # Extract HTML table code block from markdown text
+        start = markdown_text.find("```html")
+        end = markdown_text.find("```", start + 1)
+        if start != -1 and end != -1:
+            return markdown_text[start + 7:end].strip()
+        return markdown_text
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 def clean_html_string(html_string):
-    # \n 제거
-    cleaned_string = html_string.replace("\n", "")
-    # \"를 "로 변환
-    cleaned_string = cleaned_string.replace('\\"', '"')
-    return cleaned_string
+    try:
+        if html_string is None:
+            return None
+        # \n 제거
+        cleaned_string = html_string.replace("\n", "")
+        # \"를 "로 변환
+        cleaned_string = cleaned_string.replace('\\"', '"')
+        return cleaned_string
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+def get_form_definition(form_definition_id):
+    try:
+        form_definition = fetch_ui_definition(form_definition_id)
+        if form_definition:
+            return form_definition.html
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 def execute_process(process_json):
     try:
@@ -492,50 +512,66 @@ workitem_complete_prompt = PromptTemplate.from_template(
     """
     )
 
+process_var_sql_chain = (
+    prompt | 
+    model | 
+    extract_markdown_code_blocks
+)
+
+process_data_query_chain = (
+    form_definition_prompt | 
+    model | 
+    StrOutputParser() | 
+    get_form_definition | 
+    extract_html_table | 
+    clean_html_string
+)
+
+
 # QUERY_PROCESS_INSTANCE
 process_instance_data_query_chain = (
-        combine_input_with_instance_data_query_lambda | 
-        describe_result_prompt | 
-        model | 
-        StrOutputParser() 
-    )
+    combine_input_with_instance_data_query_lambda | 
+    describe_result_prompt | 
+    model | 
+    StrOutputParser() 
+)
 
 process_instance_start_chain = (
-        combine_input_with_instance_start_lambda | 
-        process_instance_start_prompt | 
-        model | 
-        parser | 
-        execute_process 
-    )
+    combine_input_with_instance_start_lambda | 
+    process_instance_start_prompt | 
+    model | 
+    parser | 
+    execute_process 
+)
 
 process_input_data_chain = (
-        combine_input_with_process_input_data_lambda | 
-        process_input_data_prompt | 
-        model | 
-        StrOutputParser()
-    )
+    combine_input_with_process_input_data_lambda | 
+    process_input_data_prompt | 
+    model | 
+    StrOutputParser()
+)
 
 process_definition_query_chain = (
-        combine_input_with_process_definitions_lambda | 
-        process_definition_prompt | 
-        model | 
-        StrOutputParser() 
-    )
+    combine_input_with_process_definitions_lambda | 
+    process_definition_prompt | 
+    model | 
+    StrOutputParser() 
+)
 
 todolist_query_chain = (
-        combine_input_with_todolist_lambda | 
-        todolist_prompt | 
-        model | 
-        StrOutputParser() 
-    )
+    combine_input_with_todolist_lambda | 
+    todolist_prompt | 
+    model | 
+    StrOutputParser() 
+)
 
 workitem_complete_chain = (
-        combine_input_with_workitem_complete_lambda | 
-        workitem_complete_prompt | 
-        model | 
-        parser | 
-        execute_process 
-    )
+    combine_input_with_workitem_complete_lambda | 
+    workitem_complete_prompt | 
+    model | 
+    parser | 
+    execute_process 
+)
 
 
 intent_classification = PromptTemplate.from_template(
@@ -594,7 +630,8 @@ def create_audio_stream(data, email):
         chat_history = get_chat_history(data)
 
     intent = intent_classification_chain.invoke({"query": input_text, "chat_history": chat_history})
-
+    print(intent)
+    
     chain = process_instance_data_query_chain
     
     message_data = {
@@ -675,19 +712,33 @@ async def stream_audio(request: Request):
     # input = await request.json()
     # return StreamingResponse(create_audio_stream(input), media_type='audio/webm')
 
-def add_routes_to_app(app) :
-    add_routes(
-        app,
-        combine_input_with_process_table_schema_lambda | prompt | model | extract_markdown_code_blocks,
-        path="/process-var-sql",
-    )
 
-    add_routes(
-        app,
-        combine_input_with_process_table_schema_lambda | prompt | model | extract_markdown_code_blocks | runsql | draw_table_prompt | model | StrOutputParser() | extract_html_table | clean_html_string,
-        path="/process-data-query",
-    )
-   
+async def combine_input_with_token(request: Request):
+    json_data = await request.json()
+    input = json_data.get('input')
+    
+    user_info = parse_token(request)
+    if user_info:
+        input['userInfo'] = user_info        
+        return combine_input_with_process_table_schema(input, request.url.path)
+    else:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+def add_routes_to_app(app) :
+    # add_routes(
+    #     app,
+    #     combine_input_with_process_table_schema_lambda | prompt | model | extract_markdown_code_blocks,
+    #     path="/process-var-sql",
+    # )
+
+    # add_routes(
+    #     app,
+    #     combine_input_with_process_table_schema_lambda | prompt | model | extract_markdown_code_blocks | runsql | draw_table_prompt | model | StrOutputParser() | extract_html_table | clean_html_string,
+    #     path="/process-data-query",
+    # )
+
+    app.add_api_route("/process-var-sql", combine_input_with_token, methods=["POST"])
+    app.add_api_route("/process-data-query", combine_input_with_token, methods=["POST"])
     app.add_api_route("/audio-stream", stream_audio, methods=["POST"])
 
 

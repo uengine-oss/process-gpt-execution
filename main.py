@@ -54,8 +54,6 @@ class DBConfigMiddleware(BaseHTTPMiddleware):
         return response
 
 
-app = FastAPI()
-
 app.post("/update_db")(update_db)
     
 # 미들웨어 추가
