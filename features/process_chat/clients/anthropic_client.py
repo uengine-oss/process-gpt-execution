@@ -1,0 +1,29 @@
+from .base import BaseClient
+from langchain_anthropic import ChatAnthropic
+from typing import List, Dict, Any, AsyncGenerator
+from fastapi.responses import StreamingResponse
+from langchain.schema import BaseMessage
+
+class AnthropicClient(BaseClient):
+    def __init__(self, model: str, streaming: bool, token: str, modelConfig: Dict[str, Any]):
+        super().__init__(model, streaming, token, modelConfig)
+        self.llm = ChatAnthropic(
+            model=self.model,
+            api_key=self.token,
+            **self.modelConfig
+        )
+
+    async def invoke(self, messages: List[BaseMessage]) -> Dict[str, Any]:
+        response = await self.llm.ainvoke(messages)
+        return self._format_non_stream_response(response.content)
+
+    async def _stream_logic(self, messages: List[BaseMessage]) -> AsyncGenerator[str, None]:
+        async for chunk in self.llm.astream(messages):
+            if hasattr(chunk, "content") and chunk.content:
+                yield chunk.content
+
+    async def stream(self, messages: List[BaseMessage]) -> StreamingResponse:
+        return await self.stream_response(messages)
+
+    def get_num_tokens_from_messages(self, messages: List[BaseMessage]) -> int:
+        return self.llm.get_num_tokens_from_messages(messages=messages)

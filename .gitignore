@@ -162,3 +162,6 @@ cython_debug/
 Pipfile.lock
 test.html
 .langchain.db
+
+.idea/
+.vscode/tasks.json
