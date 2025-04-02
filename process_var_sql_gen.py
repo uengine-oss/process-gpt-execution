@@ -3,7 +3,7 @@ from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
-from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, upsert_chat_message, parse_token, fetch_todolist_by_user_id, fetch_process_instance_list, subdomain_var, fetch_ui_definition, get_vector_store
+from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, upsert_chat_message, fetch_todolist_by_user_id, fetch_process_instance_list, subdomain_var, fetch_ui_definition, get_vector_store
 from process_engine import combine_input_with_process_definition
 import re
 import json
@@ -623,9 +623,10 @@ def generate_speech(part):
 
 import uuid
 
-def create_audio_stream(data, email):
+def create_audio_stream(data):
     input_text = data.get("query")
     chat_room_id = data.get("chat_room_id")
+    email = data.get("email")
     if  chat_room_id:
         chat_history = get_chat_history(data)
 
@@ -705,24 +706,15 @@ from fastapi.responses import StreamingResponse
 
 #input_text = "현재 영업활동 프로세스 인스턴스들의 상태를 알려줘"
 async def stream_audio(request: Request):
-    user_info = parse_token(request)
-    email = user_info["email"]
     input = await request.json()
-    return StreamingResponse(create_audio_stream(input, email), media_type='audio/webm')
-    # input = await request.json()
-    # return StreamingResponse(create_audio_stream(input), media_type='audio/webm')
+    return StreamingResponse(create_audio_stream(input), media_type='audio/webm')
 
 
-async def combine_input_with_token(request: Request):
+async def combine_input(request: Request):
     json_data = await request.json()
     input = json_data.get('input')
-    
-    user_info = parse_token(request)
-    if user_info:
-        input['userInfo'] = user_info        
-        return combine_input_with_process_table_schema(input, request.url.path)
-    else:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    return combine_input_with_process_table_schema(input, request.url.path)
+
 
 def add_routes_to_app(app) :
     # add_routes(
@@ -737,8 +729,8 @@ def add_routes_to_app(app) :
     #     path="/process-data-query",
     # )
 
-    app.add_api_route("/process-var-sql", combine_input_with_token, methods=["POST"])
-    app.add_api_route("/process-data-query", combine_input_with_token, methods=["POST"])
+    app.add_api_route("/process-var-sql", combine_input, methods=["POST"])
+    app.add_api_route("/process-data-query", combine_input, methods=["POST"])
     app.add_api_route("/audio-stream", stream_audio, methods=["POST"])
 
 

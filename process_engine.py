@@ -11,7 +11,7 @@ from langchain_core.runnables import RunnableLambda
 from datetime import datetime
 
 
-from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, parse_token, upsert_chat_message, fetch_ui_definition_by_activity_id, upsert_todo_workitems, fetch_user_info, get_vector_store
+from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, fetch_ui_definition_by_activity_id, upsert_todo_workitems, fetch_user_info, get_vector_store
 from database import ProcessInstance
 import uuid
 import json
@@ -376,8 +376,8 @@ def combine_input_with_process_definition(input):
         process_instance_id = input.get('process_instance_id')  # 'process_instance_id' 키에 대한 접근 추가
         activity_id = input.get('activity_id') 
         image = input.get("image")
-        user_info = input.get('userInfo')
-        user_email = user_info.get('email')
+        user_email = input.get('email')
+        user_info = fetch_user_info(user_email)
         role_bindings = input.get('role_mappings')
         
         now = datetime.now()
@@ -477,21 +477,14 @@ combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with
 
 from fastapi import Request
 
-async def combine_input_with_token(request: Request):
+async def combine_input(request: Request):
     json_data = await request.json()
     input = json_data.get('input')
-    
-    token_data = parse_token(request)
-    if token_data:
-        user_info = fetch_user_info(token_data.get('email'))
-        input['userInfo'] = user_info
-        
-        if request.url.path == "/role-binding":
-            return combine_input_with_role_binding(input)
-        else:
-            return combine_input_with_process_definition(input)
+    if request.url.path == "/role-binding":
+        return combine_input_with_role_binding(input)
     else:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        return combine_input_with_process_definition(input)
+
 
 ### role binding
 role_binding_prompt = PromptTemplate.from_template(
@@ -527,7 +520,7 @@ role_binding_chain = (
 def combine_input_with_role_binding(input):
     try:
         roles = input.get('roles')
-        my_email = input.get('userInfo').get('email')
+        my_email = input.get('email')
         organizationChart = fetch_organization_chart()
         
         if not organizationChart:
@@ -547,9 +540,9 @@ def combine_input_with_role_binding(input):
     
 
 def add_routes_to_app(app) :
-    app.add_api_route("/complete", combine_input_with_token, methods=["POST"])
-    app.add_api_route("/vision-complete", combine_input_with_token, methods=["POST"])
-    app.add_api_route("/role-binding", combine_input_with_token, methods=["POST"])
+    app.add_api_route("/complete", combine_input, methods=["POST"])
+    app.add_api_route("/vision-complete", combine_input, methods=["POST"])
+    app.add_api_route("/role-binding", combine_input, methods=["POST"])
     
     # add_routes(
     #     app,

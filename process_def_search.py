@@ -8,7 +8,7 @@ from langchain_core.runnables import RunnableLambda
 from langserve import add_routes
 from pydantic import BaseModel
 
-from database import fetch_all_process_definitions, parse_token, fetch_user_info
+from database import fetch_all_process_definitions, fetch_user_info
 
 
 
@@ -119,22 +119,15 @@ combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with
 
 from fastapi import Request
 
-async def combine_input_with_token(request: Request):
+async def combine_input(request: Request):
     json_data = await request.json()
     input = json_data.get('input')
-    
-    token_data = parse_token(request)
-    if token_data:
-        user_info = fetch_user_info(token_data.get('email'))
-        input['userInfo'] = user_info
-        
-        return combine_input_with_process_definition(input)
-    else:
-        raise HTTPException(status_code=401, detail="Invalid token")
+    return combine_input_with_process_definition(input)
+
 
 def add_routes_to_app(app) :
-    app.add_api_route("/process-search", combine_input_with_token, methods=["POST"])
-    app.add_api_route("/vision-process-search", combine_input_with_token, methods=["POST"])
+    app.add_api_route("/process-search", combine_input, methods=["POST"])
+    app.add_api_route("/vision-process-search", combine_input, methods=["POST"])
     
     # add_routes(
     #     app,

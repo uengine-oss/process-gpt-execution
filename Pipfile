@@ -21,6 +21,9 @@ pydantic = "*"
 langchain-openai = "*"
 langchain-community = "*"
 pytz = "*"
+langchain-anthropic = "*"
+langchain-ollama = "*"
+langchain-google-genai = "*"
 
 [dev-packages]
 
