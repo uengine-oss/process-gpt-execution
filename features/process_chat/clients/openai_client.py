@@ -4,7 +4,7 @@ from typing import List, Dict, Any, AsyncGenerator
 from fastapi.responses import StreamingResponse
 from langchain.schema import BaseMessage
 import os
-
+ 
 class OpenAIClient(BaseClient):
     def __init__(self, model: str, streaming: bool, token: str, modelConfig: Dict[str, Any]):
         super().__init__(model, streaming, token, modelConfig)
