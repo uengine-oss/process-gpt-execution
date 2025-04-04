@@ -3,6 +3,7 @@ from langchain_openai import ChatOpenAI
 from typing import List, Dict, Any, AsyncGenerator
 from fastapi.responses import StreamingResponse
 from langchain.schema import BaseMessage
+import os
 
 class OpenAIClient(BaseClient):
     def __init__(self, model: str, streaming: bool, token: str, modelConfig: Dict[str, Any]):
@@ -10,7 +11,7 @@ class OpenAIClient(BaseClient):
         self.llm = ChatOpenAI(
             model=self.model,
             streaming=self.streaming,
-            api_key=self.token,
+            api_key=os.getenv("OPENAI_API_KEY"),
             **self.modelConfig
         )
 
