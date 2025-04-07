@@ -412,7 +412,7 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 def upsert_process_instance(process_instance: ProcessInstance) -> (bool, ProcessInstance):
-    if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids or 'end_event' in process_instance.current_activity_ids:
+    if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids or 'end_event' in process_instance.current_activity_ids or process_instance.status == 'COMPLETED':
         process_instance.current_activity_ids = []
         status = 'COMPLETED'
     else:
@@ -616,6 +616,7 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
             continue
         
         workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity_data['nextActivityId'])
+        
         if workitem:
             workitem.status = activity_data['result']
             workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul')) if activity_data['result'] == 'DONE' else None
