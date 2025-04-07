@@ -171,11 +171,11 @@ class ProcessResult(BaseModel):
     instanceName: str   
     fieldMappings: Optional[List[FieldMapping]] = None
     roleBindingChanges: Optional[List[RoleBindingChange]] = None
-    nextActivities: List[Activity]
-    completedActivities: List[CompletedActivity]
+    nextActivities: Optional[List[Activity]] = None
+    completedActivities: Optional[List[CompletedActivity]] = None
     processDefinitionId: str
     result: Optional[str] = None
-    cannotProceedErrors: List[ProceedError]
+    cannotProceedErrors: Optional[List[ProceedError]] = None
     description: str
 
 def execute_next_activity(process_result_json: dict) -> str:
@@ -227,7 +227,15 @@ def execute_next_activity(process_result_json: dict) -> str:
                     if next_activities:
                         process_instance.current_activity_ids = [act.id for act in next_activities]
                         process_instance.status = "RUNNING"
-                        process_result_json["nextActivities"] = [Activity(nextActivityId=act.id, nextUserEmail=activity.nextUserEmail, result="IN_PROGRESS") for act in next_activities]
+                        process_result_json["nextActivities"] = []
+                        next_activity_dicts = [
+                            Activity(
+                                nextActivityId=act.id,
+                                nextUserEmail=activity.nextUserEmail,
+                                result="IN_PROGRESS"
+                            ).model_dump() for act in next_activities
+                        ]
+                        process_result_json["nextActivities"].extend(next_activity_dicts)
                     else:
                         process_instance.status = "COMPLETED"
                         process_instance.current_activity_ids = []
