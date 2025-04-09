@@ -3,7 +3,7 @@ from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda
-from database import fetch_process_definition, execute_sql, generate_create_statement_for_table, subdomain_var
+from database import fetch_process_definition, execute_sql, generate_create_statement_for_table, insert_process_definition_from_csv, insert_process_form_definition_from_csv
 import re
 import os
 
@@ -138,6 +138,12 @@ def execute_drop_table_sql(input):
 
 execute_drop_table_sql_lambda = RunnableLambda(execute_drop_table_sql)
 
+# 샘플 프로세스 정의 삽입 함수
+def insert_sample_process_definition():
+    insert_process_definition_from_csv()
+    insert_process_form_definition_from_csv()
+
+
 def add_routes_to_app(app) :
     add_routes(
         app,
@@ -150,6 +156,9 @@ def add_routes_to_app(app) :
         generate_drop_table_sql_lambda | execute_drop_table_sql_lambda,
         path="/drop-process-table",
     )
+    
+    app.add_api_route("/insert-sample", insert_sample_process_definition, methods=["POST"])
+    
     
 
 """
