@@ -838,15 +838,12 @@ def get_vector_store():
         query_name="match_documents",
     )
 
-def insert_process_definition_from_csv():
-    # 파일 경로 설정
-    csv_file_path = './csv/proc_def.csv'
-    
-    # Tenant ID 설정
+def insert_from_csv(csv_file_path, insert_query, value_extractor):
+    # Tenant ID 및 DB 설정
     tenant_id = subdomain_var.get()
-    
-    # PostgreSQL 연결 설정
     db_config = db_config_var.get()
+    
+    # DB 연결
     connection = psycopg2.connect(**db_config)
     cursor = connection.cursor(cursor_factory=RealDictCursor)
 
@@ -854,55 +851,70 @@ def insert_process_definition_from_csv():
     with open(csv_file_path, mode='r', encoding='utf-8') as file:
         csv_reader = csv.DictReader(file)
         for row in csv_reader:
-            # 필요한 데이터 추출
-            proc_def_id = row['id']
-            proc_def_name = row['name']
-            proc_definition = row['definition']
-            proc_def_xml = row['bpmn']
-            
-            # 데이터 삽입
-            cursor.execute(
-                "INSERT INTO proc_def (id, name, definition, bpmn, tenant_id) VALUES (%s, %s, %s, %s, %s)",
-                (proc_def_id, proc_def_name, proc_definition, proc_def_xml, tenant_id)
-            )
+            values = value_extractor(row, tenant_id)
+            cursor.execute(insert_query, values)
     
-    # 변경사항 커밋 및 연결 종료
+    # 커밋 및 정리
     connection.commit()
     cursor.close()
     connection.close()
+
+def insert_process_definition_from_csv():
+    csv_file_path = './csv/proc_def.csv'
+    insert_query = """
+        INSERT INTO proc_def (id, name, definition, bpmn, tenant_id)
+        VALUES (%s, %s, %s, %s, %s)
+    """
+    
+    def extract_values(row, tenant_id):
+        return (
+            row['id'],
+            row['name'],
+            row['definition'],
+            row['bpmn'],
+            tenant_id
+        )
+
+    insert_from_csv(csv_file_path, insert_query, extract_values)
 
 def insert_process_form_definition_from_csv():
-    # 파일 경로 설정
     csv_file_path = './csv/form_def.csv'
+    insert_query = """
+        INSERT INTO form_def (id, html, fields_json, proc_def_id, activity_id, tenant_id)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """
     
-    # Tenant ID 설정
-    tenant_id = subdomain_var.get()
-    
-    # PostgreSQL 연결 설정
-    db_config = db_config_var.get()
-    connection = psycopg2.connect(**db_config)
-    cursor = connection.cursor(cursor_factory=RealDictCursor)
+    def extract_values(row, tenant_id):
+        return (
+            row['id'],
+            row['html'],
+            row['fields_json'],
+            row['proc_def_id'],
+            row['activity_id'],
+            tenant_id
+        )
 
-    # CSV 파일 읽기
-    with open(csv_file_path, mode='r', encoding='utf-8') as file:
-        csv_reader = csv.DictReader(file)
-        for row in csv_reader:
-            # 필요한 데이터 추출
-            form_def_id = row['id']
-            form_html = row['html']
-            form_fields_json = row['fields_json']
-            proc_def_id = row['proc_def_id']
-            activity_id = row['activity_id']
-            
-            # 데이터 삽입
-            cursor.execute(
-                "INSERT INTO form_def (id, html, fields_json, proc_def_id, activity_id, tenant_id) VALUES (%s, %s, %s, %s, %s, %s)",
-                (form_def_id, form_html, form_fields_json, proc_def_id, activity_id, tenant_id)
-            )
-    
-    # 변경사항 커밋 및 연결 종료
-    connection.commit()
-    cursor.close()
-    connection.close()
+    insert_from_csv(csv_file_path, insert_query, extract_values)
 
+
+def insert_configuration_from_csv():
+    csv_file_path = './csv/configuration.csv'
+    insert_query = """
+        INSERT INTO configuration (key, value, tenant_id)
+        VALUES (%s, %s, %s)
+    """
+    
+    def extract_values(row, tenant_id):
+        return (
+            row['key'],
+            row['value'],
+            tenant_id
+        )
+
+    insert_from_csv(csv_file_path, insert_query, extract_values)
+
+def insert_sample_data():
+    insert_configuration_from_csv()
+    insert_process_definition_from_csv()
+    insert_process_form_definition_from_csv()
 
