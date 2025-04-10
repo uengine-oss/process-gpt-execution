@@ -918,3 +918,28 @@ def insert_sample_data():
     insert_process_definition_from_csv()
     insert_process_form_definition_from_csv()
 
+def update_user(input):
+    try:
+        user_id = input.get('user_id')
+        user_info = input.get('user_info')
+        supabase = supabase_client_var.get()
+        
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.auth.admin.update_user_by_id(user_id, user_info)
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+def create_user(user_info):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+
+        response = supabase.auth.admin.create_user(user_info)
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
