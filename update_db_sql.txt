@@ -431,6 +431,7 @@ create table if not exists public.form_def (
     activity_id text not null,
     tenant_id text null default auth.tenant_id(),
     id text null default ''::text,
+    fields_json jsonb null,
     constraint form_def_pkey primary key (uuid),
     constraint form_def_tenant_id_fkey foreign key (tenant_id) references tenants (id) on update cascade on delete cascade
 ) tablespace pg_default;
@@ -454,6 +455,9 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='id') THEN
         ALTER TABLE public.form_def ADD COLUMN id text null default ''::text;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='form_def' AND column_name='fields_json') THEN
+        ALTER TABLE public.form_def ADD COLUMN fields_json jsonb null;
     END IF;
 END;
 $$;

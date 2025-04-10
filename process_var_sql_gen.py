@@ -62,15 +62,20 @@ def get_process_definitions(input):
     try:
         query = input.get("query")
         tenant_id = subdomain_var.get()
-        # similarity search
-        vector_store = get_vector_store()
-        proc_def_list = vector_store.similarity_search(
-            query, 
-            k=3, 
-            filter={"tenant_id": tenant_id, "type": "process_definition"}
-        )
         
-        return proc_def_list
+        try:
+            # similarity search
+            vector_store = get_vector_store()
+            proc_def_list = vector_store.similarity_search(
+                query, 
+                k=3, 
+                filter={"tenant_id": tenant_id, "type": "process_definition"}
+            )
+            return proc_def_list
+        except Exception as vector_error:
+            print(f"Vector search failed in get_process_definitions: {vector_error}")
+            # 벡터 검색에 실패한 경우 빈 리스트 반환
+            return []
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -105,14 +110,20 @@ def get_process_instances(input):
         # # 추출된 프로세스 정의 아이디를 사용하여 인스턴스 조회
         # proc_inst_list = fetch_process_instance_list(email, process_definition_id)
         tenant_id = subdomain_var.get()
-        vector_store = get_vector_store()
-        proc_inst_list = vector_store.similarity_search(
-            query, 
-            k=3, 
-            filter={"tenant_id": tenant_id, "type": "process_instance"}
-        )
         
-        return proc_inst_list
+        try:
+            # similarity search
+            vector_store = get_vector_store()
+            proc_inst_list = vector_store.similarity_search(
+                query, 
+                k=3, 
+                filter={"tenant_id": tenant_id, "type": "process_instance"}
+            )
+            return proc_inst_list
+        except Exception as vector_error:
+            print(f"Vector search failed in get_process_instances: {vector_error}")
+            # 벡터 검색에 실패한 경우 빈 리스트 반환
+            return []
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -121,18 +132,27 @@ def get_chat_history(input):
     try:
         query = input.get("query")
         chat_room_id = input.get("chat_room_id")
+        
+        # chat_room_id가 없는 경우 빈 리스트 반환
+        if not chat_room_id:
+            return []
+            
         tenant_id = subdomain_var.get()
         
-        # similarity search
-        vector_store = get_vector_store()
-        chat_history = vector_store.similarity_search(
-            query, 
-            k=3, 
-            filter={"tenant_id": tenant_id, "chat_room_id": chat_room_id}
-        )
+        try:
+            # similarity search
+            vector_store = get_vector_store()
+            chat_history = vector_store.similarity_search(
+                query, 
+                k=3, 
+                filter={"tenant_id": tenant_id, "chat_room_id": chat_room_id}
+            )
+            return chat_history
+        except Exception as vector_error:
+            print(f"Vector search failed: {vector_error}")
+            # 벡터 검색에 실패한 경우 빈 리스트 반환
+            return []
         
-        return chat_history
-    
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

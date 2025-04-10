@@ -7,6 +7,9 @@ import os
 async def upload_audio(audio: UploadFile = File(...)):
     filename = str(uuid.uuid4())
     file_location = f"uploads/{filename}.mp3"
+    
+    os.makedirs("uploads", exist_ok=True)
+    
     with open(file_location, "wb+") as file_object:
         file_object.write(audio.file.read())
     
