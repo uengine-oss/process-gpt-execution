@@ -11,6 +11,7 @@ from decimal import Decimal
 from datetime import datetime, timedelta
 import pytz
 from contextvars import ContextVar
+import csv
 
 app = FastAPI()
 
@@ -79,8 +80,8 @@ async def update_db_settings(subdomain):
         if subdomain and "localhost" not in subdomain:
             db_config = {
                 'dbname': 'postgres',
-                'user': 'postgres.qivmgbtrzgnjcpyynpam',
-                'password': 'rl3d3s6BZrxHvi6F',
+                'user': 'postgres.gjdyydowgrinjjkfkwtl',
+                'password': 'mhhaydZpSL7lVkfQ',
                 'host': 'aws-0-ap-northeast-2.pooler.supabase.com',
                 'port': '6543'
             }
@@ -412,7 +413,7 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 def upsert_process_instance(process_instance: ProcessInstance) -> (bool, ProcessInstance):
-    if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids or 'end_event' in process_instance.current_activity_ids:
+    if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids or 'end_event' in process_instance.current_activity_ids or process_instance.status == 'COMPLETED':
         process_instance.current_activity_ids = []
         status = 'COMPLETED'
     else:
@@ -616,6 +617,7 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
             continue
         
         workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity_data['nextActivityId'])
+        
         if workitem:
             workitem.status = activity_data['result']
             workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul')) if activity_data['result'] == 'DONE' else None
@@ -835,3 +837,109 @@ def get_vector_store():
         table_name="documents",
         query_name="match_documents",
     )
+
+def insert_from_csv(csv_file_path, insert_query, value_extractor):
+    # Tenant ID 및 DB 설정
+    tenant_id = subdomain_var.get()
+    db_config = db_config_var.get()
+    
+    # DB 연결
+    connection = psycopg2.connect(**db_config)
+    cursor = connection.cursor(cursor_factory=RealDictCursor)
+
+    # CSV 파일 읽기
+    with open(csv_file_path, mode='r', encoding='utf-8') as file:
+        csv_reader = csv.DictReader(file)
+        for row in csv_reader:
+            values = value_extractor(row, tenant_id)
+            cursor.execute(insert_query, values)
+    
+    # 커밋 및 정리
+    connection.commit()
+    cursor.close()
+    connection.close()
+
+def insert_process_definition_from_csv():
+    csv_file_path = './csv/proc_def.csv'
+    insert_query = """
+        INSERT INTO proc_def (id, name, definition, bpmn, tenant_id)
+        VALUES (%s, %s, %s, %s, %s)
+    """
+    
+    def extract_values(row, tenant_id):
+        return (
+            row['id'],
+            row['name'],
+            row['definition'],
+            row['bpmn'],
+            tenant_id
+        )
+
+    insert_from_csv(csv_file_path, insert_query, extract_values)
+
+def insert_process_form_definition_from_csv():
+    csv_file_path = './csv/form_def.csv'
+    insert_query = """
+        INSERT INTO form_def (id, html, fields_json, proc_def_id, activity_id, tenant_id)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """
+    
+    def extract_values(row, tenant_id):
+        return (
+            row['id'],
+            row['html'],
+            row['fields_json'],
+            row['proc_def_id'],
+            row['activity_id'],
+            tenant_id
+        )
+
+    insert_from_csv(csv_file_path, insert_query, extract_values)
+
+
+def insert_configuration_from_csv():
+    csv_file_path = './csv/configuration.csv'
+    insert_query = """
+        INSERT INTO configuration (key, value, tenant_id)
+        VALUES (%s, %s, %s)
+    """
+    
+    def extract_values(row, tenant_id):
+        return (
+            row['key'],
+            row['value'],
+            tenant_id
+        )
+
+    insert_from_csv(csv_file_path, insert_query, extract_values)
+
+def insert_sample_data():
+    insert_configuration_from_csv()
+    insert_process_definition_from_csv()
+    insert_process_form_definition_from_csv()
+
+def update_user(input):
+    try:
+        user_id = input.get('user_id')
+        user_info = input.get('user_info')
+        supabase = supabase_client_var.get()
+        
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.auth.admin.update_user_by_id(user_id, user_info)
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+def create_user(user_info):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+
+        response = supabase.auth.admin.create_user(user_info)
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e

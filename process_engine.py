@@ -171,11 +171,11 @@ class ProcessResult(BaseModel):
     instanceName: str   
     fieldMappings: Optional[List[FieldMapping]] = None
     roleBindingChanges: Optional[List[RoleBindingChange]] = None
-    nextActivities: List[Activity]
-    completedActivities: List[CompletedActivity]
+    nextActivities: Optional[List[Activity]] = None
+    completedActivities: Optional[List[CompletedActivity]] = None
     processDefinitionId: str
     result: Optional[str] = None
-    cannotProceedErrors: List[ProceedError]
+    cannotProceedErrors: Optional[List[ProceedError]] = None
     description: str
 
 def execute_next_activity(process_result_json: dict) -> str:
@@ -218,15 +218,40 @@ def execute_next_activity(process_result_json: dict) -> str:
         all_user_emails = set()
         if process_result.nextActivities:
             for activity in process_result.nextActivities:
-                if activity.result == "IN_PROGRESS":
-                    process_instance.current_activity_ids = [activity.nextActivityId]
-                    process_instance.status = "RUNNING"
                 if activity.nextActivityId == "endEvent" or activity.nextActivityId == "END_PROCESS" or activity.nextActivityId == "end_event":
                     process_instance.status = "COMPLETED"
                     process_instance.current_activity_ids = []
-            if not process_instance.current_activity_ids:
-                process_instance.current_activity_ids.append(process_result.nextActivities[0].nextActivityId)
+                    break
+                if process_definition.find_gateway_by_id(activity.nextActivityId):
+                    next_activities = process_definition.find_next_activities(activity.nextActivityId)
+                    if next_activities:
+                        process_instance.current_activity_ids = [act.id for act in next_activities]
+                        process_instance.status = "RUNNING"
+                        process_result_json["nextActivities"] = []
+                        next_activity_dicts = [
+                            Activity(
+                                nextActivityId=act.id,
+                                nextUserEmail=activity.nextUserEmail,
+                                result="IN_PROGRESS"
+                            ).model_dump() for act in next_activities
+                        ]
+                        process_result_json["nextActivities"].extend(next_activity_dicts)
+                    else:
+                        process_instance.status = "COMPLETED"
+                        process_instance.current_activity_ids = []
+                        process_result_json["nextActivities"] = []
+                        break
+                        
+                elif activity.result == "IN_PROGRESS" and activity.nextActivityId not in process_instance.current_activity_ids:
+                    process_instance.current_activity_ids = [activity.nextActivityId]
+                    process_instance.status = "RUNNING"
+                else:
+                    process_instance.current_activity_ids.append(activity.nextActivityId)
+                
             all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
+        if len(process_result.nextActivities) == 0:
+            process_instance.status = "COMPLETED"
+            process_instance.current_activity_ids = []
         for activity in process_result.completedActivities:
             all_user_emails.add(activity.completedUserEmail)
         
