@@ -933,13 +933,24 @@ def update_user(input):
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
-def create_user(user_info):
+def create_user(input):
     try:
+        user_info = input.get('user_info')
+        tenant_id = subdomain_var.get()
         supabase = supabase_client_var.get()
+        
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
 
         response = supabase.auth.admin.create_user(user_info)
+        supabase.table("users").insert({
+            "id": response.user.id,
+            "email": user_info.get("email"),
+            "username": user_info.get("username"),
+            "role": "user",
+            "current_tenant": tenant_id,
+            "tenants": [tenant_id]
+        }).execute()
         return response
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

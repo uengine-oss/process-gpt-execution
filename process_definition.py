@@ -22,7 +22,8 @@ class ProcessData(BaseModel):
 
 class ProcessRole(BaseModel):
     name: str
-    resolutionRule: str
+    endpoint: Optional[str] = None
+    resolutionRule: Optional[str] = None
     
 class ProcessActivity(BaseModel):
     name: str

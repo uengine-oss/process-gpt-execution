@@ -401,9 +401,22 @@ def combine_input_with_process_definition(input):
         process_instance_id = input.get('process_instance_id')  # 'process_instance_id' 키에 대한 접근 추가
         activity_id = input.get('activity_id') 
         image = input.get("image")
-        user_email = input.get('email')
-        user_info = fetch_user_info(user_email)
         role_bindings = input.get('role_mappings')
+        user_email = None
+        user_info = None
+        
+        if role_bindings:
+            for role in role_bindings:
+                endpoint = role.get('endpoint')
+                if endpoint == 'external_customer':
+                    user_email = 'external_customer'
+                    user_info = role
+                    break
+
+        if not user_email:
+            user_email = input.get('email')
+            user_info = fetch_user_info(user_email)
+
         
         now = datetime.now()
         today = now.date()
