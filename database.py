@@ -839,22 +839,18 @@ def get_vector_store():
     )
 
 def insert_from_csv(csv_file_path, insert_query, value_extractor):
-    # Tenant ID 및 DB 설정
     tenant_id = subdomain_var.get()
     db_config = db_config_var.get()
     
-    # DB 연결
     connection = psycopg2.connect(**db_config)
     cursor = connection.cursor(cursor_factory=RealDictCursor)
 
-    # CSV 파일 읽기
     with open(csv_file_path, mode='r', encoding='utf-8') as file:
         csv_reader = csv.DictReader(file)
         for row in csv_reader:
             values = value_extractor(row, tenant_id)
             cursor.execute(insert_query, values)
-    
-    # 커밋 및 정리
+
     connection.commit()
     cursor.close()
     connection.close()
@@ -864,6 +860,10 @@ def insert_process_definition_from_csv():
     insert_query = """
         INSERT INTO proc_def (id, name, definition, bpmn, tenant_id)
         VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (id, tenant_id) DO UPDATE SET
+            name = EXCLUDED.name,
+            definition = EXCLUDED.definition,
+            bpmn = EXCLUDED.bpmn
     """
     
     def extract_values(row, tenant_id):
@@ -882,6 +882,11 @@ def insert_process_form_definition_from_csv():
     insert_query = """
         INSERT INTO form_def (id, html, fields_json, proc_def_id, activity_id, tenant_id)
         VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (id, tenant_id) DO UPDATE SET
+            html = EXCLUDED.html,
+            fields_json = EXCLUDED.fields_json,
+            proc_def_id = EXCLUDED.proc_def_id,
+            activity_id = EXCLUDED.activity_id
     """
     
     def extract_values(row, tenant_id):
@@ -896,29 +901,85 @@ def insert_process_form_definition_from_csv():
 
     insert_from_csv(csv_file_path, insert_query, extract_values)
 
+def merge_proc_map_json(existing, incoming):
+    def find_by_id(obj_list, target_id):
+        return next((item for item in obj_list if item["id"] == target_id), None)
+
+    for new_mega in incoming.get("mega_proc_list", []):
+        existing_mega = find_by_id(existing.get("mega_proc_list", []), new_mega["id"])
+        if not existing_mega:
+            existing["mega_proc_list"].append(new_mega)
+            continue
+
+        for new_major in new_mega.get("major_proc_list", []):
+            existing_major = find_by_id(existing_mega.get("major_proc_list", []), new_major["id"])
+            if not existing_major:
+                existing_mega["major_proc_list"].append(new_major)
+                continue
+
+            for new_sub in new_major.get("sub_proc_list", []):
+                if not any(sub["id"] == new_sub["id"] for sub in existing_major.get("sub_proc_list", [])):
+                    existing_major["sub_proc_list"].append(new_sub)
+
+    return existing
 
 def insert_configuration_from_csv():
     csv_file_path = './csv/configuration.csv'
-    insert_query = """
-        INSERT INTO configuration (key, value, tenant_id)
-        VALUES (%s, %s, %s)
-    """
+    tenant_id = subdomain_var.get()
+    db_config = db_config_var.get()
     
-    def extract_values(row, tenant_id):
-        return (
-            row['key'],
-            row['value'],
-            tenant_id
-        )
+    connection = psycopg2.connect(**db_config)
+    cursor = connection.cursor(cursor_factory=RealDictCursor)
 
-    insert_from_csv(csv_file_path, insert_query, extract_values)
+    with open(csv_file_path, mode='r', encoding='utf-8') as file:
+        csv_reader = csv.DictReader(file)
+        for row in csv_reader:
+            key = row['key']
+            raw_value = row['value']
+
+            if key == 'proc_map':
+                incoming_value = json.loads(raw_value)
+
+                # 기존 데이터 조회
+                cursor.execute("SELECT value FROM configuration WHERE key = %s AND tenant_id = %s", (key, tenant_id))
+                result = cursor.fetchone()
+
+                if result:
+                    existing_value = result['value']
+                    merged_value = merge_proc_map_json(existing_value, incoming_value)
+
+                    cursor.execute(
+                        "UPDATE configuration SET value = %s WHERE key = %s AND tenant_id = %s",
+                        (json.dumps(merged_value, ensure_ascii=False), key, tenant_id)
+                    )
+                else:
+                    cursor.execute(
+                        "INSERT INTO configuration (key, value, tenant_id) VALUES (%s, %s, %s)",
+                        (key, json.dumps(incoming_value, ensure_ascii=False), tenant_id)
+                    )
+            else:
+                # 일반 키는 단순 upsert
+                cursor.execute(
+                    """
+                    INSERT INTO configuration (key, value, tenant_id)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (key, tenant_id) DO UPDATE SET
+                        value = EXCLUDED.value
+                    """,
+                    (key, raw_value, tenant_id)
+                )
+
+    connection.commit()
+    cursor.close()
+    connection.close()
 
 def insert_sample_data():
     insert_configuration_from_csv()
     insert_process_definition_from_csv()
     insert_process_form_definition_from_csv()
 
-def update_user(input):
+
+def update_user_admin(input):
     try:
         user_id = input.get('user_id')
         user_info = input.get('user_info')
@@ -952,5 +1013,47 @@ def create_user(input):
             "tenants": [tenant_id]
         }).execute()
         return response
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+def update_user(input):
+    try:
+        user_id = input.get('user_id')
+        user_info = input.get('user_info')
+        supabase = supabase_client_var.get()
+        
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table("users").update(user_info).eq('id', user_id).execute()
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+def fetch_user_info_by_uid(uid: str) -> Dict[str, str]:
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table("users").select("*").eq('id', uid).execute()
+        if response.data:
+            return response.data[0]
+        else:
+            raise HTTPException(status_code=404, detail="User not found")
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+def check_tenant_owner(tenant_id: str, uid: str) -> bool:
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table("tenants").select("*").eq('id', tenant_id).eq('owner', uid).execute()
+        if response.data:
+            return True
+        else:
+            return False
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

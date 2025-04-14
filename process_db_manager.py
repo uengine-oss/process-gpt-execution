@@ -3,7 +3,7 @@ from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda
-from database import fetch_process_definition, execute_sql, generate_create_statement_for_table, insert_sample_data, update_user, create_user
+from database import fetch_process_definition, execute_sql, generate_create_statement_for_table, insert_sample_data, update_user_admin, create_user
 import re
 import os
 
@@ -147,7 +147,7 @@ async def combine_input(request: Request):
 async def combine_input_with_tenant_id(request: Request):
     json_data = await request.json()
     input = json_data.get('input')
-    return update_user(input)
+    return update_user_admin(input)
 
 async def combine_input_with_new_user_info(request: Request):
     json_data = await request.json()
@@ -157,7 +157,7 @@ async def combine_input_with_new_user_info(request: Request):
 async def combine_input_with_user_info(request: Request):
     json_data = await request.json()
     input = json_data.get('input')
-    return update_user(input)
+    return update_user_admin(input)
 
 
 def add_routes_to_app(app) :
