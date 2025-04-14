@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import pytz
 from contextvars import ContextVar
 import csv
+from dotenv import load_dotenv
 
 app = FastAPI()
 
@@ -22,17 +23,43 @@ subdomain_var = ContextVar('subdomain', default='localhost')
 jwt_secret_var = ContextVar('jwt_secret', default='')
 algorithm_var = ContextVar('algorithm', default='HS256')
 
-# url = "http://127.0.0.1:54321"
-# key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
-# supabase: Client = create_client(url, key)
+def setting_database():
+    try:
+        if os.getenv("ENV") != "production":
+            load_dotenv()
 
-# db_config = {
-#     'dbname': 'postgres',
-#     'user': 'postgres',
-#     'password': 'postgres',
-#     'host': '127.0.0.1',
-#     'port': '54322'
-# }
+        jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
+        jwt_secret_var.set(jwt_secret)
+        
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_KEY")
+        supabase: Client = create_client(supabase_url, supabase_key)
+        supabase_client_var.set(supabase)
+        
+        db_config = {
+            "dbname": os.getenv("DB_NAME"),
+            "user": os.getenv("DB_USER"),
+            "password": os.getenv("DB_PASSWORD"),
+            "host": os.getenv("DB_HOST"),
+            "port": os.getenv("DB_PORT")
+        }
+        db_config_var.set(db_config)
+       
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+
+setting_database()
+
+
+async def update_tenant_id(subdomain):
+    try:
+        if not subdomain:
+            raise Exception("Unable to configure Tenant ID.")
+        subdomain_var.set(subdomain)
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
 
 def load_sql_from_file(file_path):
     """Load SQL commands from a text file."""
@@ -59,46 +86,6 @@ def update_db():
         if connection:
             connection.close()
 
-
-async def update_db_settings(subdomain):
-    try:
-        jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
-        if not jwt_secret:
-            jwt_secret = "super-secret-jwt-token-with-at-least-32-characters-long"
-        jwt_secret_var.set(jwt_secret)
-        
-        url = os.getenv("SUPABASE_URL")
-        if not url:
-            url = "http://127.0.0.1:54321"
-        key = os.getenv("SUPABASE_KEY")
-        if not key:
-            key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
-        supabase: Client = create_client(url, key)
-        supabase_client_var.set(supabase)
-        
-        subdomain_var.set(subdomain)    
-        if subdomain and "localhost" not in subdomain:
-            db_config = {
-                'dbname': 'postgres',
-                'user': 'postgres.gjdyydowgrinjjkfkwtl',
-                'password': 'mhhaydZpSL7lVkfQ',
-                'host': 'aws-0-ap-northeast-2.pooler.supabase.com',
-                'port': '6543'
-            }
-            db_config_var.set(db_config)
-            
-        else:
-            db_config = {
-                'dbname': 'postgres',
-                'user': 'postgres',
-                'password': 'postgres',
-                'host': '127.0.0.1',
-                'port': '54322'
-            }
-            db_config_var.set(db_config)
-       
-    except Exception as e:
-        print(f"An error occurred: {e}")
 
 def db_client_signin(user_info: dict):
     try:

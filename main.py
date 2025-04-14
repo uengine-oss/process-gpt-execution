@@ -39,7 +39,7 @@ app.add_middleware(
 )
 
 from starlette.middleware.base import BaseHTTPMiddleware
-from database import update_db_settings, update_db
+from database import update_tenant_id
 
 class DBConfigMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -49,13 +49,13 @@ class DBConfigMiddleware(BaseHTTPMiddleware):
         else:
             subdomain = host_name.split('.')[0]
             
-        await update_db_settings(subdomain)
+        await update_tenant_id(subdomain)
         # 요청을 다음 미들웨어 또는 엔드포인트로 전달
         response = await call_next(request)
         return response
 
 
-app.post("/update_db")(update_db)
+# app.post("/update_db")(update_db)
     
 # 미들웨어 추가
 app.add_middleware(DBConfigMiddleware)
