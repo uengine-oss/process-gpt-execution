@@ -277,7 +277,9 @@ def execute_next_activity(process_result_json: dict) -> str:
                 if result.returncode != 0:
                     # script task 의 python code 실행 에러
                     process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
+                    process_result_json["result"] = result.stderr
                 else:
+                    process_result_json["result"] = result.stdout
                     # script task 의 python code 실행 성공
                     process_instance.current_activity_ids = [
                         act_id for act_id in process_instance.current_activity_ids
@@ -302,7 +304,6 @@ def execute_next_activity(process_result_json: dict) -> str:
                     process_result_json["completedActivities"].append(completed_activity_dict)
                     
                 # process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
-                process_result_json["result"] = result.stdout
             else:
                 result = (f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found.")
                 process_result_json["result"] = result

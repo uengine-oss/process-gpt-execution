@@ -29,7 +29,7 @@ def execute_python_code(code: str, workspace_path: Optional[Path] = None, env_va
     if not workspace_path:
         workspace_path = Path.cwd()
 
-    with NamedTemporaryFile("w", dir=workspace_path, suffix=".py", delete=False) as tmp_code_file:
+    with NamedTemporaryFile("w", dir=workspace_path, suffix=".py", delete=False, encoding="utf-8") as tmp_code_file:
         tmp_code_file.write(code)
         tmp_code_file_path = Path(tmp_code_file.name)
 
@@ -65,12 +65,15 @@ def execute_python_file(
     if env_vars:
         env.update(env_vars)
 
+    env["PYTHONIOENCODING"] = "utf-8"
+
     result = subprocess.run(
         ["python", str(filename)],
         capture_output=True,
         text=True,
         cwd=str(workding_dir),
-        env=env
+        env=env,
+        encoding='utf-8'
     )
     
     return result
