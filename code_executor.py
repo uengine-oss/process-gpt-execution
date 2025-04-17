@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 ALLOWLIST_CONTROL = "allowlist"
 DENYLIST_CONTROL = "denylist"
 
-from typing import Optional, Dict
-def execute_python_code(code: str, workspace_path: Optional[Path] = None, env_vars: Optional[Dict[str, str]] = None) -> str:
+from typing import Optional, Dict, Any
+def execute_python_code(code: str, workspace_path: Optional[Path] = None, env_vars: Optional[Dict[str, Any]] = None) -> str:
     """Execute Python code directly in the local environment and return the STDOUT.
 
     Args:
@@ -39,7 +39,7 @@ def execute_python_code(code: str, workspace_path: Optional[Path] = None, env_va
         os.remove(tmp_code_file_path)
 
 def execute_python_file(
-    filename: Path, workding_dir: Path, env_vars: Optional[Dict[str, str]] = None
+    filename: Path, workding_dir: Path, env_vars: Optional[Dict[str, Any]] = None
 ) -> str:
     """Execute a Python file directly in the local environment and return the output
 

@@ -105,7 +105,7 @@ prompt = PromptTemplate.from_template(
         [{{
             "key": "process data key", // Replace with _ if there is a space, Process Definition 에서 없는 데이터는 추가하지 않음. 프로세스 정의 데이터에 이메일이나 이름 같은 변수가 존재하지만 값이 누락된 경우 역할 바인딩에서 적절한 값을 알아서 지정하여 필드 매핑해줄 것.
             "name": "process data name",
-            "value": <value for changed data>  // Refer to the data type of this process variable. For example, if the type of the process variable is Date, calculate and assign today's date.
+            "value": <value for changed data>  // Refer to the data type of this process variable. For example, if the type of the process variable is Date, calculate and assign today's date. If the type of variable is a form, assign the JSON format.
         }}],
 
         "roleBindingChanges":
@@ -117,14 +117,14 @@ prompt = PromptTemplate.from_template(
         "completedActivities":
         [{{
             "completedActivityId": "the id of completed activity id", // Not Return if completedActivityId is "startEvent".
-            "completedUserEmail": "the email address of completed activity’s role",
+            "completedUserEmail": "the email address of completed activity's role",
             "result": "DONE" // The result of the completed activity
         }}],
         
         "nextActivities":
         [{{
             "nextActivityId": "the id of next activity id", // Not Return "END_PROCESS" if nextActivityId is "endEvent".
-            "nextUserEmail": "the email address of next activity’s role",
+            "nextUserEmail": "the email address of next activity's role",
             "result": "IN_PROGRESS | PENDING | DONE", // The result of the next activity
             "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)" // Returns a description of the process end if nextActivityId is "endEvent".
         }}],
@@ -178,6 +178,63 @@ class ProcessResult(BaseModel):
     cannotProceedErrors: Optional[List[ProceedError]] = None
     description: str
 
+def check_external_customer(activity_obj, user_email, process_instance, process_definition):
+    """
+    Check that the next activity's role is assigned to external customer.
+    If the next activity's role is assigned to external customer, send an email to the external customer.
+    """
+    try:
+        # Determine if the role is for an external customer
+        role_name = activity_obj.role
+        role_info = next((role for role in process_definition.roles if role.name == role_name), None)
+        
+        if role_info and role_info.endpoint == "external_customer":
+            # Get customer email from role_info
+            if user_email == "external_customer":
+                customer_email = next((variable["value"] for variable in process_instance.variables_data if variable["key"] == "customer_email"), None)
+            else:
+                customer_email = user_email
+            
+            if customer_email:
+                if (process_instance.tenant_id == "localhost"):
+                    base_url = "http://localhost:8088"
+                else:
+                    tenant_id = process_instance.tenant_id
+                    base_url = f"https://{tenant_id}.process-gpt.io"
+                
+                proc_def_id = process_definition.processDefinitionId
+                proc_inst_id = process_instance.proc_inst_id
+                
+                for activity in process_definition.activities:
+                    if activity.role == role_name:
+                        external_form_id = activity.tool.replace("formHandler:", "")
+                        activity_id = activity.id
+                        break
+
+                # Create a message
+                message = f"""
+{activity_obj.name}
+
+{activity_obj.description if hasattr(activity_obj, 'description') else ''}
+
+이전에 제출한 폼을 확인하고 싶으시다면 아래 링크를 클릭하세요.
+{base_url}/external-forms/{external_form_id}?process_definition_id={proc_def_id}&activity_id={activity_id}&process_instance_id={proc_inst_id}
+"""
+                
+                # Send email using enhanced smtp_handler
+                from smtp_handler import send_email
+                send_email(
+                    subject=activity_obj.name,
+                    body=message,
+                    to_email=customer_email
+                )
+                
+                return True
+    except Exception as e:
+        # Log the error but don't stop the process
+        print(f"Failed to send notification to external customer: {str(e)}")
+        return False
+
 def execute_next_activity(process_result_json: dict) -> str:
     try:
         process_result = ProcessResult(**process_result_json)
@@ -211,7 +268,8 @@ def execute_next_activity(process_result_json: dict) -> str:
                     "name": data_change.name,
                     "value": data_change.value
                 }
-                process_instance.variables_data.append(variable)
+                if data_change.key not in process_instance.variables_data:
+                    process_instance.variables_data.append(variable)
         # for data_change in process_result.fieldMappings or []:
         #     setattr(process_instance, data_change.key, data_change.value)
             
@@ -247,6 +305,21 @@ def execute_next_activity(process_result_json: dict) -> str:
                     process_instance.status = "RUNNING"
                 else:
                     process_instance.current_activity_ids.append(activity.nextActivityId)
+                    activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
+                
+                # check if the next activity is assigned to external customer and send an email
+                activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
+                sending_email = check_external_customer(activity_obj, activity.nextUserEmail, process_instance, process_definition)
+                if sending_email:
+                    process_result_json["nextActivities"] = []
+                    completed_activity = CompletedActivity(
+                        completedActivityId=activity_obj.id,
+                        completedUserEmail=activity.nextUserEmail,
+                        result="DONE"
+                    )
+                    completed_activity_dict = completed_activity.dict()
+                    process_result_json["completedActivities"].append(completed_activity_dict)
+                    
                 
             all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
         if len(process_result.nextActivities) == 0:
@@ -271,6 +344,8 @@ def execute_next_activity(process_result_json: dict) -> str:
                         continue
                     if isinstance(variable["value"], list):
                         variable["value"] = ', '.join(map(str, variable["value"]))
+                    if isinstance(variable["value"], dict):
+                        variable["value"] = json.dumps(variable["value"])
                     env_vars[variable["key"]] = variable["value"]
                 result = execute_python_code(activity_obj.pythonCode, env_vars=env_vars)
                 
