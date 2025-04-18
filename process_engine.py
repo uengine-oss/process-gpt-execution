@@ -79,7 +79,8 @@ prompt = PromptTemplate.from_template(
     
       activityId: "{activity_id}",  // the activityId is not included in the Currently Running Activities or is the next activityId than Current Running Activities, it must never be added to completedActivities to return the activityId as complete and must be reported in cannotProceedErrors.
       user: "{user_email}",
-      submitted data: "{answer}"    // Based on the current running activity form fields, make sure that the content of the submitted data. If the readonly="true" fields are not entered, never return an error and ignore it. But if fields with readonly="false" are not entered, return the error "DATA_FIELD_NOT_EXIST".
+      submitted form values: {form_values},
+      submitted answer: "{answer}"    // If no form values have been submitted, assign the values in the form field using the submitted answers. Based on the current running activity form fields. If the readonly="true" fields are not entered, never return an error and ignore it. But if fields with readonly="false" are not entered, return the error "DATA_FIELD_NOT_EXIST"
     
     - Today is:  {today}
     
@@ -101,6 +102,7 @@ prompt = PromptTemplate.from_template(
         "instanceId": "{instance_id}",
         "instanceName": "process instance name",
         "processDefinitionId": "{process_definition_id}",
+        "formValues": {form_values},
         "fieldMappings":
         [{{
             "key": "process data key", // Replace with _ if there is a space, Process Definition 에서 없는 데이터는 추가하지 않음. 프로세스 정의 데이터에 이메일이나 이름 같은 변수가 존재하지만 값이 누락된 경우 역할 바인딩에서 적절한 값을 알아서 지정하여 필드 매핑해줄 것.
@@ -168,7 +170,8 @@ class ProceedError(BaseModel):
 
 class ProcessResult(BaseModel):
     instanceId: str
-    instanceName: str   
+    instanceName: str
+    formValues: Optional[dict] = None
     fieldMappings: Optional[List[FieldMapping]] = None
     roleBindingChanges: Optional[List[RoleBindingChange]] = None
     nextActivities: Optional[List[Activity]] = None
@@ -178,7 +181,7 @@ class ProcessResult(BaseModel):
     cannotProceedErrors: Optional[List[ProceedError]] = None
     description: str
 
-def check_external_customer(activity_obj, user_email, process_instance, process_definition):
+def check_external_customer_and_send_email(activity_obj, user_email, process_instance, process_definition):
     """
     Check that the next activity's role is assigned to external customer.
     If the next activity's role is assigned to external customer, send an email to the external customer.
@@ -197,37 +200,28 @@ def check_external_customer(activity_obj, user_email, process_instance, process_
             
             if customer_email:
                 if (process_instance.tenant_id == "localhost"):
-                    base_url = "http://localhost:8088"
+                    base_url = "http://localhost:8088/external-forms"
                 else:
                     tenant_id = process_instance.tenant_id
-                    base_url = f"https://{tenant_id}.process-gpt.io"
+                    base_url = f"https://{tenant_id}.process-gpt.io/external-forms"
                 
                 proc_def_id = process_definition.processDefinitionId
                 proc_inst_id = process_instance.proc_inst_id
+                external_form_id = activity_obj.tool.replace("formHandler:", "")
+                activity_id = activity_obj.id
                 
-                for activity in process_definition.activities:
-                    if activity.role == role_name:
-                        external_form_id = activity.tool.replace("formHandler:", "")
-                        activity_id = activity.id
-                        break
-
-                # Create a message
-                message = f"""
-{activity_obj.name}
-
-{activity_obj.description if hasattr(activity_obj, 'description') else ''}
-
-이전에 제출한 폼을 확인하고 싶으시다면 아래 링크를 클릭하세요.
-{base_url}/external-forms/{external_form_id}?process_definition_id={proc_def_id}&activity_id={activity_id}&process_instance_id={proc_inst_id}
-"""
+                external_form_url = f"{base_url}/{external_form_id}?process_definition_id={proc_def_id}&activity_id={activity_id}&process_instance_id={proc_inst_id}"
                 
-                # Send email using enhanced smtp_handler
-                from smtp_handler import send_email
-                send_email(
-                    subject=activity_obj.name,
-                    body=message,
-                    to_email=customer_email
-                )
+                additional_info = {
+                    "support_email": "help@uengine.org"
+                }
+                
+                from smtp_handler import generate_email_template, send_email
+                # 이메일 템플릿 생성
+                email_template = generate_email_template(activity_obj, external_form_url, additional_info)
+                title = f"'{activity_obj.name}' 를 진행해주세요."
+                # 이메일 전송
+                send_email(subject=title, body=email_template, to_email=customer_email)
                 
                 return True
     except Exception as e:
@@ -261,18 +255,38 @@ def execute_next_activity(process_result_json: dict) -> str:
         
         process_definition = process_instance.process_definition
 
+        if process_result.formValues:
+            form_id = next(iter(process_result.formValues))
+            form_value = {
+                "key": form_id,
+                "name": form_id,
+                "value": process_result.formValues[form_id]
+            }
+            existing_entry = next((item for item in process_instance.variables_data if item["key"] == form_id), None)
+            if existing_entry:
+                existing_entry.update(form_value)
+            else:
+                process_instance.variables_data.append(form_value)
+
         if process_result.fieldMappings:
             for data_change in process_result.fieldMappings:
-                variable = {
-                    "key": data_change.key,
-                    "name": data_change.name,
-                    "value": data_change.value
-                }
-                if data_change.key not in process_instance.variables_data:
-                    process_instance.variables_data.append(variable)
-        # for data_change in process_result.fieldMappings or []:
-        #     setattr(process_instance, data_change.key, data_change.value)
-            
+                form_entry = next((item for item in process_instance.variables_data if isinstance(item["value"], dict) and data_change.key in item["value"]), None)
+                
+                if form_entry:
+                    form_entry["value"][data_change.key] = data_change.value
+                else:
+                    variable = {
+                        "key": data_change.key,
+                        "name": data_change.name,
+                        "value": data_change.value
+                    }
+                    existing_variable = next((item for item in process_instance.variables_data if item["key"] == data_change.key), None)
+                    if existing_variable:
+                        existing_variable.update(variable)
+                    else:
+                        process_instance.variables_data.append(variable)
+
+
         all_user_emails = set()
         if process_result.nextActivities:
             for activity in process_result.nextActivities:
@@ -309,17 +323,7 @@ def execute_next_activity(process_result_json: dict) -> str:
                 
                 # check if the next activity is assigned to external customer and send an email
                 activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
-                sending_email = check_external_customer(activity_obj, activity.nextUserEmail, process_instance, process_definition)
-                if sending_email:
-                    process_result_json["nextActivities"] = []
-                    completed_activity = CompletedActivity(
-                        completedActivityId=activity_obj.id,
-                        completedUserEmail=activity.nextUserEmail,
-                        result="DONE"
-                    )
-                    completed_activity_dict = completed_activity.dict()
-                    process_result_json["completedActivities"].append(completed_activity_dict)
-                    
+                check_external_customer_and_send_email(activity_obj, activity.nextUserEmail, process_instance, process_definition)
                 
             all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
         if len(process_result.nextActivities) == 0:
@@ -525,6 +529,7 @@ def combine_input_with_process_definition(input):
 
             chain_input = {
                 "answer": input['answer'],
+                "form_values": input['form_values'],
                 "instance_id": process_instance.proc_inst_id,
                 "instance_name": process_instance.proc_inst_name,
                 "role_bindings": process_instance.role_bindings,
@@ -560,7 +565,8 @@ def combine_input_with_process_definition(input):
                         form_fields = ui_definition.fields_json
 
             chain_input = {
-                "answer": input['answer'],  
+                "answer": input['answer'],
+                "form_values": input['form_values'],
                 "instance_id": input['chat_room_id'] or "new",
                 "instance_name": "",
                 "role_bindings": role_bindings or "no bindings",
