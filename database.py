@@ -66,25 +66,25 @@ def load_sql_from_file(file_path):
     with open(file_path, 'r', encoding='utf-8') as file:  # UTF-8 인코딩으로 파일을 열기
         return file.read()
 
-def update_db():
-    try:
-        db_config = db_config_var.get()
-        # Establish a connection to the database
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
+# def update_db():
+#     try:
+#         db_config = db_config_var.get()
+#         # Establish a connection to the database
+#         connection = psycopg2.connect(**db_config)
+#         cursor = connection.cursor(cursor_factory=RealDictCursor)
         
-        # Load SQL from file
-        sql_query = load_sql_from_file('update_db_sql.txt')
+#         # Load SQL from file
+#         sql_query = load_sql_from_file('update_db_sql.txt')
         
-        cursor.execute(sql_query)
-        connection.commit()
+#         cursor.execute(sql_query)
+#         connection.commit()
         
-        return "Tables created successfully."
-    except Exception as e:
-        print(f"An error occurred: {e}")
-    finally:
-        if connection:
-            connection.close()
+#         return "Tables created successfully."
+#     except Exception as e:
+#         print(f"An error occurred: {e}")
+#     finally:
+#         if connection:
+#             connection.close()
 
 
 def db_client_signin(user_info: dict):
