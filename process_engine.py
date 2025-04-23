@@ -266,16 +266,19 @@ def execute_next_activity(process_result_json: dict) -> str:
 
         if process_result.formValues:
             form_id = next(iter(process_result.formValues))
-            form_value = {
+            form_value =  process_result.formValues[form_id]
+            if form_value and form_value[form_id]:
+                form_value = form_value[form_id]
+            variable = {
                 "key": form_id,
                 "name": form_id,
-                "value": process_result.formValues[form_id]
+                "value": form_value
             }
             existing_entry = next((item for item in process_instance.variables_data if item["key"] == form_id), None)
             if existing_entry:
-                existing_entry.update(form_value)
+                existing_entry.update(variable)
             else:
-                process_instance.variables_data.append(form_value)
+                process_instance.variables_data.append(variable)
 
         if process_result.fieldMappings:
             for data_change in process_result.fieldMappings:
