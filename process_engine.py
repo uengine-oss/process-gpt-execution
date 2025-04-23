@@ -110,6 +110,7 @@ prompt = PromptTemplate.from_template(
             "value": <value for changed data>  // Refer to the data type of this process variable. For example, if the type of the process variable is Date, calculate and assign today's date. If the type of variable is a form, assign the JSON format.
         }}],
 
+        "roleBindings": {role_bindings},
         "roleBindingChanges":
         [{{
             "roleName": "name of role",
@@ -250,6 +251,14 @@ def execute_next_activity(process_result_json: dict) -> str:
                 status=status,
                 tenant_id=""
             )
+            
+            existing_role_bindings = process_result_json.get("roleBindings", [])
+            if existing_role_bindings:
+                formatted_role_bindings = [{"roleName": rb.get("name"), "userId": rb.get("endpoint")} for rb in existing_role_bindings]
+                if process_instance.role_bindings:
+                    process_instance.role_bindings.extend(formatted_role_bindings)
+                else:
+                    process_instance.role_bindings = formatted_role_bindings
         else:
             process_instance = fetch_process_instance(process_result.instanceId)
            
