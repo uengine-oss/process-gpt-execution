@@ -39,6 +39,7 @@ class ProcessActivity(BaseModel):
     tool: Optional[str] = None
     properties: Optional[str] = None
     duration: Optional[int] = None
+    srcTrg: Optional[str] = None
     
     def __hash__(self):
         return hash(self.id)  # 또는 다른 고유한 속성을 사용
@@ -64,7 +65,8 @@ class ProcessGateway(BaseModel):
     condition: Optional[Dict[str, Any]] = Field(default_factory=dict)
     properties: Optional[str] = None
     description: Optional[str] = None
-
+    srcTrg: Optional[str] = None
+    duration: Optional[int] = None
     @root_validator(pre=True)
     def check_condition(cls, values):
         if values.get('condition') == "":
@@ -137,21 +139,31 @@ class ProcessDefinition(BaseModel):
 
         visited.add(activity_id)
 
-        activity = self.find_activity_by_id(activity_id)
-        if activity is None:
-            return prev_activities
+        # 현재 액티비티 또는 게이트웨이 찾기
+        current = self.find_activity_by_id(activity_id)
+        if current is None:
+            current = self.find_gateway_by_id(activity_id)
+            if current is None:
+                return prev_activities
 
-        for sequence in self.sequences:
-            if sequence.target == activity_id:
-                source_activity = self.find_activity_by_id(sequence.source)
-                if source_activity:
+        # 현재 노드로 들어오는 모든 시퀀스 찾기
+        incoming_sequences = [seq for seq in self.sequences if seq.target == activity_id]
+        
+        for sequence in incoming_sequences:
+            source_id = sequence.source
+            
+            # 소스가 액티비티인 경우
+            source_activity = self.find_activity_by_id(source_id)
+            if source_activity and source_id not in visited:
+                if source_activity not in prev_activities:
                     prev_activities.append(source_activity)
-                    self.find_prev_activities(source_activity.id, prev_activities, visited)
-
-        if isinstance(activity, ProcessGateway):
-            for gateway in self.gateways:
-                if gateway.id == activity.id:
-                    prev_activities.extend(self.find_prev_activities(gateway.id, [], visited))
+                self.find_prev_activities(source_id, prev_activities, visited)
+                continue
+            
+            # 소스가 게이트웨이인 경우
+            source_gateway = self.find_gateway_by_id(source_id)
+            if source_gateway and source_id not in visited:
+                self.find_prev_activities(source_id, prev_activities, visited)
 
         return prev_activities
 
@@ -196,9 +208,113 @@ class ProcessDefinition(BaseModel):
                 return gateway
         return None
 
+    def find_immediate_prev_activities(self, activity_id: str) -> List[ProcessActivity]:
+        """
+        현재 액티비티의 바로 이전 액티비티들을 찾습니다.
+        게이트웨이를 통과하는 경우 게이트웨이 이전의 액티비티를 찾습니다.
+
+        Args:
+            activity_id (str): 현재 액티비티의 ID
+
+        Returns:
+            List[ProcessActivity]: 바로 이전 액티비티들의 목록
+        """
+        prev_activities = []
+        visited = set()  # 순환 참조 방지를 위한 방문 체크
+        
+        def find_prev_through_gateway(node_id: str):
+            if node_id in visited:
+                return
+            visited.add(node_id)
+            
+            # 현재 노드로 들어오는 시퀀스 찾기
+            incoming = [seq for seq in self.sequences if seq.target == node_id]
+            
+            for seq in incoming:
+                source_id = seq.source
+                
+                # 시작 이벤트는 건너뛰기
+                if "start_event" in source_id.lower():
+                    continue
+                
+                # 소스가 액티비티인 경우
+                source_activity = self.find_activity_by_id(source_id)
+                if source_activity:
+                    if source_activity not in prev_activities:
+                        prev_activities.append(source_activity)
+                    continue
+                
+                # 소스가 게이트웨이인 경우
+                source_gateway = self.find_gateway_by_id(source_id)
+                if source_gateway:
+                    # 게이트웨이로 들어오는 시퀀스 찾기
+                    gateway_incoming = [seq for seq in self.sequences if seq.target == source_gateway.id]
+                    for gw_seq in gateway_incoming:
+                        gw_source = self.find_activity_by_id(gw_seq.source)
+                        if gw_source and gw_source not in prev_activities:
+                            prev_activities.append(gw_source)
+        
+        # 현재 액티비티로 들어오는 시퀀스 찾기
+        current_incoming = [seq for seq in self.sequences if seq.target == activity_id]
+        
+        for sequence in current_incoming:
+            source_id = sequence.source
+            
+            # 소스가 액티비티인 경우
+            source_activity = self.find_activity_by_id(source_id)
+            if source_activity:
+                if source_activity not in prev_activities:
+                    prev_activities.append(source_activity)
+                continue
+            
+            # 소스가 게이트웨이인 경우
+            source_gateway = self.find_gateway_by_id(source_id)
+            if source_gateway:
+                # 게이트웨이로 들어오는 시퀀스 찾기
+                gateway_incoming = [seq for seq in self.sequences if seq.target == source_gateway.id]
+                for gw_seq in gateway_incoming:
+                    gw_source = self.find_activity_by_id(gw_seq.source)
+                    if gw_source and gw_source not in prev_activities:
+                        prev_activities.append(gw_source)
+        
+        return prev_activities
+
 def load_process_definition(definition_json: dict) -> ProcessDefinition:
-    # definition_json = json.loads(definition_json)
-    return ProcessDefinition(**definition_json)
+    # Events를 게이트웨이 리스트에 추가
+    if 'events' in definition_json:
+        if 'gateways' not in definition_json:
+            definition_json['gateways'] = []
+        for event in definition_json['events']:
+            gateway = {
+                'id': event['id'],
+                'name': event.get('name', ''),
+                'role': event.get('role', ''),
+                'type': event['type'],
+                'process': event.get('process', ''),
+                'condition': event.get('condition', {}),
+                'properties': event.get('properties', '{}'),
+                'description': event.get('description', ''),
+                'srcTrg': None
+            }
+            definition_json['gateways'].append(gateway)
+
+    process_def = ProcessDefinition(**definition_json)
+    
+    # srcTrg 설정
+    for sequence in process_def.sequences:
+        # 타겟 액티비티 찾기
+        target_activity = next((activity for activity in process_def.activities if activity.id == sequence.target), None)
+        if target_activity:
+            target_activity.srcTrg = sequence.source
+            continue
+            
+        # 타겟 게이트웨이 찾기
+        target_gateway = next((gateway for gateway in process_def.gateways if gateway.id == sequence.target), None)
+        if target_gateway:
+            target_gateway.srcTrg = sequence.source
+            
+    return process_def
+
 # Example usage
 if __name__ == "__main__":
     json_str = '{"processDefinitionName": "Example Process", "processDefinitionId": "example_process", "description": "제 프로세스 설명", "data": [{"name": "example data", "description": "example data description", "type": "Text"}], "roles": [{"name": "example role", "resolutionRule": "example rule"}], "activities": [{"name": "example activity", "id": "example_activity", "type": "ScriptActivity", "description": "activity description", "instruction": "activity instruction", "role": "example role", "inputData": [{"name": "example input data"}], "outputData": [{"name": "example output data"}], "checkpoints":["checkpoint 1"], "pythonCode": "import smtplib\\nfrom email.mime.multipart import MIMEMultipart\\nfrom email.mime.text import MIMEText\\n\\nsmtp = smtplib.SMTP(\'smtp.gmail.com\', 587)\\nsmtp.starttls()\\nsmtp.login(\'jinyoungj@gmail.com\', \'raqw nmmn xuuc bsyi\')\\n\\nmsg = MIMEMultipart()\\nmsg[\'Subject\'] = \'Test mail\'\\nmsg.attach(MIMEText(\'This is a test mail.\'))\\n\\nsmtp.sendmail(\'jinyoungj@gmail.com\', \'ohsy818@gmail.com\', msg.as_string())\\nsmtp.quit()"}], "sequences": [{"source": "activity_id_1", "target": "activity_id_2"}]}'

@@ -252,7 +252,7 @@ def execute_next_activity(process_result_json: dict) -> str:
             )
         else:
             process_instance = fetch_process_instance(process_result.instanceId)
-        
+           
         process_definition = process_instance.process_definition
 
         if process_result.formValues:

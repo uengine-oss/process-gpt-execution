@@ -340,6 +340,7 @@ class WorkItem(BaseModel):
     description: Optional[str] = None
     tool: Optional[str] = None
     tenant_id: str
+    reference_ids: Optional[List[str]] = []
     
     @validator('start_date', 'end_date', pre=True)
     def parse_datetime(cls, value):
@@ -651,6 +652,28 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
 
     return workitems
 
+def fetch_prev_task_ids(process_definition, current_activity_id: str, proc_inst_id: str) -> List[str]:
+    """
+    현재 테스크의 시퀀스 정보를 이용해 바로 직전 테스크의 ID 목록을 반환합니다.
+    
+    Args:
+        process_definition: 프로세스 정의 객체
+        current_activity_id: 현재 테스크의 ID
+        proc_inst_id: 프로세스 인스턴스 ID
+    
+    Returns:
+        List[str]: 직전 테스크의 activity ID 목록
+    """
+    prev_task_ids = []
+    prev_activities = process_definition.find_immediate_prev_activities(current_activity_id)
+    
+    if prev_activities:
+        # 이전 액티비티들의 activity_id를 수집
+        for prev_activity in prev_activities:
+            prev_task_ids.append(prev_activity.id)
+    
+    return prev_task_ids
+
 def upsert_todo_workitems(prcess_instance_data, process_result_data, process_definition):
     try:
         initial_activity = process_definition.find_initial_activity()
@@ -658,15 +681,32 @@ def upsert_todo_workitems(prcess_instance_data, process_result_data, process_def
         for activity in next_activities:
             prev_activities = process_definition.find_prev_activities(activity.id, [])
             start_date = datetime.now(pytz.timezone('Asia/Seoul'))
+        
             if prev_activities:
+                # 동일한 srcTrg를 가진 액티비티들 중 duration이 가장 큰 것만 남기기
+                srcTrg_groups = {}
                 for prev_activity in prev_activities:
+                    if prev_activity.srcTrg not in srcTrg_groups:
+                        srcTrg_groups[prev_activity.srcTrg] = []
+                    srcTrg_groups[prev_activity.srcTrg].append(prev_activity)
+                # duration이 가장 큰 액티비티만 선택
+                filtered_activities = []
+                for activities in srcTrg_groups.values():
+                    max_duration_activity = max(activities, key=lambda x: x.duration if x.duration is not None else 0)
+                    filtered_activities.append(max_duration_activity)
+                
+                reference_ids = fetch_prev_task_ids(process_definition, activity.id, prcess_instance_data['proc_inst_id'])
+                
+                for prev_activity in filtered_activities:
                     start_date = start_date + timedelta(days=prev_activity.duration)
+            
             due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
             workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], activity.id)
             if not workitem:
                 subdomain = subdomain_var.get()
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
+                    reference_ids=reference_ids if prev_activities else [],
                     proc_inst_id=prcess_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=activity.id,
@@ -676,7 +716,9 @@ def upsert_todo_workitems(prcess_instance_data, process_result_data, process_def
                     tool=activity.tool,
                     start_date=start_date,
                     due_date=due_date,
-                    tenant_id=subdomain
+                    tenant_id=subdomain,
+                    assignees=process_result_data['roleBindingChanges'],
+                    duration=activity.duration
                 )
                 workitem_dict = workitem.dict()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
