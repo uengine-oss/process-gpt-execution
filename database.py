@@ -297,7 +297,7 @@ def fetch_ui_definition_by_activity_id(proc_def_id, activity_id):
 class ProcessInstance(BaseModel):
     proc_inst_id: str
     proc_inst_name: str
-    role_bindings: Optional[List[Dict[str, str]]] = []
+    role_bindings: Optional[List[Dict[str, Any]]] = []
     current_activity_ids: List[str] = []
     current_user_ids: List[str] = []
     variables_data: Optional[List[Dict[str, Any]]] = []
@@ -341,6 +341,8 @@ class WorkItem(BaseModel):
     tool: Optional[str] = None
     tenant_id: str
     reference_ids: Optional[List[str]] = []
+    assignees: Optional[List[Dict[str, Any]]] = []
+    duration: Optional[int] = None
     
     @validator('start_date', 'end_date', pre=True)
     def parse_datetime(cls, value):

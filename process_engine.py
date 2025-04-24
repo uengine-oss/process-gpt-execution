@@ -18,8 +18,8 @@ import json
 
 # 1. OpenAI Chat Model 생성
 # ChatOpenAI 객체 생성
-model = ChatOpenAI(model="gpt-4o")
-vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096)
+model = ChatOpenAI(model="gpt-4o", streaming=True)
+vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096, streaming=True)
 
 # ConfigurableField를 사용하여 모델 선택 구성
 
@@ -263,11 +263,11 @@ def execute_next_activity(process_result_json: dict) -> str:
             process_instance = fetch_process_instance(process_result.instanceId)
            
         process_definition = process_instance.process_definition
-
+        
         if process_result.formValues:
             form_id = next(iter(process_result.formValues))
-            form_value =  process_result.formValues[form_id]
-            if form_value and form_value[form_id]:
+            form_value = process_result.formValues[form_id]
+            if isinstance(form_value, dict) and form_id in form_value:
                 form_value = form_value[form_id]
             variable = {
                 "key": form_id,
@@ -478,14 +478,6 @@ def vision_model_chain(input):
     )
     return msg
 
-chain = (
-    prompt | model | parser | execute_next_activity
-)
-
-vision_chain = (
-    vision_model_chain | parser | execute_next_activity
-)
-
 
 def combine_input_with_process_definition(input):
     # 프로세스 인스턴스를 DB에서 검색
@@ -597,17 +589,45 @@ def combine_input_with_process_definition(input):
                 "form_fields": form_fields
             }
 
-        if image:
-            return vision_chain.invoke(chain_input)
-        else:
-            return chain.invoke(chain_input)
-        
+        # if image:
+        #     return vision_chain.invoke(chain_input)
+        # else:
+        #     return chain.invoke(chain_input)
+        return chain_input
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with_process_definition)
 
+chain = (
+    prompt | model | parser | execute_next_activity
+)
+
+vision_chain = (
+    vision_model_chain | parser | execute_next_activity
+)
+
+
 from fastapi import Request
+from fastapi.responses import StreamingResponse
+
+async def create_stream_execution(request: Request):
+    json_data = await request.json()
+    input = json_data.get('input')
+    chain_input = combine_input_with_process_definition(input)
+
+    async def call_chain(input):
+        collected_text = ""
+        async for chunk in model.astream(prompt.format(**chain_input)):
+            collected_text += chunk.content
+            yield chunk.content
+
+        parsed_output = parser.parse(collected_text)
+        final_result = execute_next_activity(parsed_output)
+        yield final_result
+
+    return StreamingResponse(call_chain(chain_input), media_type="text/event-stream")
 
 async def combine_input(request: Request):
     json_data = await request.json()
@@ -669,10 +689,10 @@ def combine_input_with_role_binding(input):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    
+
 
 def add_routes_to_app(app) :
-    app.add_api_route("/complete", combine_input, methods=["POST"])
+    app.add_api_route("/complete", create_stream_execution, methods=["POST"])
     app.add_api_route("/vision-complete", combine_input, methods=["POST"])
     app.add_api_route("/role-binding", combine_input, methods=["POST"])
     
