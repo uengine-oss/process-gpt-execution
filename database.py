@@ -564,20 +564,17 @@ def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
         # 디버깅을 위한 로그 추가
         print(f"[DEBUG] Pod ID: {pod_id}")
         print(f"[DEBUG] Tenant ID: {tenant_id}")
-        print(f"[DEBUG] DB Config: {db_config}")
 
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor(cursor_factory=RealDictCursor)
         
-        # 먼저 데이터가 있는지 확인하는 쿼리 실행
         check_query = """
             SELECT COUNT(*) as count 
             FROM todolist 
             WHERE status = 'SUBMITTED' 
             AND consumer IS NULL 
-            AND tenant_id = %s
         """
-        cursor.execute(check_query, (tenant_id,))
+        cursor.execute(check_query)
         count = cursor.fetchone()['count']
         print(f"[DEBUG] Found {count} submitted workitems")
 
@@ -585,8 +582,7 @@ def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
             WITH locked_rows AS (
                 SELECT id FROM todolist
                 WHERE status = 'SUBMITTED'
-                  AND consumer IS NULL
-                  AND tenant_id = %s
+                    AND consumer IS NULL
                 FOR UPDATE SKIP LOCKED
                 LIMIT %s
             )
@@ -597,7 +593,7 @@ def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
             RETURNING *;
         """
 
-        cursor.execute(query, (tenant_id, limit, pod_id))
+        cursor.execute(query, (limit, pod_id))
         rows = cursor.fetchall()
         print(f"[DEBUG] Updated {len(rows) if rows else 0} workitems")
 
