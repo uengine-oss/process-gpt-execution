@@ -560,9 +560,26 @@ def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
         pod_id = socket.gethostname()
         tenant_id = subdomain_var.get()
         db_config = db_config_var.get()
+        
+        # 디버깅을 위한 로그 추가
+        print(f"[DEBUG] Pod ID: {pod_id}")
+        print(f"[DEBUG] Tenant ID: {tenant_id}")
+        print(f"[DEBUG] DB Config: {db_config}")
 
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor(cursor_factory=RealDictCursor)
+        
+        # 먼저 데이터가 있는지 확인하는 쿼리 실행
+        check_query = """
+            SELECT COUNT(*) as count 
+            FROM todolist 
+            WHERE status = 'SUBMITTED' 
+            AND consumer IS NULL 
+            AND tenant_id = %s
+        """
+        cursor.execute(check_query, (tenant_id,))
+        count = cursor.fetchone()['count']
+        print(f"[DEBUG] Found {count} submitted workitems")
 
         query = """
             WITH locked_rows AS (
@@ -582,6 +599,7 @@ def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
 
         cursor.execute(query, (tenant_id, limit, pod_id))
         rows = cursor.fetchall()
+        print(f"[DEBUG] Updated {len(rows) if rows else 0} workitems")
 
         connection.commit()
         cursor.close()
@@ -590,6 +608,7 @@ def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
         return rows if rows else None
 
     except Exception as e:
+        print(f"[ERROR] DB fetch failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
 
 # todolist 업데이트
