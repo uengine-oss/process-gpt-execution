@@ -71,6 +71,14 @@ add_min_routes_to_app(app)
 add_process_def_search_routes_to_app(app)
 add_process_chat_routes_to_app(app)
 
+# polling 추가
+from process_polling import start_polling
+import asyncio
+
+@app.on_event("startup")
+async def start_background_tasks():
+    asyncio.create_task(start_polling())
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="localhost", port=8000)

@@ -13,6 +13,7 @@ import pytz
 from contextvars import ContextVar
 import csv
 from dotenv import load_dotenv
+import socket
 
 app = FastAPI()
 
@@ -343,6 +344,10 @@ class WorkItem(BaseModel):
     reference_ids: Optional[List[str]] = []
     assignees: Optional[List[Dict[str, Any]]] = []
     duration: Optional[int] = None
+    output: Optional[Dict[str, Any]] = {}
+    retry: Optional[int] = 0
+    consumer: Optional[str] = None
+    log: Optional[str] = None
     
     @validator('start_date', 'end_date', pre=True)
     def parse_datetime(cls, value):
@@ -550,15 +555,52 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
+def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
+    try:
+        pod_id = socket.gethostname()
+        tenant_id = subdomain_var.get()
+        db_config = db_config_var.get()
+
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
+
+        query = """
+            WITH locked_rows AS (
+                SELECT id FROM todolist
+                WHERE status = 'SUBMITTED'
+                  AND consumer IS NULL
+                  AND tenant_id = %s
+                FOR UPDATE SKIP LOCKED
+                LIMIT %s
+            )
+            UPDATE todolist
+            SET consumer = %s
+            FROM locked_rows
+            WHERE todolist.id = locked_rows.id
+            RETURNING *;
+        """
+
+        cursor.execute(query, (tenant_id, limit, pod_id))
+        rows = cursor.fetchall()
+
+        connection.commit()
+        cursor.close()
+        connection.close()
+
+        return rows if rows else None
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
+
 # todolist 업데이트
-def upsert_completed_workitem(prcess_instance_data, process_result_data, process_definition):
+def upsert_completed_workitem(process_instance_data, process_result_data, process_definition):
     try:
         if not process_result_data['completedActivities']:
             return
         
         for completed_activity in process_result_data['completedActivities']:
             workitem = fetch_workitem_by_proc_inst_and_activity(
-                prcess_instance_data['proc_inst_id'], 
+                process_instance_data['proc_inst_id'], 
                 completed_activity['completedActivityId']
             )
             
@@ -566,14 +608,29 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
                 workitem.status = completed_activity['result']
                 workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul'))
                 workitem.user_id = completed_activity['completedUserEmail']
+                if workitem.assignees and len(workitem.assignees) > 0:
+                    for assignee in workitem.assignees:
+                        if assignee.get('endpoint') and assignee.get('endpoint') == workitem.user_id:
+                            assignee = {
+                                'roleName': assignee.get('name'),
+                                'userId': assignee.get('endpoint')
+                            }
+                            break
             else:
                 activity = process_definition.find_activity_by_id(completed_activity['completedActivityId'])
                 start_date = datetime.now(pytz.timezone('Asia/Seoul'))
                 due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
                 subdomain = subdomain_var.get()
+                assignees = []
+                if process_instance_data['role_bindings']:
+                    role_bindings = process_instance_data['role_bindings']
+                    for role_binding in role_bindings:
+                        if role_binding['roleName'] == activity.role:
+                            assignees.append(role_binding)
+                            
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
-                    proc_inst_id=prcess_instance_data['proc_inst_id'],
+                    proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=completed_activity['completedActivityId'],
                     activity_name=activity.name,
@@ -583,7 +640,9 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
                     start_date=start_date,
                     end_date=datetime.now(pytz.timezone('Asia/Seoul')) if completed_activity['result'] == 'DONE' else None,
                     due_date=due_date,
-                    tenant_id=subdomain
+                    tenant_id=subdomain,
+                    assignees=assignees,
+                    duration=activity.duration
                 )
             
             workitem_dict = workitem.dict()
@@ -676,7 +735,7 @@ def fetch_prev_task_ids(process_definition, current_activity_id: str, proc_inst_
     
     return prev_task_ids
 
-def upsert_todo_workitems(prcess_instance_data, process_result_data, process_definition):
+def upsert_todo_workitems(process_instance_data, process_result_data, process_definition):
     try:
         initial_activity = process_definition.find_initial_activity()
         next_activities = [activity for activity in process_definition.activities if activity.id != initial_activity.id]
@@ -697,29 +756,39 @@ def upsert_todo_workitems(prcess_instance_data, process_result_data, process_def
                     max_duration_activity = max(activities, key=lambda x: x.duration if x.duration is not None else 0)
                     filtered_activities.append(max_duration_activity)
                 
-                reference_ids = fetch_prev_task_ids(process_definition, activity.id, prcess_instance_data['proc_inst_id'])
+                reference_ids = fetch_prev_task_ids(process_definition, activity.id, process_instance_data['proc_inst_id'])
                 
                 for prev_activity in filtered_activities:
                     start_date = start_date + timedelta(days=prev_activity.duration)
             
             due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
-            workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], activity.id)
+            workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity.id)
             if not workitem:
                 subdomain = subdomain_var.get()
+                
+                user_id = ""
+                if process_instance_data['role_bindings']:
+                    role_bindings = process_instance_data['role_bindings']
+                    assignees = []
+                    for role_binding in role_bindings:
+                        if role_binding['roleName'] == activity.role:
+                            user_id = ','.join(role_binding['userId']) if isinstance(role_binding['userId'], list) else role_binding['userId']
+                            assignees.append(role_binding)
+                
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     reference_ids=reference_ids if prev_activities else [],
-                    proc_inst_id=prcess_instance_data['proc_inst_id'],
+                    proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=activity.id,
                     activity_name=activity.name,
-                    user_id="",
+                    user_id=user_id,
                     status="TODO",
                     tool=activity.tool,
                     start_date=start_date,
                     due_date=due_date,
                     tenant_id=subdomain,
-                    assignees=process_result_data['roleBindingChanges'],
+                    assignees=assignees,
                     duration=activity.duration
                 )
                 workitem_dict = workitem.dict()
@@ -731,6 +800,29 @@ def upsert_todo_workitems(prcess_instance_data, process_result_data, process_def
                 if supabase is None:
                     raise Exception("Supabase client is not configured for this request")
                 supabase.table('todolist').upsert(workitem_dict).execute()
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+def upsert_workitem(workitem_data: dict):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        workitem_data["tenant_id"] = subdomain
+        return supabase.table('todolist').upsert(workitem_data).execute()
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+def delete_workitem(workitem_id: str):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        supabase.table('todolist').delete().eq('id', workitem_id).eq('tenant_id', subdomain).execute()
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
@@ -1019,8 +1111,17 @@ def update_user_admin(input):
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        response = supabase.auth.admin.update_user_by_id(user_id, user_info)
-        return response
+        if (user_info.get('app_metadata') and user_info.get('app_metadata').get('tenant_id')):
+            user_data = fetch_user_info_by_uid(user_id)
+            tenants = user_data.get('tenants')
+            if (tenants and user_info.get('app_metadata').get('tenant_id') in tenants):
+                response = supabase.auth.admin.update_user_by_id(user_id, user_info)
+                return response
+            else:
+                raise HTTPException(status_code=404, detail="가입하지 않은 테넌트입니다.")
+        else:
+            response = supabase.auth.admin.update_user_by_id(user_id, user_info)
+            return response
 
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

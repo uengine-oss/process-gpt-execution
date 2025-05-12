@@ -1,4 +1,4 @@
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from typing import List, Optional
 import json
 from langchain.prompts import PromptTemplate
@@ -8,8 +8,8 @@ from langchain_core.runnables import RunnableLambda
 from langserve import add_routes
 from pydantic import BaseModel
 
-from database import fetch_all_process_definitions, fetch_user_info
-
+from database import fetch_all_process_definitions
+from process_var_sql_gen import get_process_definitions
 
 
 model = ChatOpenAI(model="gpt-4o")
@@ -95,39 +95,20 @@ vision_chain = (
     vision_model_chain | parser | process_search
 )
 
-def combine_input_with_process_definition(input):
+async def combine_input_with_process_definition(request: Request):
     try:
-        processDefinitionList = fetch_all_process_definitions()
-        message = input.get("answer")
-        image = input.get("image")
-        
-        chain_input = {
-            "processDefinitionList": processDefinitionList,
-            "message": message,
-            "image": image
-        }
-        
-        if image:
-            return vision_chain.invoke(chain_input)
-        else:
-            return chain.invoke(chain_input)
-        
+        input = await request.json()
+        process_definitions = get_process_definitions(input)
+
+        return process_definitions
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-combine_input_with_process_definition_lambda = RunnableLambda(combine_input_with_process_definition)
-
-from fastapi import Request
-
-async def combine_input(request: Request):
-    json_data = await request.json()
-    input = json_data.get('input')
-    return combine_input_with_process_definition(input)
-
 
 def add_routes_to_app(app) :
-    app.add_api_route("/process-search", combine_input, methods=["POST"])
-    app.add_api_route("/vision-process-search", combine_input, methods=["POST"])
+    app.add_api_route("/process-search", combine_input_with_process_definition, methods=["POST"])
+    app.add_api_route("/vision-process-search", combine_input_with_process_definition, methods=["POST"])
     
     # add_routes(
     #     app,
