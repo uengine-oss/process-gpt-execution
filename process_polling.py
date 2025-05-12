@@ -515,6 +515,7 @@ async def start_polling():
 
     while True:
         try:
+            print("polling workitem")
             await polling_workitem()
         except Exception as e:
             print(f"[Polling Loop Error] {e}")
