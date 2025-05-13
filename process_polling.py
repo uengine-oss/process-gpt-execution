@@ -214,12 +214,12 @@ def check_external_customer_and_send_email(activity_obj, user_email, process_ins
         print(f"Failed to send notification to external customer: {str(e)}")
         return False
 
-def execute_next_activity(process_result_json: dict) -> str:
+def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = None) -> str:
     try:
         process_result = ProcessResult(**process_result_json)
         process_instance = None
         status = ""
-        if not fetch_process_instance(process_result.instanceId):
+        if not fetch_process_instance(process_result.instanceId, tenant_id):
             if process_result.instanceId == "new" or '.' not in process_result.instanceId:
                 instance_id = f"{process_result.processDefinitionId.lower()}.{str(uuid.uuid4())}"
                 status = "RUNNING"
@@ -233,7 +233,7 @@ def execute_next_activity(process_result_json: dict) -> str:
                 current_user_ids=[],
                 variables_data=[],
                 status=status,
-                tenant_id=""
+                tenant_id=tenant_id
             )
             
             existing_role_bindings = process_result_json.get("roleBindings", [])
@@ -244,7 +244,7 @@ def execute_next_activity(process_result_json: dict) -> str:
                 else:
                     process_instance.role_bindings = formatted_role_bindings
         else:
-            process_instance = fetch_process_instance(process_result.instanceId)
+            process_instance = fetch_process_instance(process_result.instanceId, tenant_id)
            
         process_definition = process_instance.process_definition
         
@@ -368,20 +368,20 @@ def execute_next_activity(process_result_json: dict) -> str:
                 process_result_json["result"] = result
                 
                 
-        upsert_todo_workitems(process_instance.dict(), process_result_json, process_definition)
+        upsert_todo_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
         
         workitems = None
         message_json = json.dumps({"description": ""})
-        upsert_completed_workitem(process_instance.dict(), process_result_json, process_definition)
-        workitems = upsert_next_workitems(process_instance.dict(), process_result_json, process_definition)
-        _, process_instance = upsert_process_instance(process_instance)
+        upsert_completed_workitem(process_instance.dict(), process_result_json, process_definition, tenant_id)
+        workitems = upsert_next_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
+        _, process_instance = upsert_process_instance(process_instance, tenant_id)
         message_json = json.dumps({"description": process_result.description})
         if process_result.cannotProceedErrors:
             reason = ""
             for error in process_result.cannotProceedErrors:
                 reason += error.reason + "\n"
             message_json = json.dumps({"description": reason})
-        upsert_chat_message(process_instance.proc_inst_id, message_json, True)
+        upsert_chat_message(process_instance.proc_inst_id, message_json, True, tenant_id)
         
         # Updating process_result_json with the latest process instance details and execution result
         process_result_json["instanceId"] = process_instance.proc_inst_id
@@ -409,7 +409,7 @@ def execute_next_activity(process_result_json: dict) -> str:
         return json.dumps(process_result_json)
     except Exception as e:
         message_json = json.dumps({"description": str(e)})
-        upsert_chat_message(process_instance.proc_inst_id, message_json, True)
+        upsert_chat_message(process_instance.proc_inst_id, message_json, True, tenant_id)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
@@ -429,13 +429,14 @@ async def handle_workitem(workitem):
     activity_id = workitem['activity_id']
     process_definition_id = workitem['proc_def_id']
     process_instance_id = workitem['proc_inst_id']
+    tenant_id = workitem['tenant_id']
 
-    process_definition_json = fetch_process_definition(process_definition_id)
-    process_instance = fetch_process_instance(process_instance_id) if process_instance_id != "new" else None
-    organization_chart = fetch_organization_chart()
+    process_definition_json = fetch_process_definition(process_definition_id, tenant_id)
+    process_instance = fetch_process_instance(process_instance_id, tenant_id) if process_instance_id != "new" else None
+    organization_chart = fetch_organization_chart(tenant_id)
     user_info = fetch_user_info(workitem['user_id'])
     today = datetime.now().strftime("%Y-%m-%d")
-    ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id)
+    ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id, tenant_id)
     form_fields = ui_definition.fields_json if ui_definition else None
     
     chain_input = {
@@ -467,12 +468,12 @@ async def handle_workitem(workitem):
         })
     
     parsed_output = parser.parse(collected_text)
-    result = execute_next_activity(parsed_output)
+    result = execute_next_activity(parsed_output, tenant_id)
     result_json = json.loads(result)
     
     if result_json.get("instanceId") != "new" and workitem['proc_inst_id'] == "new":
         instance_id = result_json.get("instanceId")
-        new_workitem = fetch_workitem_by_proc_inst_and_activity(instance_id, activity_id)
+        new_workitem = fetch_workitem_by_proc_inst_and_activity(instance_id, activity_id, tenant_id)
         new_workitem_dict = new_workitem.dict()
         if new_workitem_dict['id'] != workitem['id']:
             upsert_workitem({
@@ -482,7 +483,7 @@ async def handle_workitem(workitem):
                 "end_date": new_workitem_dict['end_date'].isoformat() if new_workitem_dict['end_date'] else None,
                 "due_date": new_workitem_dict['due_date'].isoformat() if new_workitem_dict['due_date'] else None
             })
-            delete_workitem(new_workitem_dict['id'])
+            delete_workitem(new_workitem_dict['id'], tenant_id)
         
     else:
         upsert_workitem({
@@ -497,12 +498,11 @@ async def safe_handle_workitem(workitem):
         await handle_workitem(workitem)
     except Exception as e:
         print(f"[ERROR] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}")
-        workitem['retry'] = workitem.get('retry', 0) + 1
+        workitem['retry'] = workitem['retry'] + 1
         workitem['consumer'] = None
         if workitem['retry'] >= 3:
             workitem['status'] = "DONE"
-            workitem['description'] = f"[Workitem Error] error={str(e)}"
-            print(f"[Workitem Error] id={workitem.get('id')}, error={e}")
+            workitem['description'] = f"[Workitem Error] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}"
         upsert_workitem(workitem)
 
 async def polling_workitem():
