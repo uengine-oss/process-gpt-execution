@@ -53,7 +53,7 @@ def send_email(subject: str, body: str, to_email: str) -> bool:
     try:
         # Create message
         msg = MIMEMultipart()
-        msg['From'] = smtp_username
+        msg['From'] = 'noreply@process-gpt.io'
         msg['To'] = to_email
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'html', 'utf-8'))

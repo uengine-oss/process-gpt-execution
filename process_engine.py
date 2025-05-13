@@ -82,7 +82,7 @@ async def combine_input_with_process_definition(request: Request):
             workitem_data['start_date'] = workitem_data['start_date'].isoformat()
             workitem_data['due_date'] = workitem_data['due_date'].isoformat()
             workitem_data['retry'] = 0
-
+            workitem_data['consumer'] = None
         else:
             workitem_data = {
                 "id": str(uuid.uuid4()),
