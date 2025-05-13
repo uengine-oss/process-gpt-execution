@@ -493,8 +493,10 @@ async def handle_workitem(workitem):
 
 async def safe_handle_workitem(workitem):
     try:
+        print(f"[DEBUG] Starting safe_handle_workitem for workitem: {workitem['id']}")
         await handle_workitem(workitem)
     except Exception as e:
+        print(f"[ERROR] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}")
         workitem['retry'] = workitem.get('retry', 0) + 1
         workitem['consumer'] = None
         if workitem['retry'] >= 3:
@@ -508,7 +510,12 @@ async def polling_workitem():
     if not workitems:
         return
 
-    await asyncio.gather(*(safe_handle_workitem(w) for w in workitems))
+    tasks = []
+    for workitem in workitems:
+        task = asyncio.create_task(safe_handle_workitem(workitem))
+        tasks.append(task)
+    
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 async def start_polling():
     setting_database()
