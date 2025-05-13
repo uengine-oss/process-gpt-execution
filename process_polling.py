@@ -434,7 +434,13 @@ async def handle_workitem(workitem):
     process_definition_json = fetch_process_definition(process_definition_id, tenant_id)
     process_instance = fetch_process_instance(process_instance_id, tenant_id) if process_instance_id != "new" else None
     organization_chart = fetch_organization_chart(tenant_id)
-    user_info = fetch_user_info(workitem['user_id'])
+    if workitem['user_id'] != "external_customer":
+        user_info = fetch_user_info(workitem['user_id'])
+    else:
+        user_info = {
+            "name": "external_customer",
+            "email": workitem['user_id']
+        }
     today = datetime.now().strftime("%Y-%m-%d")
     ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id, tenant_id)
     form_fields = ui_definition.fields_json if ui_definition else None
@@ -468,7 +474,6 @@ async def handle_workitem(workitem):
         }, tenant_id)
     
     parsed_output = parser.parse(collected_text)
-    print(f"[DEBUG] Tenant ID: {tenant_id}")
     result = execute_next_activity(parsed_output, tenant_id)
     result_json = json.loads(result)
     
