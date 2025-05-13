@@ -585,7 +585,7 @@ def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
             WITH locked_rows AS (
                 SELECT id FROM todolist
                 WHERE status = 'SUBMITTED'
-                    AND (consumer IS NULL OR consumer = %s)
+                    AND consumer IS NULL
                 FOR UPDATE SKIP LOCKED
                 LIMIT %s
             )
@@ -596,7 +596,7 @@ def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
             RETURNING *;
         """
 
-        cursor.execute(query, (pod_id, limit, pod_id))
+        cursor.execute(query, (limit, pod_id))
         rows = cursor.fetchall()
 
         connection.commit()
@@ -672,7 +672,6 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
             supabase = supabase_client_var.get()
             if supabase is None:
                 raise Exception("Supabase client is not configured for this request")
-            print(f"[DEBUG] upsert_completed_workitem: {workitem_dict}")
             supabase.table('todolist').upsert(workitem_dict).execute()
     except Exception as e:
         print(f"[ERROR] upsert_completed_workitem: {str(e)}")
@@ -727,7 +726,6 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                 supabase = supabase_client_var.get()
                 if supabase is None:
                     raise Exception("Supabase client is not configured for this request")
-                print(f"[DEBUG] upsert_next_workitems: {workitem_dict}")
                 supabase.table('todolist').upsert(workitem_dict).execute()
                 workitems.append(workitem)
         except Exception as e:
@@ -823,7 +821,6 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                 supabase = supabase_client_var.get()
                 if supabase is None:
                     raise Exception("Supabase client is not configured for this request")
-                print(f"[DEBUG] upsert_todo_workitems: {workitem_dict}")
                 supabase.table('todolist').upsert(workitem_dict).execute()
     except Exception as e:
         print(f"[ERROR] upsert_todo_workitems: {str(e)}")
@@ -849,7 +846,6 @@ def upsert_workitem(workitem_data: dict, tenant_id: Optional[str] = None):
             tenant_id = subdomain_var.get()
 
         workitem_data["tenant_id"] = tenant_id
-        print(f"[DEBUG] upsert_workitem: {workitem_data}")
         return supabase.table('todolist').upsert(workitem_data).execute()
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
