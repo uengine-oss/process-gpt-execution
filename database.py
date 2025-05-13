@@ -672,9 +672,10 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
             supabase = supabase_client_var.get()
             if supabase is None:
                 raise Exception("Supabase client is not configured for this request")
-            
+            print(f"[DEBUG] upsert_completed_workitem: {workitem_dict}")
             supabase.table('todolist').upsert(workitem_dict).execute()
     except Exception as e:
+        print(f"[ERROR] upsert_completed_workitem: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
@@ -726,10 +727,11 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                 supabase = supabase_client_var.get()
                 if supabase is None:
                     raise Exception("Supabase client is not configured for this request")
-                
+                print(f"[DEBUG] upsert_next_workitems: {workitem_dict}")
                 supabase.table('todolist').upsert(workitem_dict).execute()
                 workitems.append(workitem)
         except Exception as e:
+            print(f"[ERROR] upsert_next_workitems: {str(e)}")
             raise HTTPException(status_code=404, detail=str(e)) from e
 
     return workitems
@@ -821,11 +823,13 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                 supabase = supabase_client_var.get()
                 if supabase is None:
                     raise Exception("Supabase client is not configured for this request")
+                print(f"[DEBUG] upsert_todo_workitems: {workitem_dict}")
                 supabase.table('todolist').upsert(workitem_dict).execute()
     except Exception as e:
+        print(f"[ERROR] upsert_todo_workitems: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e)) from e
 
-def upsert_workitem(workitem_data: dict):
+def upsert_workitem(workitem_data: dict, tenant_id: Optional[str] = None):
     try:
         supabase = supabase_client_var.get()
         if supabase is None:
@@ -841,8 +845,11 @@ def upsert_workitem(workitem_data: dict):
             if not isinstance(workitem_data["due_date"], str):
                 workitem_data["due_date"] = workitem_data["due_date"].isoformat()
         
-        subdomain = subdomain_var.get()
-        workitem_data["tenant_id"] = subdomain
+        if not tenant_id:
+            tenant_id = subdomain_var.get()
+
+        workitem_data["tenant_id"] = tenant_id
+        print(f"[DEBUG] upsert_workitem: {workitem_data}")
         return supabase.table('todolist').upsert(workitem_data).execute()
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

@@ -465,9 +465,10 @@ async def handle_workitem(workitem):
         upsert_workitem({
             "id": workitem['id'],
             "log": collected_text
-        })
+        }, tenant_id)
     
     parsed_output = parser.parse(collected_text)
+    print(f"[DEBUG] Tenant ID: {tenant_id}")
     result = execute_next_activity(parsed_output, tenant_id)
     result_json = json.loads(result)
     
@@ -482,14 +483,14 @@ async def handle_workitem(workitem):
                 "status": "DONE",
                 "end_date": new_workitem_dict['end_date'].isoformat() if new_workitem_dict['end_date'] else None,
                 "due_date": new_workitem_dict['due_date'].isoformat() if new_workitem_dict['due_date'] else None
-            })
+            }, tenant_id)
             delete_workitem(new_workitem_dict['id'], tenant_id)
         
     else:
         upsert_workitem({
             "id": workitem['id'],
             "status": "DONE",
-        })
+        }, tenant_id)
 
 
 async def safe_handle_workitem(workitem):
@@ -503,7 +504,7 @@ async def safe_handle_workitem(workitem):
         if workitem['retry'] >= 3:
             workitem['status'] = "DONE"
             workitem['description'] = f"[Workitem Error] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}"
-        upsert_workitem(workitem)
+        upsert_workitem(workitem, workitem['tenant_id'])
 
 async def polling_workitem():
     workitems = fetch_workitem_with_submitted_status()
