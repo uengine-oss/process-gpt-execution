@@ -349,11 +349,11 @@ class WorkItem(BaseModel):
     consumer: Optional[str] = None
     log: Optional[str] = None
     
-    @validator('start_date', 'end_date', pre=True)
+    @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
         if isinstance(value, str):
             try:
-                return datetime.fromisoformat(value)
+                return datetime.fromisoformat(value).replace(tzinfo=None)
             except ValueError:
                 return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
         return value
@@ -558,31 +558,16 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
 def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
     try:
         pod_id = socket.gethostname()
-        tenant_id = subdomain_var.get()
         db_config = db_config_var.get()
-        
-        # 디버깅을 위한 로그 추가
-        print(f"[DEBUG] Pod ID: {pod_id}")
-        print(f"[DEBUG] Tenant ID: {tenant_id}")
 
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor(cursor_factory=RealDictCursor)
-        
-        check_query = """
-            SELECT COUNT(*) as count 
-            FROM todolist 
-            WHERE status = 'SUBMITTED' 
-            AND consumer IS NULL 
-        """
-        cursor.execute(check_query)
-        count = cursor.fetchone()['count']
-        print(f"[DEBUG] Found {count} submitted workitems")
 
         query = """
             WITH locked_rows AS (
                 SELECT id FROM todolist
                 WHERE status = 'SUBMITTED'
-                    AND consumer IS NULL
+                    AND (consumer IS NULL OR consumer = %s)
                 FOR UPDATE SKIP LOCKED
                 LIMIT %s
             )
@@ -593,9 +578,8 @@ def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
             RETURNING *;
         """
 
-        cursor.execute(query, (limit, pod_id))
+        cursor.execute(query, (pod_id, limit, pod_id))
         rows = cursor.fetchall()
-        print(f"[DEBUG] Updated {len(rows) if rows else 0} workitems")
 
         connection.commit()
         cursor.close()
@@ -849,7 +833,7 @@ class ChatMessage(BaseModel):
     email: Optional[str] = None
     image: Optional[str] = None
     content: Optional[str] = None
-    timeStamp: Optional[datetime] = None
+    timeStamp: Optional[int] = None
 
 class ChatItem(BaseModel):
     id: str
@@ -884,7 +868,7 @@ def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool) -> None:
                 email="system@uengine.org",
                 image="",
                 content=json_data["description"],
-                timeStamp=datetime.now(pytz.timezone('Asia/Seoul'))
+                timeStamp=int(datetime.now(pytz.timezone('Asia/Seoul')).timestamp() * 1000)
             )
         else:
             user_info = fetch_user_info(data["email"])
@@ -894,10 +878,9 @@ def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool) -> None:
                 email=data["email"],
                 image="",
                 content=data["command"],
-                timeStamp=datetime.now(pytz.timezone('Asia/Seoul'))
+                timeStamp=int(datetime.now(pytz.timezone('Asia/Seoul')).timestamp() * 1000)
             )
 
-        message.timeStamp = message.timeStamp.isoformat() if message.timeStamp else None        
         subdomain = subdomain_var.get()
         chat_item = ChatItem(
             id=chat_room_id,
