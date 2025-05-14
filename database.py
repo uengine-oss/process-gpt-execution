@@ -1166,16 +1166,19 @@ def update_user_admin(input):
 
 def create_user(input):
     try:
-        user_info = input.get('user_info')
         tenant_id = subdomain_var.get()
         supabase = supabase_client_var.get()
-        
+
+        username = input.get("username")
+        email = input.get("email")
+        role = input.get("role")
+
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
 
         response = supabase.auth.admin.create_user({
-            "email": user_info.get("email"),
-            "username": user_info.get("username"),
+            "email": email,
+            "username": username,
             "password": "000000",
             "app_metadata": {
                 "tenant_id": tenant_id
@@ -1185,9 +1188,9 @@ def create_user(input):
         if response.user:
             supabase.table("users").insert({
                 "id": response.user.id,
-                "email": user_info.get("email"),
-                "username": user_info.get("username"),
-                "role": "user",
+                "email": email,
+                "username": username,
+                "role": role,
                 "current_tenant": tenant_id,
                 "tenants": [tenant_id]
             }).execute()
