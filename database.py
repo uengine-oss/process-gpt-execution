@@ -1180,6 +1180,7 @@ def create_user(input):
             "email": email,
             "username": username,
             "password": "000000",
+            "email_confirm": True,
             "app_metadata": {
                 "tenant_id": tenant_id
             }
