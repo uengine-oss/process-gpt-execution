@@ -48,6 +48,7 @@ prompt = PromptTemplate.from_template(
     - Process Definition: {processDefinitionJson}
 
     - Process Instance Id: {instance_id}
+    - Process Instance Data: {instance_variables_data}
         
     - Organization Chart: {organizationChart}
     
@@ -76,8 +77,7 @@ prompt = PromptTemplate.from_template(
     The data changes and role binding changes should be derived from the user submitted data or attached image OCR. 
     At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
     Information about completed activities must be returned.
-    The completedUserEmail included in completedActivities must be found in the role bindings and returned. If not, find the organization chart and return it.
-    The nextUserEmail included in nextActivities must be found in the role bindings and returned. If not, find the organization chart and return it.
+    If the person responsible for the next activity is an external customer, the nextUserEmail included in nextActivities must be returned customer email. Customer emails must be found in submitted form values or process instance data. Never write customer emails at will or return non-external ones. Instances will be broken.
     If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
     startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
     If the user-submitted data is insufficient, refer to the process data to extract the value.
@@ -448,7 +448,7 @@ async def handle_workitem(workitem):
     chain_input = {
         "answer": '',
         "instance_id": process_instance_id,
-        "instance_name": process_instance.proc_inst_name if process_instance else '',
+        "instance_variables_data": process_instance.variables_data if process_instance else '',
         "role_bindings": workitem['assignees'],
         "current_activity_ids": activity_id,
         "current_user_ids": workitem['user_id'],

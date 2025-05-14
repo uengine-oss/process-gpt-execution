@@ -621,7 +621,8 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
         for completed_activity in process_result_data['completedActivities']:
             workitem = fetch_workitem_by_proc_inst_and_activity(
                 process_instance_data['proc_inst_id'], 
-                completed_activity['completedActivityId']
+                completed_activity['completedActivityId'],
+                tenant_id
             )
             
             if workitem:
@@ -687,7 +688,7 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
         if activity_data['nextActivityId'] in ["END_PROCESS", "endEvent", "end_event"]:
             continue
         
-        workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity_data['nextActivityId'])
+        workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity_data['nextActivityId'], tenant_id)
         
         if workitem:
             workitem.status = activity_data['result']
@@ -786,7 +787,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     start_date = start_date + timedelta(days=prev_activity.duration)
             
             due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
-            workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity.id)
+            workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity.id, tenant_id)
             if not workitem:
                 user_id = ""
                 if process_instance_data['role_bindings']:
@@ -1172,16 +1173,27 @@ def create_user(input):
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
 
-        response = supabase.auth.admin.create_user(user_info)
-        supabase.table("users").insert({
-            "id": response.user.id,
+        response = supabase.auth.admin.create_user({
             "email": user_info.get("email"),
             "username": user_info.get("username"),
-            "role": "user",
-            "current_tenant": tenant_id,
-            "tenants": [tenant_id]
-        }).execute()
-        return response
+            "password": "000000",
+            "app_metadata": {
+                "tenant_id": tenant_id
+            }
+        })
+        
+        if response.user:
+            supabase.table("users").insert({
+                "id": response.user.id,
+                "email": user_info.get("email"),
+                "username": user_info.get("username"),
+                "role": "user",
+                "current_tenant": tenant_id,
+                "tenants": [tenant_id]
+            }).execute()
+            return response
+        else:
+            raise HTTPException(status_code=404, detail="User creation failed")
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
