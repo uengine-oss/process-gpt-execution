@@ -246,6 +246,57 @@ def fetch_process_definition(def_id, tenant_id: Optional[str] = None):
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"No process definition found with ID {def_id}: {e}")
 
+def fetch_process_definition_versions(def_id, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        response = supabase.table('proc_def_arcv').select('*').eq('proc_def_id', def_id.lower()).eq('tenant_id', tenant_id).execute()
+        
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No process definition version found with ID {def_id}: {e}")
+
+def fetch_process_definition_version_by_arcv_id(def_id, arcv_id, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")   
+
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        response = supabase.table('proc_def_arcv').select('*').eq('proc_def_id', def_id.lower()).eq('arcv_id', arcv_id).eq('tenant_id', tenant_id).execute()
+        
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No process definition version found with ID {def_id} and version {arcv_id}: {e}")
+
+def fetch_process_definition_latest_version(def_id, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        response = supabase.table('proc_def_arcv').select('*').eq('proc_def_id', def_id.lower()).eq('tenant_id', tenant_id).order('version', desc=True).execute()
+        
+        if response.data:
+            return response.data[0]
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No process definition latest version found with ID {def_id}: {e}")
+
 def fetch_all_ui_definition():
     try:
         supabase = supabase_client_var.get()
@@ -311,7 +362,8 @@ class ProcessInstance(BaseModel):
     process_definition: ProcessDefinition = None  # Add a reference to ProcessDefinition
     status: str = None
     tenant_id: str
-    
+    proc_def_version: Optional[str] = None
+
     class Config:
         extra = "allow"
 
@@ -426,13 +478,19 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
     process_instance_data = process_instance.dict(exclude={'process_definition'})  # Convert Pydantic model to dict
     process_instance_data = convert_decimal(process_instance_data)
 
-    try:        
+    try:
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
         if not tenant_id:
             tenant_id = subdomain_var.get()
+            
+        process_definition_version = fetch_process_definition_latest_version(process_instance.get_def_id(), tenant_id)
+        if process_definition_version:
+            arcv_id = process_definition_version.get('arcv_id', None)
+        else:
+            arcv_id = None
 
         response = supabase.table('bpm_proc_inst').upsert({
             'proc_inst_id': process_instance.proc_inst_id,
@@ -443,6 +501,7 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
             'variables_data': process_instance.variables_data,
             'status': status,
             'proc_def_id': process_instance.get_def_id(),
+            'proc_def_version': arcv_id,
             'tenant_id': tenant_id
         }).execute()
         success = bool(response.data)
