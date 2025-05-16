@@ -289,7 +289,6 @@ def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = 
                         ]
                         process_result_json["nextActivities"].extend(next_activity_dicts)
                     else:
-                        process_instance.status = "COMPLETED"
                         process_instance.current_activity_ids = []
                         process_result_json["nextActivities"] = []
                         break
@@ -307,7 +306,6 @@ def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = 
                 
             all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
         if len(process_result.nextActivities) == 0:
-            process_instance.status = "COMPLETED"
             process_instance.current_activity_ids = []
         for activity in process_result.completedActivities:
             all_user_emails.add(activity.completedUserEmail)
