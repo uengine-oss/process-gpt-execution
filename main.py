@@ -15,11 +15,8 @@ from process_def_search import add_routes_to_app as add_process_def_search_route
 from process_chat import add_routes_to_app as add_process_chat_routes_to_app
 
 #캐시 적용
-from langchain.cache import InMemoryCache
-from langchain.globals import set_llm_cache
-
-set_llm_cache(InMemoryCache())
 from langchain.cache import SQLiteCache
+from langchain.globals import set_llm_cache
 
 set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 
