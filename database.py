@@ -13,6 +13,7 @@ import pytz
 from contextvars import ContextVar
 import csv
 from dotenv import load_dotenv
+import socket
 
 app = FastAPI()
 
@@ -214,7 +215,7 @@ def generate_create_statement_for_table(table_name):
         if connection:
             connection.close()
 
-def fetch_process_definition(def_id):
+def fetch_process_definition(def_id, tenant_id: Optional[str] = None):
     """
     Fetches the process definition from the 'proc_def' table based on the given definition ID.
     
@@ -230,7 +231,10 @@ def fetch_process_definition(def_id):
             raise Exception("Supabase client is not configured for this request")
     
         subdomain = subdomain_var.get()
-        response = supabase.table('proc_def').select('*').eq('id', def_id.lower()).eq('tenant_id', subdomain).execute()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        response = supabase.table('proc_def').select('*').eq('id', def_id.lower()).eq('tenant_id', tenant_id).execute()
         
         # Check if the response contains data
         if response.data:
@@ -241,6 +245,57 @@ def fetch_process_definition(def_id):
             return None
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"No process definition found with ID {def_id}: {e}")
+
+def fetch_process_definition_versions(def_id, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        response = supabase.table('proc_def_arcv').select('*').eq('proc_def_id', def_id.lower()).eq('tenant_id', tenant_id).execute()
+        
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No process definition version found with ID {def_id}: {e}")
+
+def fetch_process_definition_version_by_arcv_id(def_id, arcv_id, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")   
+
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        response = supabase.table('proc_def_arcv').select('*').eq('proc_def_id', def_id.lower()).eq('arcv_id', arcv_id).eq('tenant_id', tenant_id).execute()
+        
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No process definition version found with ID {def_id} and version {arcv_id}: {e}")
+
+def fetch_process_definition_latest_version(def_id, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        response = supabase.table('proc_def_arcv').select('*').eq('proc_def_id', def_id.lower()).eq('tenant_id', tenant_id).order('version', desc=True).execute()
+        
+        if response.data:
+            return response.data[0]
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No process definition latest version found with ID {def_id}: {e}")
 
 def fetch_all_ui_definition():
     try:
@@ -276,14 +331,17 @@ def fetch_ui_definition(def_id):
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"No UI definition found with ID {def_id}: {e}")
 
-def fetch_ui_definition_by_activity_id(proc_def_id, activity_id):
+def fetch_ui_definition_by_activity_id(proc_def_id, activity_id, tenant_id: Optional[str] = None):
     try:
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
         subdomain = subdomain_var.get()
-        response = supabase.table('form_def').select('*').eq('proc_def_id', proc_def_id).eq('activity_id', activity_id).eq('tenant_id', subdomain).execute()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        response = supabase.table('form_def').select('*').eq('proc_def_id', proc_def_id).eq('activity_id', activity_id).eq('tenant_id', tenant_id).execute()
         
         if response.data:
             # Assuming the first match is the desired one since ID should be unique
@@ -304,14 +362,16 @@ class ProcessInstance(BaseModel):
     process_definition: ProcessDefinition = None  # Add a reference to ProcessDefinition
     status: str = None
     tenant_id: str
-    
+    proc_def_version: Optional[str] = None
+
     class Config:
         extra = "allow"
 
     def __init__(self, **data):
         super().__init__(**data)
         def_id = self.get_def_id()
-        self.process_definition = load_process_definition(fetch_process_definition(def_id))  # Load ProcessDefinition
+        tenant_id = self.tenant_id
+        self.process_definition = load_process_definition(fetch_process_definition(def_id, tenant_id))  # Load ProcessDefinition
 
     def get_def_id(self):
         # inst_id 예시: "company_entrance.123e4567-e89b-12d3-a456-426614174000"
@@ -343,12 +403,16 @@ class WorkItem(BaseModel):
     reference_ids: Optional[List[str]] = []
     assignees: Optional[List[Dict[str, Any]]] = []
     duration: Optional[int] = None
+    output: Optional[Dict[str, Any]] = {}
+    retry: Optional[int] = 0
+    consumer: Optional[str] = None
+    log: Optional[str] = None
     
-    @validator('start_date', 'end_date', pre=True)
+    @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
         if isinstance(value, str):
             try:
-                return datetime.fromisoformat(value)
+                return datetime.fromisoformat(value).replace(tzinfo=None)
             except ValueError:
                 return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
         return value
@@ -372,7 +436,7 @@ def fetch_and_apply_system_data_sources(process_instance: ProcessInstance) -> No
 
     return process_instance
 
-def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
+def fetch_process_instance(full_id: str, tenant_id: Optional[str] = None) -> Optional[ProcessInstance]:
     try:
         if full_id == "new" or '.' not in full_id:
             return None
@@ -385,7 +449,10 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
             raise Exception("Supabase client is not configured for this request")
         
         subdomain = subdomain_var.get()
-        response = supabase.table('bpm_proc_inst').select("*").eq('proc_inst_id', full_id).eq('tenant_id', subdomain).execute()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        response = supabase.table('bpm_proc_inst').select("*").eq('proc_inst_id', full_id).eq('tenant_id', tenant_id).execute()
         
         if response.data:
             process_instance_data = response.data[0]
@@ -402,7 +469,7 @@ def fetch_process_instance(full_id: str) -> Optional[ProcessInstance]:
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
-def upsert_process_instance(process_instance: ProcessInstance) -> (bool, ProcessInstance):
+def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Optional[str] = None) -> (bool, ProcessInstance):
     if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids or 'end_event' in process_instance.current_activity_ids or process_instance.status == 'COMPLETED':
         process_instance.current_activity_ids = []
         status = 'COMPLETED'
@@ -411,12 +478,20 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
     process_instance_data = process_instance.dict(exclude={'process_definition'})  # Convert Pydantic model to dict
     process_instance_data = convert_decimal(process_instance_data)
 
-    try:        
+    try:
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain_var.get()
+            
+        process_definition_version = fetch_process_definition_latest_version(process_instance.get_def_id(), tenant_id)
+        if process_definition_version:
+            arcv_id = process_definition_version.get('arcv_id', None)
+        else:
+            arcv_id = None
+
         response = supabase.table('bpm_proc_inst').upsert({
             'proc_inst_id': process_instance.proc_inst_id,
             'proc_inst_name': process_instance.proc_inst_name,
@@ -426,7 +501,8 @@ def upsert_process_instance(process_instance: ProcessInstance) -> (bool, Process
             'variables_data': process_instance.variables_data,
             'status': status,
             'proc_def_id': process_instance.get_def_id(),
-            'tenant_id': subdomain
+            'proc_def_version': arcv_id,
+            'tenant_id': tenant_id
         }).execute()
         success = bool(response.data)
         return success, process_instance
@@ -463,14 +539,17 @@ def convert_decimal(data):
 
     return data
 
-def fetch_organization_chart():
+def fetch_organization_chart(tenant_id: Optional[str] = None):
     try:
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
         subdomain = subdomain_var.get()
-        response = supabase.table("configuration").select("*").eq('key', 'organization').eq('tenant_id', subdomain).execute()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        response = supabase.table("configuration").select("*").eq('key', 'organization').eq('tenant_id', tenant_id).execute()
         
         # Check if the response contains data
         if response.data:
@@ -534,14 +613,17 @@ def fetch_todolist_by_proc_inst_id(proc_inst_id: str) -> Optional[List[WorkItem]
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
-def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str) -> Optional[WorkItem]:
+def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str, tenant_id: Optional[str] = None) -> Optional[WorkItem]:
     try:
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
         subdomain = subdomain_var.get()
-        response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('activity_id', activity_id).eq('tenant_id', subdomain).execute()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('activity_id', activity_id).eq('tenant_id', tenant_id).execute()
         
         if response.data:
             return WorkItem(**response.data[0])
@@ -550,30 +632,84 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
-# todolist 업데이트
-def upsert_completed_workitem(prcess_instance_data, process_result_data, process_definition):
+def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
     try:
+        pod_id = socket.gethostname()
+        db_config = db_config_var.get()
+
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
+
+        query = """
+            WITH locked_rows AS (
+                SELECT id FROM todolist
+                WHERE status = 'SUBMITTED'
+                    AND consumer IS NULL
+                FOR UPDATE SKIP LOCKED
+                LIMIT %s
+            )
+            UPDATE todolist
+            SET consumer = %s
+            FROM locked_rows
+            WHERE todolist.id = locked_rows.id
+            RETURNING *;
+        """
+
+        cursor.execute(query, (limit, pod_id))
+        rows = cursor.fetchall()
+
+        connection.commit()
+        cursor.close()
+        connection.close()
+
+        return rows if rows else None
+
+    except Exception as e:
+        print(f"[ERROR] DB fetch failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
+
+# todolist 업데이트
+def upsert_completed_workitem(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None):
+    try:
+        if not tenant_id:
+            tenant_id = subdomain_var.get()
+
         if not process_result_data['completedActivities']:
             return
         
         for completed_activity in process_result_data['completedActivities']:
             workitem = fetch_workitem_by_proc_inst_and_activity(
-                prcess_instance_data['proc_inst_id'], 
-                completed_activity['completedActivityId']
+                process_instance_data['proc_inst_id'], 
+                completed_activity['completedActivityId'],
+                tenant_id
             )
             
             if workitem:
                 workitem.status = completed_activity['result']
                 workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul'))
                 workitem.user_id = completed_activity['completedUserEmail']
+                if workitem.assignees and len(workitem.assignees) > 0:
+                    for assignee in workitem.assignees:
+                        if assignee.get('endpoint') and assignee.get('endpoint') == workitem.user_id:
+                            assignee = {
+                                'roleName': assignee.get('name'),
+                                'userId': assignee.get('endpoint')
+                            }
+                            break
             else:
                 activity = process_definition.find_activity_by_id(completed_activity['completedActivityId'])
                 start_date = datetime.now(pytz.timezone('Asia/Seoul'))
                 due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
-                subdomain = subdomain_var.get()
+                assignees = []
+                if process_instance_data['role_bindings']:
+                    role_bindings = process_instance_data['role_bindings']
+                    for role_binding in role_bindings:
+                        if role_binding['roleName'] == activity.role:
+                            assignees.append(role_binding)
+                            
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
-                    proc_inst_id=prcess_instance_data['proc_inst_id'],
+                    proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=completed_activity['completedActivityId'],
                     activity_name=activity.name,
@@ -583,7 +719,9 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
                     start_date=start_date,
                     end_date=datetime.now(pytz.timezone('Asia/Seoul')) if completed_activity['result'] == 'DONE' else None,
                     due_date=due_date,
-                    tenant_id=subdomain
+                    tenant_id=tenant_id,
+                    assignees=assignees,
+                    duration=activity.duration
                 )
             
             workitem_dict = workitem.dict()
@@ -594,19 +732,22 @@ def upsert_completed_workitem(prcess_instance_data, process_result_data, process
             supabase = supabase_client_var.get()
             if supabase is None:
                 raise Exception("Supabase client is not configured for this request")
-            
             supabase.table('todolist').upsert(workitem_dict).execute()
     except Exception as e:
+        print(f"[ERROR] upsert_completed_workitem: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
-def upsert_next_workitems(process_instance_data, process_result_data, process_definition) -> List[WorkItem]:
+def upsert_next_workitems(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None) -> List[WorkItem]:
     workitems = []
+    if not tenant_id:
+        tenant_id = subdomain_var.get()
+
     for activity_data in process_result_data['nextActivities']:
         if activity_data['nextActivityId'] in ["END_PROCESS", "endEvent", "end_event"]:
             continue
         
-        workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity_data['nextActivityId'])
+        workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity_data['nextActivityId'], tenant_id)
         
         if workitem:
             workitem.status = activity_data['result']
@@ -621,7 +762,6 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     for prev_activity in prev_activities:
                         start_date = start_date + timedelta(days=prev_activity.duration)
                 due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
-                subdomain = subdomain_var.get()
                 workitem = WorkItem(
                     id=str(uuid.uuid4()),
                     proc_inst_id=process_instance_data['proc_inst_id'],
@@ -633,7 +773,7 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     start_date=start_date,
                     due_date=due_date,
                     tool=activity.tool,
-                    tenant_id=subdomain
+                    tenant_id=tenant_id
                 )
         
         try:
@@ -646,10 +786,10 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                 supabase = supabase_client_var.get()
                 if supabase is None:
                     raise Exception("Supabase client is not configured for this request")
-                
                 supabase.table('todolist').upsert(workitem_dict).execute()
                 workitems.append(workitem)
         except Exception as e:
+            print(f"[ERROR] upsert_next_workitems: {str(e)}")
             raise HTTPException(status_code=404, detail=str(e)) from e
 
     return workitems
@@ -676,8 +816,11 @@ def fetch_prev_task_ids(process_definition, current_activity_id: str, proc_inst_
     
     return prev_task_ids
 
-def upsert_todo_workitems(prcess_instance_data, process_result_data, process_definition):
+def upsert_todo_workitems(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None):
     try:
+        if not tenant_id:
+            tenant_id = subdomain_var.get()
+
         initial_activity = process_definition.find_initial_activity()
         next_activities = [activity for activity in process_definition.activities if activity.id != initial_activity.id]
         for activity in next_activities:
@@ -697,29 +840,37 @@ def upsert_todo_workitems(prcess_instance_data, process_result_data, process_def
                     max_duration_activity = max(activities, key=lambda x: x.duration if x.duration is not None else 0)
                     filtered_activities.append(max_duration_activity)
                 
-                reference_ids = fetch_prev_task_ids(process_definition, activity.id, prcess_instance_data['proc_inst_id'])
+                reference_ids = fetch_prev_task_ids(process_definition, activity.id, process_instance_data['proc_inst_id'])
                 
                 for prev_activity in filtered_activities:
                     start_date = start_date + timedelta(days=prev_activity.duration)
             
             due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
-            workitem = fetch_workitem_by_proc_inst_and_activity(prcess_instance_data['proc_inst_id'], activity.id)
+            workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity.id, tenant_id)
             if not workitem:
-                subdomain = subdomain_var.get()
+                user_id = ""
+                if process_instance_data['role_bindings']:
+                    role_bindings = process_instance_data['role_bindings']
+                    assignees = []
+                    for role_binding in role_bindings:
+                        if role_binding['roleName'] == activity.role:
+                            user_id = role_binding['userId'][0] if isinstance(role_binding['userId'], list) else role_binding['userId']
+                            assignees.append(role_binding)
+                
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     reference_ids=reference_ids if prev_activities else [],
-                    proc_inst_id=prcess_instance_data['proc_inst_id'],
+                    proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=activity.id,
                     activity_name=activity.name,
-                    user_id="",
+                    user_id=user_id,
                     status="TODO",
                     tool=activity.tool,
                     start_date=start_date,
                     due_date=due_date,
-                    tenant_id=subdomain,
-                    assignees=process_result_data['roleBindingChanges'],
+                    tenant_id=tenant_id,
+                    assignees=assignees,
                     duration=activity.duration
                 )
                 workitem_dict = workitem.dict()
@@ -732,6 +883,44 @@ def upsert_todo_workitems(prcess_instance_data, process_result_data, process_def
                     raise Exception("Supabase client is not configured for this request")
                 supabase.table('todolist').upsert(workitem_dict).execute()
     except Exception as e:
+        print(f"[ERROR] upsert_todo_workitems: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+def upsert_workitem(workitem_data: dict, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        if "start_date" in workitem_data and workitem_data["start_date"]:
+            if not isinstance(workitem_data["start_date"], str):
+                workitem_data["start_date"] = workitem_data["start_date"].isoformat()
+        if "end_date" in workitem_data and workitem_data["end_date"]:
+            if not isinstance(workitem_data["end_date"], str):
+                workitem_data["end_date"] = workitem_data["end_date"].isoformat()
+        if "due_date" in workitem_data and workitem_data["due_date"]:
+            if not isinstance(workitem_data["due_date"], str):
+                workitem_data["due_date"] = workitem_data["due_date"].isoformat()
+        
+        if not tenant_id:
+            tenant_id = subdomain_var.get()
+
+        workitem_data["tenant_id"] = tenant_id
+        return supabase.table('todolist').upsert(workitem_data).execute()
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+def delete_workitem(workitem_id: str, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        if not tenant_id:
+            tenant_id = subdomain_var.get()
+
+        supabase.table('todolist').delete().eq('id', workitem_id).eq('tenant_id', tenant_id).execute()
+    except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 import json
@@ -742,7 +931,7 @@ class ChatMessage(BaseModel):
     email: Optional[str] = None
     image: Optional[str] = None
     content: Optional[str] = None
-    timeStamp: Optional[datetime] = None
+    timeStamp: Optional[int] = None
 
 class ChatItem(BaseModel):
     id: str
@@ -767,7 +956,7 @@ def fetch_chat_history(chat_room_id: str) -> List[ChatItem]:
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
-def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool) -> None:
+def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool, tenant_id: Optional[str] = None) -> None:
     try:
         if is_system:
             json_data = json.loads(data)
@@ -777,7 +966,7 @@ def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool) -> None:
                 email="system@uengine.org",
                 image="",
                 content=json_data["description"],
-                timeStamp=datetime.now(pytz.timezone('Asia/Seoul'))
+                timeStamp=int(datetime.now(pytz.timezone('Asia/Seoul')).timestamp() * 1000)
             )
         else:
             user_info = fetch_user_info(data["email"])
@@ -787,16 +976,17 @@ def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool) -> None:
                 email=data["email"],
                 image="",
                 content=data["command"],
-                timeStamp=datetime.now(pytz.timezone('Asia/Seoul'))
+                timeStamp=int(datetime.now(pytz.timezone('Asia/Seoul')).timestamp() * 1000)
             )
 
-        message.timeStamp = message.timeStamp.isoformat() if message.timeStamp else None        
-        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain_var.get()
+
         chat_item = ChatItem(
             id=chat_room_id,
             uuid=str(uuid.uuid4()),
             messages=message,
-            tenant_id=subdomain
+            tenant_id=tenant_id
         )
         chat_item_dict = chat_item.dict()
 
@@ -842,8 +1032,7 @@ def fetch_user_info(email: str) -> Dict[str, str]:
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        subdomain = subdomain_var.get()
-        response = supabase.table("users").select("*").eq('email', email).filter('tenants', 'cs', '{' + subdomain + '}').execute()
+        response = supabase.table("users").select("*").eq('email', email).execute()
         
         if response.data:
             return response.data[0]
@@ -1019,31 +1208,55 @@ def update_user_admin(input):
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        response = supabase.auth.admin.update_user_by_id(user_id, user_info)
-        return response
+        if (user_info.get('app_metadata') and user_info.get('app_metadata').get('tenant_id')):
+            user_data = fetch_user_info_by_uid(user_id)
+            tenants = user_data.get('tenants')
+            if (tenants and user_info.get('app_metadata').get('tenant_id') in tenants):
+                response = supabase.auth.admin.update_user_by_id(user_id, user_info)
+                return response
+            else:
+                raise HTTPException(status_code=404, detail="가입하지 않은 테넌트입니다.")
+        else:
+            response = supabase.auth.admin.update_user_by_id(user_id, user_info)
+            return response
 
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 def create_user(input):
     try:
-        user_info = input.get('user_info')
         tenant_id = subdomain_var.get()
         supabase = supabase_client_var.get()
-        
+
+        username = input.get("username")
+        email = input.get("email")
+        role = input.get("role")
+
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
 
-        response = supabase.auth.admin.create_user(user_info)
-        supabase.table("users").insert({
-            "id": response.user.id,
-            "email": user_info.get("email"),
-            "username": user_info.get("username"),
-            "role": "user",
-            "current_tenant": tenant_id,
-            "tenants": [tenant_id]
-        }).execute()
-        return response
+        response = supabase.auth.admin.create_user({
+            "email": email,
+            "username": username,
+            "password": "000000",
+            "email_confirm": True,
+            "app_metadata": {
+                "tenant_id": tenant_id
+            }
+        })
+        
+        if response.user:
+            supabase.table("users").insert({
+                "id": response.user.id,
+                "email": email,
+                "username": username,
+                "role": role,
+                "current_tenant": tenant_id,
+                "tenants": [tenant_id]
+            }).execute()
+            return response
+        else:
+            raise HTTPException(status_code=404, detail="User creation failed")
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 

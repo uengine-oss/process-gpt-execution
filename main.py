@@ -15,13 +15,10 @@ from process_def_search import add_routes_to_app as add_process_def_search_route
 from process_chat import add_routes_to_app as add_process_chat_routes_to_app
 
 #캐시 적용
-#from langchain.cache import InMemoryCache
-# from langchain.globals import set_llm_cache
+from langchain.cache import SQLiteCache
+from langchain.globals import set_llm_cache
 
-# set_llm_cache(InMemoryCache())
-# from langchain.cache import SQLiteCache
-
-#set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 
 
 app = FastAPI(
@@ -70,6 +67,14 @@ add_audio_input_routes_to_app(app)
 add_min_routes_to_app(app)
 add_process_def_search_routes_to_app(app)
 add_process_chat_routes_to_app(app)
+
+# polling 추가
+from process_polling import start_polling
+import asyncio
+
+@app.on_event("startup")
+async def start_background_tasks():
+    asyncio.create_task(start_polling())
 
 if __name__ == "__main__":
     import uvicorn
