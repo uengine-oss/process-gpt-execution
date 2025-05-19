@@ -3,7 +3,7 @@ from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
-from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, upsert_chat_message, fetch_todolist_by_user_id, fetch_process_instance_list, subdomain_var, fetch_ui_definition, get_vector_store
+from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, upsert_chat_message, fetch_todolist_by_user_id, fetch_process_instance_list, subdomain_var, fetch_ui_definition, get_vector_store, fetch_all_ui_definition
 from process_engine import combine_input_with_process_definition
 import re
 import json
@@ -178,14 +178,51 @@ def combine_input_with_process_table_schema(input, path):
 
     elif path == "/process-data-query":
         query = input.get("query")
+        email = input.get("user_id")
         proc_def_list = get_process_definitions(input)
         
-        data_query_input = {
+        # 프로세스 정의 목록을 문자열로 변환
+        proc_def_str = json.dumps([doc.page_content for doc in proc_def_list], ensure_ascii=False)
+        
+        # 프로세스 인스턴스 목록 가져오기
+        proc_inst_list = []
+        if email:
+            instances = fetch_process_instance_list(email)
+            if instances:
+                proc_inst_list = [inst.dict(exclude={'process_definition'}) for inst in instances]
+        proc_inst_str = json.dumps(proc_inst_list, ensure_ascii=False, default=default)
+        
+        # 할일 목록 가져오기
+        todo_list = []
+        if email:
+            todos = fetch_todolist_by_user_id(email)
+            if todos:
+                todo_list = [todo.dict() for todo in todos]
+        todo_list_str = json.dumps(todo_list, ensure_ascii=False, default=default)
+        
+        # 폼 정의 목록 가져오기
+        form_def_list = fetch_all_ui_definition()
+        form_def_str = json.dumps(form_def_list, ensure_ascii=False, default=default)
+        
+        # 테이블 생성 체인 설정
+        table_chain = (
+            draw_table_prompt | 
+            model | 
+            StrOutputParser() | 
+            extract_html_table | 
+            clean_html_string
+        )
+        
+        # 테이블 생성 요청
+        input_data = {
             "query": query,
-            "proc_def_list": proc_def_list
+            "proc_def_list": proc_def_str,
+            "proc_inst_list": proc_inst_str,
+            "todo_list": todo_list_str,
+            "form_def_list": form_def_str
         }
         
-        return process_data_query_chain.invoke(data_query_input)
+        return table_chain.invoke(input_data)
 
 
 # 프로세스 인스턴스 데이터 조회
@@ -384,10 +421,32 @@ def execute_process(process_json):
 
 draw_table_prompt = PromptTemplate.from_template(
     """
-        Please create a html table with this data (<table> element only. DO NOT use escape characters like '\"' or '\n'):
-        {result}                                         
+        Please create an HTML table with this data (<table> element only. DO NOT use escape characters like '\"' or '\n'):
+        
+        User query: {query}
+        
+        Process definitions:
+        {proc_def_list}
+        
+        Process instances:
+        {proc_inst_list}
+        
+        Todo list:
+        {todo_list}
+        
+        Form definitions:
+        {form_def_list}
+        
+        Instructions:
+        1. If the query is asking for process definitions, create a table with columns: ID, Name, Description
+        2. If the query is asking for todo list, create a table with columns: ID, Activity Name, Process Instance, Status
+        3. If the query is asking for form definitions, create a table with columns: ID, Process Definition, Activity
+        4. If the query is asking for process instances, create a table with columns: ID, Name, Status, Current Activities
+        5. Make sure the table is responsive and well-formatted
+        6. Include all relevant data based on the query
+        7. Only return the HTML table code, no explanations
     """
-    )
+)
 
 describe_result_prompt = PromptTemplate.from_template(
     """
@@ -540,6 +599,7 @@ process_var_sql_chain = (
 
 process_data_query_chain = (
     form_definition_prompt | 
+    draw_table_prompt |
     model | 
     StrOutputParser() | 
     get_form_definition | 
