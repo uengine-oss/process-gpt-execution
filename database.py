@@ -1208,17 +1208,8 @@ def update_user_admin(input):
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        if (user_info.get('app_metadata') and user_info.get('app_metadata').get('tenant_id')):
-            user_data = fetch_user_info_by_uid(user_id)
-            tenants = user_data.get('tenants')
-            if (tenants and user_info.get('app_metadata').get('tenant_id') in tenants):
-                response = supabase.auth.admin.update_user_by_id(user_id, user_info)
-                return response
-            else:
-                raise HTTPException(status_code=404, detail="가입하지 않은 테넌트입니다.")
-        else:
-            response = supabase.auth.admin.update_user_by_id(user_id, user_info)
-            return response
+        response = supabase.auth.admin.update_user_by_id(user_id, user_info)
+        return response
 
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -1234,29 +1225,38 @@ def create_user(input):
 
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
-
-        response = supabase.auth.admin.create_user({
-            "email": email,
-            "username": username,
-            "password": "000000",
-            "email_confirm": True,
-            "app_metadata": {
-                "tenant_id": tenant_id
-            }
-        })
         
-        if response.user:
+        is_user_exist = fetch_user_info(email)
+        if is_user_exist:
             supabase.table("users").insert({
-                "id": response.user.id,
+                "id": is_user_exist["id"],
                 "email": email,
                 "username": username,
                 "role": role,
-                "current_tenant": tenant_id,
-                "tenants": [tenant_id]
+                "tenant_id": tenant_id
             }).execute()
-            return response
         else:
-            raise HTTPException(status_code=404, detail="User creation failed")
+            response = supabase.auth.admin.create_user({
+                "email": email,
+                "username": username,
+                "password": "000000",
+                "email_confirm": True,
+                "app_metadata": {
+                    "tenant_id": tenant_id
+                }
+            })
+            
+            if response.user:
+                supabase.table("users").insert({
+                    "id": response.user.id,
+                    "email": email,
+                    "username": username,
+                    "role": role,
+                    "tenant_id": tenant_id
+                }).execute()
+                return response
+            else:
+                raise HTTPException(status_code=404, detail="User creation failed")
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
