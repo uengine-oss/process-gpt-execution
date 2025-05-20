@@ -2,6 +2,8 @@ FROM python:3.12.3-slim
 
 WORKDIR /usr/src/app
 
+RUN mkdir -p /data && chmod 777 /data
+
 COPY . .
 
 RUN pip install --upgrade pip

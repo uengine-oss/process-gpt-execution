@@ -2,6 +2,10 @@ import os
 
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
+# 환경에 따른 캐시 디렉토리 설정
+CACHE_DIR = "/data" if os.path.exists("/.dockerenv") else "."
+os.makedirs(CACHE_DIR, exist_ok=True)
+
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,7 +22,7 @@ from process_chat import add_routes_to_app as add_process_chat_routes_to_app
 from langchain.cache import SQLiteCache
 from langchain.globals import set_llm_cache
 
-set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+set_llm_cache(SQLiteCache(database_path=os.path.join(CACHE_DIR, ".langchain.db")))
 
 
 app = FastAPI(
