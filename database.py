@@ -87,12 +87,22 @@ def setting_database():
         }
         db_config_var.set(db_config)
         
+        # Firebase 초기화 로직 수정
         if not firebase_admin._apps:
-            cred = credentials.Certificate('firebase-credentials.json')
-            _firebase_app = firebase_admin.initialize_app(cred)
+            try:
+                # Kubernetes 마운트된 시크릿에서 credentials 읽기
+                secret_path = '/etc/secrets/firebase-credentials.json'
+                if os.path.exists(secret_path):
+                    cred = credentials.Certificate(secret_path)
+                    _firebase_app = firebase_admin.initialize_app(cred)
+                    print("Firebase initialized successfully from Kubernetes secret")
+                else:
+                    print("Firebase credentials not found. Firebase features will be disabled.")
+            except Exception as e:
+                print(f"Firebase initialization skipped: {e}")
        
     except Exception as e:
-        print(f"Firebase 초기화 오류: {e}")
+        print(f"Database configuration error: {e}")
 
 
 setting_database()
