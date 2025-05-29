@@ -1489,6 +1489,9 @@ async def start_realtime_notifications_subscription():
             realtime_logger.info(f"테넌트 {tenant_id}에 대한 Notifications Realtime 구독을 시작합니다.")
             
             try:
+                # WebSocket 연결 설정
+                await async_supabase.realtime.connect()
+                
                 # INSERT 이벤트 처리를 위한 동기 콜백 함수
                 def handle_insert(payload):
                     realtime_logger.info(f"INSERT 이벤트 수신됨: {payload}")
