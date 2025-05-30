@@ -31,7 +31,7 @@ jwt_secret_var = ContextVar('jwt_secret', default='')
 algorithm_var = ContextVar('algorithm', default='HS256')
 
 # 전역 변수로 변경
-_firebase_app = None
+firebase_app = None
 
 # Realtime 로그 설정
 realtime_logger = logging.getLogger("realtime_subscriber")
@@ -1381,14 +1381,14 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
     """
     try:
         realtime_logger.info("Sending FCM message")
-        global _firebase_app
+        global firebase_app
         # 디바이스 토큰 조회
         device_token = fetch_device_token(user_id)
         if not device_token:
             return {"success": False, "message": "No device token found for the user"}
         
         # FCM 메시지 발송
-        if not firebase_admin._apps:
+        if not firebase_app:
             try:
                 realtime_logger.info("Firebase initialization started...")
                 # Kubernetes 마운트된 시크릿에서 credentials 읽기
@@ -1398,7 +1398,7 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
                     realtime_logger.info("Found credentials file, attempting to initialize Firebase...")
                     cred = credentials.Certificate(secret_path)
                     realtime_logger.info(f"cred: {cred}")
-                    _firebase_app = firebase_admin.initialize_app(cred)
+                    firebase_app = firebase_admin.initialize_app(cred)
                     realtime_logger.info("Firebase initialized successfully from Kubernetes secret")
                 else:
                     realtime_logger.warning(f"Firebase credentials not found at {secret_path}. Firebase features will be disabled.")
@@ -1406,8 +1406,6 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
                 realtime_logger.error(f"Firebase initialization failed with error: {str(e)}")
                 import traceback
                 realtime_logger.error(f"Stack trace: {traceback.format_exc()}")
-                
-        firebase_app = _firebase_app
         
         if not firebase_app:
             raise Exception("Firebase app is not initialized")
@@ -1487,41 +1485,20 @@ async def start_realtime_notifications_subscription():
             realtime_logger.info("Notifications Realtime 구독을 시작합니다.")
             
             try:
-                # WebSocket 연결 설정
-                await async_supabase.realtime.connect()
-                
-                # INSERT 이벤트 처리를 위한 동기 콜백 함수
-                def handle_insert(payload):
-                    realtime_logger.info(f"INSERT 이벤트 수신됨: {payload}")
+                # INSERT 이벤트 처리를 위한 콜백 함수
+                def handle_notifications_insert(payload):
+                    realtime_logger.info(f"Notifications INSERT 이벤트 수신됨: {payload}")
                     # 비동기 처리 함수를 새로운 태스크로 생성
                     asyncio.create_task(process_notification_change_async(payload))
                 
-                # 문서에 따른 올바른 방식으로 채널 생성 및 구독
-                channel = async_supabase.channel('notifications_channel')
-                
-                # INSERT 이벤트에 대한 구독 설정
-                channel = channel.on_postgres_changes(
-                    event="INSERT",
-                    schema="public", 
-                    table="notifications", 
-                    callback=handle_insert
+                # notifications 테이블의 INSERT 이벤트 구독
+                response = await (
+                    async_supabase.channel("notifications_channel")
+                    .on_postgres_changes("INSERT", schema="public", table="notifications", callback=handle_notifications_insert)
+                    .subscribe()
                 )
                 
-                # 구독 시작
-                response = await channel.subscribe()
-                
                 realtime_logger.info(f"Notifications Realtime 구독 성공: {response}")
-                realtime_logger.info(f"Notifications Realtime 구독 성공2: {response}")
-                
-                realtime_logger.info("Firebase initialization started...")
-                if os.path.exists('/etc/secrets/firebase-credentials.json'):
-                    realtime_logger.info("Found credentials file, attempting to initialize Firebase...")
-                    cred = credentials.Certificate('/etc/secrets/firebase-credentials.json')
-                    realtime_logger.info(f"cred: {cred}")
-                    _firebase_app = firebase_admin.initialize_app(cred)
-                    realtime_logger.info("Firebase initialized successfully from Kubernetes secret")
-                else:
-                    realtime_logger.warning(f"Firebase credentials not found at '/etc/secrets/firebase-credentials.json'. Firebase features will be disabled.")
                 
                 # 무한 대기 (연결 유지)
                 while True:
@@ -1556,15 +1533,20 @@ async def process_notification_change_async(payload):
         realtime_logger.info("알림 테이블 INSERT 이벤트 감지")
         realtime_logger.debug(f"페이로드: {payload}")
         
-        # Supabase Realtime 페이로드에서 새 레코드 추출
+        # Supabase Python 클라이언트의 페이로드에서 새 레코드 추출
         new_record = None
         
-        # 문서에 따른 Postgres Changes 페이로드 구조
-        if hasattr(payload, 'record'):
-            new_record = payload.record
-        elif isinstance(payload, dict):
-            if 'data' in payload:
-                new_record = payload['data']['record']
+        # 공식 문서에 따른 페이로드 구조 확인
+        if isinstance(payload, dict):
+            # payload에서 새 레코드 데이터 추출
+            payload = payload['data']
+            if 'record' in payload:
+                new_record = payload['record']
+            elif 'new' in payload:
+                new_record = payload['new']
+            else:
+                # 페이로드 자체가 레코드일 수도 있음
+                new_record = payload
         
         if not new_record:
             realtime_logger.warning(f"페이로드에서 새 레코드를 찾을 수 없습니다: {payload}")
