@@ -1347,13 +1347,12 @@ def check_tenant_owner(tenant_id: str, uid: str) -> bool:
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
-def fetch_device_token(user_id: str, tenant_id: Optional[str] = None) -> Optional[str]:
+def fetch_device_token(user_id: str) -> Optional[str]:
     """
     특정 사용자의 FCM 디바이스 토큰을 조회합니다.
     
     Args:
         user_id (str): 사용자 ID
-        tenant_id (str, optional): 테넌트 ID
         
     Returns:
         Optional[str]: 디바이스 토큰
@@ -1362,9 +1361,6 @@ def fetch_device_token(user_id: str, tenant_id: Optional[str] = None) -> Optiona
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
-        
-        if not tenant_id:
-            tenant_id = subdomain_var.get()
         
         response = supabase.table('users').select('device_token').eq('email', user_id).execute()
         
@@ -1376,7 +1372,7 @@ def fetch_device_token(user_id: str, tenant_id: Optional[str] = None) -> Optiona
         print(f"디바이스 토큰 조회 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-def send_fcm_message(user_id: str, notification_data: dict, tenant_id: Optional[str] = None) -> dict:
+def send_fcm_message(user_id: str, notification_data: dict) -> dict:
     """
     특정 사용자에게 FCM 푸시 알림을 전송합니다.
     
@@ -1387,14 +1383,13 @@ def send_fcm_message(user_id: str, notification_data: dict, tenant_id: Optional[
             - body: 알림 내용
             - data: 추가적인 데이터 (dict)
             - type: 알림 타입 ('chat', 'workitem_bpm' 등)
-        tenant_id (str, optional): 테넌트 ID
         
     Returns:
         dict: 알림 전송 결과
     """
     try:
         # 디바이스 토큰 조회
-        device_token = fetch_device_token(user_id, tenant_id)
+        device_token = fetch_device_token(user_id)
         if not device_token:
             return {"success": False, "message": "No device token found for the user"}
         
@@ -1414,14 +1409,14 @@ def send_fcm_message(user_id: str, notification_data: dict, tenant_id: Optional[
         sender_name = notification_data.get('from_user_id', '')  # 발신자 이름
         
         if sender_name:
-            chat_content = f"{sender_name} : {title}"
-            chat_room_name = body
+            chat_noti_title = sender_name
+            chat_noti_body = f"{body}\n{title}"
         
         message = messaging.Message(
             token=device_token,
             notification=messaging.Notification(
-                title=chat_room_name if chat_room_name else title,
-                body=chat_content if chat_content else body
+                title=chat_noti_title if chat_noti_title else title,
+                body=chat_noti_body if chat_noti_body else body
             ),
             data=data,
             android=messaging.AndroidConfig(
@@ -1468,22 +1463,21 @@ async def start_realtime_notifications_subscription():
             # 비동기 Supabase 클라이언트 가져오기
             async_supabase = async_supabase_client_var.get()
             if not async_supabase:
-                realtime_logger.info("비동기 Supabase 클라이언트 초기화 중...")
+                realtime_logger.info("비동기 Supabase 클라이언트 초기화 중")
                 async_supabase = await init_async_supabase()
                 if not async_supabase:
                     realtime_logger.warning("비동기 Supabase 클라이언트 초기화 실패. 10초 후 재시도합니다.")
                     await asyncio.sleep(10)
                     continue
             
-            tenant_id = subdomain_var.get()
-            realtime_logger.info(f"테넌트 {tenant_id}에 대한 Notifications Realtime 구독을 시작합니다.")
+            realtime_logger.info("Notifications Realtime 구독을 시작합니다.")
             
             try:
                 # INSERT 이벤트 처리를 위한 동기 콜백 함수
                 def handle_insert(payload):
                     realtime_logger.info(f"INSERT 이벤트 수신됨: {payload}")
                     # 비동기 처리 함수를 새로운 태스크로 생성
-                    asyncio.create_task(process_notification_change_async(payload, tenant_id))
+                    asyncio.create_task(process_notification_change_async(payload))
                 
                 # 문서에 따른 올바른 방식으로 채널 생성 및 구독
                 channel = async_supabase.channel('notifications_channel')
@@ -1522,22 +1516,17 @@ async def start_realtime_notifications_subscription():
             async_supabase_client_var.set(None)
             await asyncio.sleep(30)  # 30초 후 재시도
 
-async def process_notification_change_async(payload, tenant_id=None):
+async def process_notification_change_async(payload):
     """
     알림 테이블에 새 레코드가 추가될 때 호출되는 비동기 콜백 함수입니다.
     해당 사용자에게 FCM 푸시 알림을 전송합니다.
     
     Args:
         payload (dict): Supabase Realtime에서 전달된 이벤트 데이터
-        tenant_id (str, optional): 테넌트 ID
     """
     try:
         realtime_logger.info("알림 테이블 INSERT 이벤트 감지")
         realtime_logger.debug(f"페이로드: {payload}")
-        
-        # 테넌트 ID가 없으면 현재 컨텍스트에서 가져오기
-        if not tenant_id:
-            tenant_id = subdomain_var.get()
         
         # Supabase Realtime 페이로드에서 새 레코드 추출
         new_record = None
@@ -1583,7 +1572,7 @@ async def process_notification_change_async(payload, tenant_id=None):
         }
         
         # FCM 메시지 직접 전송
-        result = send_fcm_message(user_id, notification_data, tenant_id)
+        result = send_fcm_message(user_id, notification_data)
         realtime_logger.info(f"푸시 알림 처리 결과: {result}")
         
     except Exception as e:
