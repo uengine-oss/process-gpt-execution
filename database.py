@@ -33,10 +33,6 @@ algorithm_var = ContextVar('algorithm', default='HS256')
 # 전역 변수로 변경
 _firebase_app = None
 
-def get_firebase_app():
-    global _firebase_app
-    return _firebase_app
-
 # Realtime 로그 설정
 realtime_logger = logging.getLogger("realtime_subscriber")
 if not realtime_logger.handlers:
@@ -66,7 +62,6 @@ async def init_async_supabase():
 
 def setting_database():
     try:
-        global _firebase_app
         if os.getenv("ENV") != "production":
             load_dotenv()
 
@@ -86,20 +81,6 @@ def setting_database():
             "port": os.getenv("DB_PORT")
         }
         db_config_var.set(db_config)
-        
-        # Firebase 초기화 로직 수정
-        if not firebase_admin._apps:
-            try:
-                # Kubernetes 마운트된 시크릿에서 credentials 읽기
-                secret_path = '/etc/secrets/firebase-credentials.json'
-                if os.path.exists(secret_path):
-                    cred = credentials.Certificate(secret_path)
-                    _firebase_app = firebase_admin.initialize_app(cred)
-                    print("Firebase initialized successfully from Kubernetes secret")
-                else:
-                    print("Firebase credentials not found. Firebase features will be disabled.")
-            except Exception as e:
-                print(f"Firebase initialization skipped: {e}")
        
     except Exception as e:
         print(f"Database configuration error: {e}")
@@ -1368,6 +1349,7 @@ def fetch_device_token(user_id: str) -> Optional[str]:
         Optional[str]: 디바이스 토큰
     """
     try:
+        realtime_logger.info("Fetching device token")
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
@@ -1379,7 +1361,7 @@ def fetch_device_token(user_id: str) -> Optional[str]:
         return None
     
     except Exception as e:
-        print(f"디바이스 토큰 조회 오류: {e}")
+        realtime_logger.error(f"디바이스 토큰 조회 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 def send_fcm_message(user_id: str, notification_data: dict) -> dict:
@@ -1398,13 +1380,35 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
         dict: 알림 전송 결과
     """
     try:
+        realtime_logger.info("Sending FCM message")
+        global _firebase_app
         # 디바이스 토큰 조회
         device_token = fetch_device_token(user_id)
         if not device_token:
             return {"success": False, "message": "No device token found for the user"}
         
         # FCM 메시지 발송
-        firebase_app = get_firebase_app()
+        if not firebase_admin._apps:
+            try:
+                realtime_logger.info("Firebase initialization started...")
+                # Kubernetes 마운트된 시크릿에서 credentials 읽기
+                secret_path = '/etc/secrets/firebase-credentials.json'
+                realtime_logger.info(f"Checking for credentials at: {secret_path}")
+                if os.path.exists(secret_path):
+                    realtime_logger.info("Found credentials file, attempting to initialize Firebase...")
+                    cred = credentials.Certificate(secret_path)
+                    realtime_logger.info(f"cred: {cred}")
+                    _firebase_app = firebase_admin.initialize_app(cred)
+                    realtime_logger.info("Firebase initialized successfully from Kubernetes secret")
+                else:
+                    realtime_logger.warning(f"Firebase credentials not found at {secret_path}. Firebase features will be disabled.")
+            except Exception as e:
+                realtime_logger.error(f"Firebase initialization failed with error: {str(e)}")
+                import traceback
+                realtime_logger.error(f"Stack trace: {traceback.format_exc()}")
+                
+        firebase_app = _firebase_app
+        
         if not firebase_app:
             raise Exception("Firebase app is not initialized")
         
@@ -1584,6 +1588,7 @@ async def process_notification_change_async(payload):
             }
         }
         
+        realtime_logger.info(f"notification_data: {notification_data}")
         # FCM 메시지 직접 전송
         result = send_fcm_message(user_id, notification_data)
         realtime_logger.info(f"푸시 알림 처리 결과: {result}")
