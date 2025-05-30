@@ -1511,6 +1511,17 @@ async def start_realtime_notifications_subscription():
                 response = await channel.subscribe()
                 
                 realtime_logger.info(f"Notifications Realtime 구독 성공: {response}")
+                realtime_logger.info(f"Notifications Realtime 구독 성공2: {response}")
+                
+                realtime_logger.info("Firebase initialization started...")
+                if os.path.exists('/etc/secrets/firebase-credentials.json'):
+                    realtime_logger.info("Found credentials file, attempting to initialize Firebase...")
+                    cred = credentials.Certificate('/etc/secrets/firebase-credentials.json')
+                    realtime_logger.info(f"cred: {cred}")
+                    _firebase_app = firebase_admin.initialize_app(cred)
+                    realtime_logger.info("Firebase initialized successfully from Kubernetes secret")
+                else:
+                    realtime_logger.warning(f"Firebase credentials not found at '/etc/secrets/firebase-credentials.json'. Firebase features will be disabled.")
                 
                 # 무한 대기 (연결 유지)
                 while True:
