@@ -1147,11 +1147,11 @@ def fetch_user_info(email: str) -> Dict[str, str]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-    from langchain_openai import OpenAIEmbeddings
-    from langchain_community.vectorstores import SupabaseVectorStore
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import SupabaseVectorStore
 
 
-    def get_vector_store():
+def get_vector_store():
     supabase = supabase_client_var.get()
     if supabase is None:
         raise Exception("Supabase client is not configured")
