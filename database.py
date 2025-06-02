@@ -1583,36 +1583,31 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Supabase 실시간 구독을 위한 알림 처리 로직
-def handle_notification_insert(payload):
+# 마지막 알림 체크 시간을 저장하는 전역 변수 (UTC timezone 사용)
+last_notification_check = datetime.now(pytz.UTC)
+
+def handle_new_notification(notification_record):
     """
-    Supabase에서 새로운 알림이 삽입될 때 호출되는 핸들러
+    새로운 알림에 대해 FCM 푸시 알림을 전송하는 핸들러
     """
     try:
-        realtime_logger.info(f"새로운 알림 감지: {payload['data']['record']['title']}")
+        realtime_logger.info(f"새로운 알림 처리: {notification_record.get('title', 'No title')}")
         
-        # payload에서 새로 삽입된 레코드 정보 추출
-        new_record = payload['data']['record']
-        
-        if not new_record:
-            realtime_logger.warning("알림 레코드가 비어있습니다.")
-            return
-        
-        user_id = new_record.get('user_id')
+        user_id = notification_record.get('user_id')
         if not user_id:
             realtime_logger.warning("user_id가 없습니다.")
             return
         
         # FCM 알림 데이터 구성
         notification_data = {
-            'title': new_record.get('title', '새 알림'),
-            'body': new_record.get('description', '새로운 알림이 도착했습니다.'),
-            'type': new_record.get('type', 'general'),
-            'url': new_record.get('url', ''),
-            'from_user_id': new_record.get('from_user_id', ''),
+            'title': notification_record.get('title', '새 알림'),
+            'body': notification_record.get('description', '새로운 알림이 도착했습니다.'),
+            'type': notification_record.get('type', 'general'),
+            'url': notification_record.get('url', ''),
+            'from_user_id': notification_record.get('from_user_id', ''),
             'data': {
-                'notification_id': str(new_record.get('id', '')),
-                'url': new_record.get('url', '')
+                'notification_id': str(notification_record.get('id', '')),
+                'url': notification_record.get('url', '')
             }
         }
         
@@ -1622,64 +1617,54 @@ def handle_notification_insert(payload):
         
     except Exception as e:
         realtime_logger.error(f"알림 처리 중 오류 발생: {e}")
-        import traceback
-        realtime_logger.error(f"Stack trace: {traceback.format_exc()}")
 
 
-async def setup_notification_subscription():
+async def check_new_notifications():
     """
-    알림 테이블에 대한 Supabase 실시간 구독을 설정합니다.
+    새로운 알림을 체크하고 FCM 푸시를 전송합니다.
     """
+    global last_notification_check
+    
     try:
-        # 비동기 Supabase 클라이언트 설정
-        async_supabase = await setting_async_database()
-        if async_supabase is None:
-            realtime_logger.error("비동기 Supabase 클라이언트 설정에 실패했습니다.")
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            realtime_logger.error("Supabase 클라이언트가 설정되지 않았습니다.")
             return
         
-        realtime_logger.info("알림 테이블 실시간 구독을 설정합니다.")
+        # UTC 시간으로 포맷팅하여 비교
+        check_time_str = last_notification_check.strftime('%Y-%m-%d %H:%M:%S.%f+00')
+        realtime_logger.info(f"마지막 체크 시간: {check_time_str}")
         
-        # notifications 테이블의 INSERT 이벤트 구독
-        response = await (
-            async_supabase.channel("notifications_channel")
-            .on_postgres_changes("INSERT", schema="public", table="notifications", callback=handle_notification_insert)
-            .subscribe()
-        )
+        # 마지막 체크 시간 이후의 새로운 알림 조회
+        response = supabase.table('notifications').select('*').gt('time_stamp', check_time_str).execute()
         
-        realtime_logger.info(f"알림 테이블 실시간 구독이 설정되었습니다. 응답: {response}")
+        if response.data:
+            realtime_logger.info(f"{len(response.data)}개의 새로운 알림을 발견했습니다.")
+            
+            for notification in response.data:
+                handle_new_notification(notification)
         
-        return async_supabase
+        # 마지막 체크 시간 업데이트 (UTC)
+        last_notification_check = datetime.now(pytz.UTC)
         
     except Exception as e:
-        realtime_logger.error(f"실시간 구독 설정 중 오류 발생: {e}")
-        import traceback
-        realtime_logger.error(f"Stack trace: {traceback.format_exc()}")
-        return None
+        realtime_logger.error(f"알림 체크 중 오류: {e}")
 
 
-async def notification_realtime_task():
+async def notification_polling_task():
     """
-    알림 실시간 구독을 유지하는 비동기 태스크
+    20초마다 새로운 알림을 체크하는 폴링 태스크
     """
-    realtime_logger.info("알림 실시간 구독 태스크 시작")
+    realtime_logger.info("알림 폴링 태스크 시작 (20초 간격)")
     
     while True:
         try:
-            async_supabase = await setup_notification_subscription()
-            if async_supabase:
-                realtime_logger.info("실시간 구독이 성공적으로 설정되었습니다.")
-                # 연결이 끊어질 때까지 대기
-                while True:
-                    await asyncio.sleep(60)  # 60초마다 상태 체크
-                    # 연결 상태 확인 로직을 여기에 추가할 수 있음
-            else:
-                realtime_logger.error("실시간 구독 설정에 실패했습니다. 30초 후 재시도합니다.")
-                await asyncio.sleep(30)
-                
+            await check_new_notifications()
+            await asyncio.sleep(20)  # 20초 대기
+            
         except Exception as e:
-            realtime_logger.error(f"실시간 구독 태스크 오류: {e}")
-            # 오류 발생 시 30초 후 재시도
-            await asyncio.sleep(30)
+            realtime_logger.error(f"폴링 태스크 오류: {e}")
+            await asyncio.sleep(20)  # 오류 발생 시에도 20초 후 재시도
 
 
 
