@@ -1476,9 +1476,10 @@ def fetch_device_token(user_id: str) -> Optional[str]:
         
         # 현재 테넌트 ID 가져오기
         tenant_id = subdomain_var.get()
-        
+        realtime_logger.info(f"tenant_id: {tenant_id}")
+        realtime_logger.info(f"user_id: {user_id}")
         response = supabase.table('users').select('device_token').eq('email', user_id).eq('tenant_id', tenant_id).execute()
-        
+        realtime_logger.info(f"response: {response}")
         if response.data:
             return response.data[0].get('device_token')
         return None
@@ -1633,7 +1634,6 @@ async def check_new_notifications():
         
         # UTC 시간으로 포맷팅하여 비교
         check_time_str = last_notification_check.strftime('%Y-%m-%d %H:%M:%S.%f+00')
-        realtime_logger.info(f"마지막 체크 시간: {check_time_str}")
         
         # 마지막 체크 시간 이후의 새로운 알림 조회
         response = supabase.table('notifications').select('*').gt('time_stamp', check_time_str).execute()
