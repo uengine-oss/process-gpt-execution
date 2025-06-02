@@ -1464,7 +1464,7 @@ def fetch_device_token(user_id: str) -> Optional[str]:
     특정 사용자의 FCM 디바이스 토큰을 조회합니다.
     
     Args:
-        user_id (str): 사용자 ID
+        user_id (str): 사용자 ID (이메일)
         
     Returns:
         Optional[str]: 디바이스 토큰
@@ -1474,14 +1474,17 @@ def fetch_device_token(user_id: str) -> Optional[str]:
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        # 현재 테넌트 ID 가져오기
-        tenant_id = subdomain_var.get()
-        realtime_logger.info(f"tenant_id: {tenant_id}")
-        realtime_logger.info(f"user_id: {user_id}")
-        response = supabase.table('users').select('device_token').eq('email', user_id).eq('tenant_id', tenant_id).execute()
-        realtime_logger.info(f"response: {response}")
+        # 동일한 이메일을 가진 모든 사용자 조회
+        response = supabase.table('users').select('device_token').eq('email', user_id).execute()
+        
         if response.data:
-            return response.data[0].get('device_token')
+            realtime_logger.info(f"response: {response.data}")
+            # device_token이 있는 것 중 하나를 찾아서 리턴
+            for user in response.data:
+                device_token = user.get('device_token')
+                if device_token and device_token.strip():  # None이 아니고 빈 문자열이 아닌 경우
+                    return device_token
+        
         return None
     
     except Exception as e:
