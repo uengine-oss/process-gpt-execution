@@ -1,5 +1,6 @@
 import os
 from supabase import create_client, Client
+from supabase.client import AsyncClient, create_async_client
 from pydantic import BaseModel, validator
 from typing import Any, Dict, List, Optional
 import uuid
@@ -17,11 +18,13 @@ import socket
 import firebase_admin
 from firebase_admin import credentials, messaging
 import logging
+import asyncio
 
 app = FastAPI()
 
 db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
+async_supabase_client_var = ContextVar('async_supabase', default=None)
 subdomain_var = ContextVar('subdomain', default='localhost')
 
 jwt_secret_var = ContextVar('jwt_secret', default='')
@@ -43,7 +46,6 @@ def setting_database():
         if os.getenv("ENV") != "production":
             load_dotenv()
 
-
         jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
         jwt_secret_var.set(jwt_secret)
         
@@ -64,6 +66,24 @@ def setting_database():
     except Exception as e:
         print(f"Database configuration error: {e}")
 
+async def setting_async_database():
+    """비동기 Supabase 클라이언트 설정"""
+    try:
+        if os.getenv("ENV") != "production":
+            load_dotenv()
+        
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_KEY")
+        
+        async_supabase: AsyncClient = await create_async_client(supabase_url, supabase_key)
+        async_supabase_client_var.set(async_supabase)
+        
+        realtime_logger.info("비동기 Supabase 클라이언트가 설정되었습니다.")
+        return async_supabase
+        
+    except Exception as e:
+        realtime_logger.error(f"비동기 Supabase 클라이언트 설정 오류: {e}")
+        return None
 
 setting_database()
 
@@ -1454,7 +1474,10 @@ def fetch_device_token(user_id: str) -> Optional[str]:
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        response = supabase.table('users').select('device_token').eq('email', user_id).execute()
+        # 현재 테넌트 ID 가져오기
+        tenant_id = subdomain_var.get()
+        
+        response = supabase.table('users').select('device_token').eq('email', user_id).eq('tenant_id', tenant_id).execute()
         
         if response.data:
             return response.data[0].get('device_token')
@@ -1474,7 +1497,7 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
             - title: 알림 제목
             - body: 알림 내용
             - data: 추가적인 데이터 (dict)
-            - type: 알림 타입 ('chat', 'workitem_bpm' 등)
+            - type: 알림 타입 ('chat', 'workitem_bmp' 등)
         
     Returns:
         dict: 알림 전송 결과
@@ -1495,8 +1518,8 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
                     cred = credentials.Certificate(secret_path)
                     firebase_app = firebase_admin.initialize_app(cred)
                 else:
-                        cred = credentials.Certificate('firebase-credentials.json')
-                        firebase_app = firebase_admin.initialize_app(cred)
+                    cred = credentials.Certificate('firebase-credentials.json')
+                    firebase_app = firebase_admin.initialize_app(cred)
                 
             except Exception as e:
                 import traceback
@@ -1559,77 +1582,104 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
         print(f"FCM 메시지 전송 오류: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def send_webview_notification(input_data: dict) -> dict:
+
+# Supabase 실시간 구독을 위한 알림 처리 로직
+def handle_notification_insert(payload):
     """
-    웹뷰에서 전달받은 알림 데이터를 처리하여 FCM 푸시 알림을 전송합니다.
-    
-    Args:
-        input_data (dict): 웹뷰에서 전달받은 입력 데이터
-            - notification: 알림 정보가 담긴 딕셔너리
-            
-    Returns:
-        dict: FCM 전송 결과
+    Supabase에서 새로운 알림이 삽입될 때 호출되는 핸들러
     """
     try:
+        realtime_logger.info(f"새로운 알림 감지: {payload['data']['record']['title']}")
         
-        # notification 데이터 추출
-        notification = input_data.get('notification')
-        if not notification:
-            return {"success": False, "message": "No notification data provided"}
+        # payload에서 새로 삽입된 레코드 정보 추출
+        new_record = payload['data']['record']
         
-        # 알림 정보 추출
-        notification_id = notification.get('id')
-        user_id = notification.get('user_id')
-        is_checked = notification.get('is_checked', False)
+        if not new_record:
+            realtime_logger.warning("알림 레코드가 비어있습니다.")
+            return
         
+        user_id = new_record.get('user_id')
         if not user_id:
-            return {"success": False, "message": "No user_id in notification"}
-            
-        # 이미 확인된 알림은 푸시 알림 발송 안함
-        if is_checked:
-            return {"success": False, "message": "Notification already checked"}
+            realtime_logger.warning("user_id가 없습니다.")
+            return
         
         # FCM 알림 데이터 구성
         notification_data = {
-            'title': notification.get('title', '새 알림'),
-            'body': notification.get('description', '새로운 알림이 도착했습니다.'),
-            'type': notification.get('type', 'general'),
-            'url': notification.get('url', ''),
-            'from_user_id': notification.get('from_user_id', ''),
+            'title': new_record.get('title', '새 알림'),
+            'body': new_record.get('description', '새로운 알림이 도착했습니다.'),
+            'type': new_record.get('type', 'general'),
+            'url': new_record.get('url', ''),
+            'from_user_id': new_record.get('from_user_id', ''),
             'data': {
-                'notification_id': str(notification_id),
-                'url': notification.get('url', '')
+                'notification_id': str(new_record.get('id', '')),
+                'url': new_record.get('url', '')
             }
         }
         
         # FCM 메시지 전송
         result = send_fcm_message(user_id, notification_data)
-        
-        return result
+        realtime_logger.info(f"FCM 전송 결과: {result}")
         
     except Exception as e:
-        # 스택 트레이스 출력
+        realtime_logger.error(f"알림 처리 중 오류 발생: {e}")
         import traceback
-        return {"success": False, "message": str(e)}
+        realtime_logger.error(f"Stack trace: {traceback.format_exc()}")
 
 
-# API 엔드포인트 함수들
-async def send_webview_notification_api(request: Request):
-    """웹뷰에서 전달받은 알림 데이터를 처리하여 FCM 푸시 알림을 전송하는 API 엔드포인트입니다."""
+async def setup_notification_subscription():
+    """
+    알림 테이블에 대한 Supabase 실시간 구독을 설정합니다.
+    """
     try:
-        json_data = await request.json()
-        input_data = json_data.get('input')
-        if not input_data:
-            raise HTTPException(status_code=400, detail="No input data provided")
+        # 비동기 Supabase 클라이언트 설정
+        async_supabase = await setting_async_database()
+        if async_supabase is None:
+            realtime_logger.error("비동기 Supabase 클라이언트 설정에 실패했습니다.")
+            return
         
-        await send_webview_notification(input_data)
+        realtime_logger.info("알림 테이블 실시간 구독을 설정합니다.")
+        
+        # notifications 테이블의 INSERT 이벤트 구독
+        response = await (
+            async_supabase.channel("notifications_channel")
+            .on_postgres_changes("INSERT", schema="public", table="notifications", callback=handle_notification_insert)
+            .subscribe()
+        )
+        
+        realtime_logger.info(f"알림 테이블 실시간 구독이 설정되었습니다. 응답: {response}")
+        
+        return async_supabase
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        realtime_logger.error(f"실시간 구독 설정 중 오류 발생: {e}")
+        import traceback
+        realtime_logger.error(f"Stack trace: {traceback.format_exc()}")
+        return None
 
 
-def add_routes_to_app(app):
-    """FCM 알림 관련 API 라우트를 앱에 추가합니다."""
-    app.add_api_route("/send-webview-notification", send_webview_notification_api, methods=["POST"])
+async def notification_realtime_task():
+    """
+    알림 실시간 구독을 유지하는 비동기 태스크
+    """
+    realtime_logger.info("알림 실시간 구독 태스크 시작")
+    
+    while True:
+        try:
+            async_supabase = await setup_notification_subscription()
+            if async_supabase:
+                realtime_logger.info("실시간 구독이 성공적으로 설정되었습니다.")
+                # 연결이 끊어질 때까지 대기
+                while True:
+                    await asyncio.sleep(60)  # 60초마다 상태 체크
+                    # 연결 상태 확인 로직을 여기에 추가할 수 있음
+            else:
+                realtime_logger.error("실시간 구독 설정에 실패했습니다. 30초 후 재시도합니다.")
+                await asyncio.sleep(30)
+                
+        except Exception as e:
+            realtime_logger.error(f"실시간 구독 태스크 오류: {e}")
+            # 오류 발생 시 30초 후 재시도
+            await asyncio.sleep(30)
 
 
 

@@ -17,7 +17,7 @@ from audio_input import add_routes_to_app as add_audio_input_routes_to_app
 from min import add_routes_to_app as add_min_routes_to_app
 from process_def_search import add_routes_to_app as add_process_def_search_routes_to_app
 from process_chat import add_routes_to_app as add_process_chat_routes_to_app
-from database import update_tenant_id, add_routes_to_app as add_fcm_routes_to_app
+from database import update_tenant_id, notification_realtime_task
 
 #캐시 적용
 from langchain.cache import SQLiteCache
@@ -72,7 +72,6 @@ add_audio_input_routes_to_app(app)
 add_min_routes_to_app(app)
 add_process_def_search_routes_to_app(app)
 add_process_chat_routes_to_app(app)
-add_fcm_routes_to_app(app)
 
 # polling 시작
 from process_polling import start_polling
@@ -80,8 +79,10 @@ import asyncio
 
 @app.on_event("startup")
 async def start_background_tasks():
-    # 기존 polling 태스크만 유지
+    # 기존 polling 태스크 시작
     asyncio.create_task(start_polling())
+    # 알림 실시간 구독 태스크 시작
+    asyncio.create_task(notification_realtime_task())
 
 if __name__ == "__main__":
     import uvicorn
