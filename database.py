@@ -1475,6 +1475,7 @@ def fetch_device_token(user_id: str) -> Optional[str]:
             raise Exception("Supabase client is not configured for this request")
         
         # 동일한 이메일을 가진 모든 사용자 조회
+        realtime_logger.info(f"유저 검색 시작: {user_id}")
         response = supabase.table('users').select('device_token').eq('email', user_id).execute()
         
         if response.data:
