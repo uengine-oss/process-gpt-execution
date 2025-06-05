@@ -1474,17 +1474,14 @@ def fetch_device_token(user_id: str) -> Optional[str]:
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        # 동일한 이메일을 가진 모든 사용자 조회
+        # user_devices 테이블에서 해당 이메일의 디바이스 토큰 조회
         realtime_logger.info(f"유저 검색 시작: {user_id}")
-        response = supabase.table('users').select('device_token').eq('email', user_id).execute()
+        response = supabase.table('user_devices').select('device_token').eq('user_email', user_id).execute()
         
         if response.data:
-            realtime_logger.info(f"response: {response.data}")
-            # device_token이 있는 것 중 하나를 찾아서 리턴
-            for user in response.data:
-                device_token = user.get('device_token')
-                if device_token and device_token.strip():  # None이 아니고 빈 문자열이 아닌 경우
-                    return device_token
+            device_token = response.data[0].get('device_token')
+            if device_token and device_token.strip():  # None이 아니고 빈 문자열이 아닌 경우
+                return device_token
         
         return None
     
@@ -1657,18 +1654,16 @@ async def check_new_notifications():
 
 async def notification_polling_task():
     """
-    20초마다 새로운 알림을 체크하는 폴링 태스크
+    15초마다 새로운 알림을 체크하는 폴링 태스크
     """
-    realtime_logger.info("알림 폴링 태스크 시작 (20초 간격)")
-    
     while True:
         try:
             await check_new_notifications()
-            await asyncio.sleep(20)  # 20초 대기
+            await asyncio.sleep(15)  # 15초 대기
             
         except Exception as e:
             realtime_logger.error(f"폴링 태스크 오류: {e}")
-            await asyncio.sleep(20)  # 오류 발생 시에도 20초 후 재시도
+            await asyncio.sleep(15)  # 오류 발생 시에도 15초 후 재시도
 
 
 
