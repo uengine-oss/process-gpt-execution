@@ -1390,11 +1390,9 @@ def create_user(input):
         try:
             is_user_exist = fetch_user_info(email)
         except HTTPException as e:
-            if e.status_code:
-                is_user_exist = None
-            else:
-                raise e
+            is_user_exist = None
         
+        print(f"is_user_exist: {is_user_exist}")
         if is_user_exist:
             supabase.table("users").insert({
                 "id": is_user_exist["id"],
@@ -1404,6 +1402,7 @@ def create_user(input):
                 "tenant_id": tenant_id
             }).execute()
         else:
+            print(f"create auth")
             response = supabase.auth.admin.create_user({
                 "email": email,
                 "username": username,
@@ -1414,6 +1413,7 @@ def create_user(input):
                 }
             })
             
+            print(f"create user")
             if response.user:
                 supabase.table("users").insert({
                     "id": response.user.id,
