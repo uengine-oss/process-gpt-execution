@@ -4,7 +4,7 @@ from langchain_openai import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, upsert_chat_message, fetch_todolist_by_user_id, fetch_process_instance_list, subdomain_var, fetch_ui_definition, get_vector_store, fetch_all_ui_definition
-from process_engine import combine_input_with_process_definition
+from process_engine import submit_workitem
 import re
 import json
 from decimal import Decimal
@@ -407,7 +407,7 @@ def execute_process(process_json):
             "chat_room_id": chat_room_id
         }
         
-        response = combine_input_with_process_definition(input)        
+        response = submit_workitem(input)        
         if response:
             json_data = json.loads(response)
             if json_data:
