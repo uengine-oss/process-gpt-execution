@@ -1383,15 +1383,19 @@ def create_user(input):
         role = input.get("role")
         tenant_id = input.get('tenant_id') if input.get('tenant_id') else subdomain_var.get()
 
-        print(f"input: {input}")
-        print(f"tenant_id: {tenant_id}")
-
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        is_user_exist = fetch_user_info(email)
+        # 사용자 존재 여부를 안전하게 체크
+        try:
+            is_user_exist = fetch_user_info(email)
+        except HTTPException as e:
+            if e.status_code:
+                is_user_exist = None
+            else:
+                raise e
+        
         if is_user_exist:
-            print(f"tenant_id: {tenant_id}")
             supabase.table("users").insert({
                 "id": is_user_exist["id"],
                 "email": email,
@@ -1400,7 +1404,6 @@ def create_user(input):
                 "tenant_id": tenant_id
             }).execute()
         else:
-            print(f"tenant_id: {tenant_id}")
             response = supabase.auth.admin.create_user({
                 "email": email,
                 "username": username,
@@ -1412,7 +1415,6 @@ def create_user(input):
             })
             
             if response.user:
-                print(f"tenant_id: {tenant_id}")
                 supabase.table("users").insert({
                     "id": response.user.id,
                     "email": email,
