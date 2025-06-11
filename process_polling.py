@@ -42,92 +42,92 @@ parser = CustomJsonOutputParser()
 
 
 prompt = PromptTemplate.from_template(
-    """
-    Now, you're going to create an interactive system similar to a BPM system that helps our company's employees understand various processes and take the next steps when they start a process or are curious about the next steps.
+"""
+Now, you're going to create an interactive system similar to a BPM system that helps our company's employees understand various processes and take the next steps when they start a process or are curious about the next steps.
 
-    - Process Definition: {processDefinitionJson}
+- Process Definition: {processDefinitionJson}
 
-    - Process Instance Id: {instance_id}
-    - Process Instance Data: {instance_variables_data}
-        
-    - Organization Chart: {organizationChart}
+- Process Instance Id: {instance_id}
+- Process Instance Data: {instance_variables_data}
     
-    - User Information: {user_info}
-    
-    - Role Bindings: {role_bindings}
+- Organization Chart: {organizationChart}
 
-    - Currently Running Activities: {current_activity_ids}
+- User Information: {user_info}
 
-    - Users Currently Running Activities: {current_user_ids}
-    
-    - Currently Running Activity's Form Fields: {form_fields}
-    
-    - Received Message From Current Step:
-    
-      activityId: "{activity_id}",  // the activityId is not included in the Currently Running Activities or is the next activityId than Current Running Activities, it must never be added to completedActivities to return the activityId as complete and must be reported in cannotProceedErrors.
-      user: "{user_email}",
-      submitted form values: {form_values},
-      submitted answer: "{answer}"    // If no form values have been submitted, assign the values in the form field using the submitted answers. Based on the current running activity form fields. If the readonly="true" fields are not entered, never return an error and ignore it. But if fields with readonly="false" are not entered, return the error "DATA_FIELD_NOT_EXIST"
-    
-    - Today is:  {today}
-    
-    - Process Instance Name Pattern: "{instance_name_pattern}"  // If there is no process instance name pattern, the key_value format of parameterValue, along with the process definition name, is the default for the instance name pattern. e.g. 휴가신청_이름_홍길동_사유_개인일정_시작일_20240701
-    
-    Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
-    The data changes and role binding changes should be derived from the user submitted data or attached image OCR. 
-    At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
-    Information about completed activities must be returned.
-    If the person responsible for the next activity is an external customer, the nextUserEmail included in nextActivities must be returned customer email. Customer emails must be found in submitted form values or process instance data. Never write customer emails at will or return non-external ones. Instances will be broken.
-    If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
-    startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
-    If the user-submitted data is insufficient, refer to the process data to extract the value.
-    When an image is input, the process activity is completed based on the analyzed contents by analyzing the image.
-    
-    result should be in this JSON format:
-    {{
-        "instanceId": "{instance_id}",
-        "instanceName": "process instance name",
-        "processDefinitionId": "{process_definition_id}",
-        "fieldMappings":
-        [{{
-            "key": "process data key", // Replace with _ if there is a space, Process Definition 에서 없는 데이터는 추가하지 않음. 프로세스 정의 데이터에 이메일이나 이름 같은 변수가 존재하지만 값이 누락된 경우 역할 바인딩에서 적절한 값을 알아서 지정하여 필드 매핑해줄 것.
-            "name": "process data name",
-            "value": <value for changed data>  // Refer to the data type of this process variable. For example, if the type of the process variable is Date, calculate and assign today's date. If the type of variable is a form, assign the JSON format.
-        }}],
+- Role Bindings: {role_bindings}
 
-        "roleBindings": {role_bindings},
-        "roleBindingChanges":
-        [{{
-            "roleName": "name of role",
-            "userId": "email address for the role"
-        }}],
-        
-        "completedActivities":
-        [{{
-            "completedActivityId": "the id of completed activity id", // Not Return if completedActivityId is "startEvent".
-            "completedUserEmail": "the email address of completed activity's role",
-            "result": "DONE" // The result of the completed activity
-        }}],
-        
-        "nextActivities":
-        [{{
-            "nextActivityId": "the id of next activity id", // Not Return "END_PROCESS" if nextActivityId is "endEvent".
-            "nextUserEmail": "the email address of next activity's role",
-            "result": "IN_PROGRESS | PENDING | DONE", // The result of the next activity
-            "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)" // Returns a description of the process end if nextActivityId is "endEvent".
-        }}],
+- Currently Running Activities: {current_activity_ids}
 
-        "cannotProceedErrors":   // return errors if cannot proceed to next activity 
-        [{{
-            "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST"
-            "reason": "explanation for the error in Korean"
-        }}],
-        
-        "description": "description of the completed activities and the next activities and what the user who will perform the task should do in Korean"
+- Users Currently Running Activities: {current_user_ids}
 
-    }}
-    """
-    )
+- Currently Running Activity's Form Fields: {form_fields}
+
+- Received Message From Current Step:
+    activity id: "{activity_id}",
+    user: "{user_email}",
+    submitted form values: {form_values},
+    submitted answer: "{answer}"    // If no form values have been submitted, assign the values in the form field using the submitted answers. Based on the current running activity form fields. If the readonly="true" fields are not entered, never return an error and ignore it. But if fields with readonly="false" are not entered, return the error "DATA_FIELD_NOT_EXIST"
+
+- Today is:  {today}
+
+- Process Instance Name Pattern: "{instance_name_pattern}"  // If there is no process instance name pattern, the key_value format of parameterValue, along with the process definition name, is the default for the instance name pattern. e.g. 휴가신청_이름_홍길동_사유_개인일정_시작일_20240701
+
+Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
+The data changes and role binding changes should be derived from the user submitted data or attached image OCR.
+By referencing the sequences of the process definition, the next activity step needs to be identified. The target ID of the sequence connected to the current completed activity ID is the ID of the next activity.
+At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
+Information about completed activities must be returned.
+If the person responsible for the next activity is an external customer, the nextUserEmail included in nextActivities must be returned customer email. Customer emails must be found in submitted form values or process instance data. Never write customer emails at will or return non-external ones. Instances will be broken.
+If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
+startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
+If the user-submitted data is insufficient, refer to the process data to extract the value.
+When an image is input, the process activity is completed based on the analyzed contents by analyzing the image.
+
+result should be in this JSON format:
+{{
+    "instanceId": "{instance_id}",
+    "instanceName": "process instance name",
+    "processDefinitionId": "{process_definition_id}",
+    "fieldMappings":
+    [{{
+        "key": "process data key", // Replace with _ if there is a space, Process Definition 에서 없는 데이터는 추가하지 않음. 프로세스 정의 데이터에 이메일이나 이름 같은 변수가 존재하지만 값이 누락된 경우 역할 바인딩에서 적절한 값을 알아서 지정하여 필드 매핑해줄 것.
+        "name": "process data name",
+        "value": <value for changed data>  // Refer to the data type of this process variable. For example, if the type of the process variable is Date, calculate and assign today's date. If the type of variable is a form, assign the JSON format.
+    }}],
+
+    "roleBindings": {role_bindings},
+    "roleBindingChanges":
+    [{{
+        "roleName": "name of role",
+        "userId": "email address for the role"
+    }}],
+    
+    "completedActivities":
+    [{{
+        "completedActivityId": "the id of completed activity id",
+        "completedUserEmail": "the email address of completed activity's role",
+        "result": "DONE"
+    }}],
+    
+    "nextActivities":
+    [{{
+        "nextActivityId": "the id of next activity id",
+        "nextUserEmail": "the email address of next activity's role",
+        "result": "IN_PROGRESS | PENDING | DONE",
+        "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)"
+    }}],
+
+    "cannotProceedErrors":   // return errors if cannot proceed to next activity 
+    [{{
+        "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST"
+        "reason": "explanation for the error in Korean"
+    }}],
+    
+    "description": "description of the completed activities and the next activities and what the user who will perform the task should do in Korean"
+
+}}
+"""
+)
 
 
 # Pydantic model for process execution
