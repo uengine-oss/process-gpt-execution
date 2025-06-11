@@ -1362,7 +1362,7 @@ def update_user_admin(input):
 
 
     except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        raise HTTPException(status_code=e.status, detail=str(e)) from e
 
 
 def create_user(input):

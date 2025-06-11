@@ -23,6 +23,38 @@ http://localhost:54323
 # API Test
 
 ```
+http POST localhost:8000/complete \
+  Content-Type:application/json \
+  input:='{
+    "process_definition_id": "contest_submission_evaluation",
+    "process_instance_id": "new",
+    "email": "help@uengine.org",
+    "role_mappings": [
+      {
+        "name": "참가자",
+        "endpoint": "help@uengine.org",
+        "resolutionRule": "공모전 참가자 이메일로 식별"
+      },
+      {
+        "name": "평가담당자",
+        "endpoint": "help@uengine.org",
+        "resolutionRule": "프로세스 내 지정"
+      }
+    ],
+    "answer": "새로운 아이디어를 공모전에 제출하겠습니다. 아이디어명: AI 기반 업무 자동화 솔루션, 제출자: 홍길동, 설명: 인공지능을 활용하여 반복적인 업무를 자동화하는 혁신적인 솔루션입니다.",
+    "chat_room_id": "contest_submission_evaluation.uuid-1234-5678",
+    "form_values": {
+      "customer_email": "help@uengine.org",
+      "idea_name": "AI 기반 업무 자동화 솔루션",
+      "submitter_name": "홍길동",
+      "idea_description": "인공지능을 활용하여 반복적인 업무를 자동화하고 효율성을 극대화하는 혁신적인 솔루션입니다. 기존 수작업으로 처리되던 업무들을 AI가 학습하고 자동으로 처리할 수 있도록 지원합니다."
+    }
+  }'
+```
+
+## Old API
+
+```
 INST_ID=$(http :8000/complete/invoke input[process_instance_id]="new" input[process_definition_id]="company_entrance" | python3 -c "import sys, json; print(json.loads(json.loads(sys.stdin.read())['output'])['instanceId'])")
 echo $INST_ID
 http :8000/complete/invoke input[answer]="지원분야는 SW engineer" input[process_instance_id]="$INST_ID" input[activity_id]="congrate" # 400  error
