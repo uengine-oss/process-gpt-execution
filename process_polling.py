@@ -245,6 +245,17 @@ def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = 
                     process_instance.role_bindings = formatted_role_bindings
         else:
             process_instance = fetch_process_instance(process_result.instanceId, tenant_id)
+            if process_instance.status == "NEW":
+                process_instance = ProcessInstance(
+                    proc_inst_id=process_result.instanceId,
+                    proc_inst_name=f"{process_result.instanceName}",
+                    role_bindings=[rb.model_dump() for rb in (process_result.roleBindingChanges or [])],
+                    current_activity_ids=[],
+                    current_user_ids=[],
+                    variables_data=[],
+                    status="RUNNING",
+                    tenant_id=tenant_id
+                )
            
         process_definition = process_instance.process_definition
         
@@ -446,7 +457,7 @@ async def handle_workitem(workitem):
     chain_input = {
         "answer": '',
         "instance_id": process_instance_id,
-        "instance_variables_data": process_instance.variables_data if process_instance else '',
+        "instance_variables_data": process_instance.variables_data if process_instance and process_instance.status == "RUNNING" else '',
         "role_bindings": workitem['assignees'],
         "current_activity_ids": activity_id,
         "current_user_ids": workitem['user_id'],

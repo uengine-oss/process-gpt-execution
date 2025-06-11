@@ -415,10 +415,10 @@ def fetch_ui_definition_by_activity_id(proc_def_id, activity_id, tenant_id: Opti
 
 class ProcessInstance(BaseModel):
     proc_inst_id: str
-    proc_inst_name: str
+    proc_inst_name: Optional[str] = None
     role_bindings: Optional[List[Dict[str, Any]]] = []
-    current_activity_ids: List[str] = []
-    current_user_ids: List[str] = []
+    current_activity_ids: Optional[List[str]] = []
+    current_user_ids: Optional[List[str]] = []
     variables_data: Optional[List[Dict[str, Any]]] = []
     process_definition: ProcessDefinition = None  # Add a reference to ProcessDefinition
     status: str = None
@@ -510,10 +510,8 @@ def fetch_process_instance(full_id: str, tenant_id: Optional[str] = None) -> Opt
         if full_id == "new" or '.' not in full_id:
             return None
 
-
         if not full_id:
             raise HTTPException(status_code=404, detail="Instance Id should be provided")
-
 
         supabase = supabase_client_var.get()
         if supabase is None:
@@ -523,12 +521,10 @@ def fetch_process_instance(full_id: str, tenant_id: Optional[str] = None) -> Opt
         if not tenant_id:
             tenant_id = subdomain
 
-
         response = supabase.table('bpm_proc_inst').select("*").eq('proc_inst_id', full_id).eq('tenant_id', tenant_id).execute()
-        
+
         if response.data:
             process_instance_data = response.data[0]
-
 
             if isinstance(process_instance_data.get('variables_data'), dict):
                 process_instance_data['variables_data'] = [process_instance_data['variables_data']]
@@ -543,6 +539,21 @@ def fetch_process_instance(full_id: str, tenant_id: Optional[str] = None) -> Opt
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
+def insert_process_instance(process_instance_data: dict, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+
+        if not tenant_id:
+            tenant_id = subdomain_var.get()
+        process_instance_data['tenant_id'] = tenant_id
+
+        return supabase.table('bpm_proc_inst').upsert(process_instance_data).execute()
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
 def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Optional[str] = None) -> (bool, ProcessInstance):
     if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids or 'end_event' in process_instance.current_activity_ids or process_instance.status == 'COMPLETED':
         process_instance.current_activity_ids = []
@@ -551,7 +562,6 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
         status = 'RUNNING'
     process_instance_data = process_instance.dict(exclude={'process_definition'})  # Convert Pydantic model to dict
     process_instance_data = convert_decimal(process_instance_data)
-
 
     try:
         supabase = supabase_client_var.get()
@@ -566,7 +576,6 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
             arcv_id = process_definition_version.get('arcv_id', None)
         else:
             arcv_id = None
-
 
         response = supabase.table('bpm_proc_inst').upsert({
             'proc_inst_id': process_instance.proc_inst_id,
@@ -954,9 +963,9 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
             workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity.id, tenant_id)
             if not workitem:
                 user_id = ""
+                assignees = []
                 if process_instance_data['role_bindings']:
                     role_bindings = process_instance_data['role_bindings']
-                    assignees = []
                     for role_binding in role_bindings:
                         if role_binding['roleName'] == activity.role:
                             user_id = role_binding['userId'][0] if isinstance(role_binding['userId'], list) else role_binding['userId']
@@ -975,7 +984,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     start_date=start_date,
                     due_date=due_date,
                     tenant_id=tenant_id,
-                    assignees=assignees,
+                    assignees=assignees if assignees else [],
                     duration=activity.duration
                 )
                 workitem_dict = workitem.dict()
@@ -1011,9 +1020,8 @@ def upsert_workitem(workitem_data: dict, tenant_id: Optional[str] = None):
         
         if not tenant_id:
             tenant_id = subdomain_var.get()
-
-
         workitem_data["tenant_id"] = tenant_id
+
         return supabase.table('todolist').upsert(workitem_data).execute()
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

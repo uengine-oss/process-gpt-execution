@@ -5,7 +5,7 @@ from langchain.output_parsers.json import SimpleJsonOutputParser
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 
-from database import WorkItem, fetch_process_instance, fetch_process_definition, fetch_organization_chart, fetch_user_info, upsert_workitem, fetch_workitem_by_proc_inst_and_activity
+from database import WorkItem, fetch_process_instance, fetch_process_definition, fetch_organization_chart, fetch_user_info, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance
 from process_definition import ProcessDefinition
 import uuid
 import json
@@ -64,10 +64,20 @@ async def combine_input_with_process_definition(request: Request):
 
         if not user_email:
             user_email = input.get('email')
-            
+
         workitem = None
         if process_instance_id != "new":
             workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_id, activity_id)
+        else:
+            process_instance_id = f"{process_definition_id.lower()}.{str(uuid.uuid4())}"
+            process_instance_data = {
+                "proc_inst_id": process_instance_id,
+                "proc_inst_name": process_definition.processDefinitionName,
+                "proc_def_id": process_definition_id,
+                "current_user_ids": [user_email],
+                "status": "NEW"
+            }
+            insert_process_instance(process_instance_data)
 
         now = datetime.now(pytz.timezone('Asia/Seoul'))
         start_date = now.isoformat()
@@ -102,8 +112,9 @@ async def combine_input_with_process_definition(request: Request):
                 "retry": 0,
                 "consumer": None
             }
-            
+        
         upsert_workitem(workitem_data)
+        
         return workitem_data
 
     except Exception as e:
