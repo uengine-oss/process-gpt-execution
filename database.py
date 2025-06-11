@@ -1375,7 +1375,7 @@ def update_user_admin(input):
 
 def create_user(input):
     try:
-        tenant_id = subdomain_var.get()
+        tenant_id = input.get('tenant_id') if input.get('tenant_id') else subdomain_var.get()
         supabase = supabase_client_var.get()
 
 
@@ -1548,6 +1548,7 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
         data['url'] = notification_data.get('url', '')
         sender_name = notification_data.get('from_user_id', '')  # 발신자 이름
         
+        chat_noti_body = ""
         if sender_name:
             chat_noti_body = f"{body}\n{title}"
         
