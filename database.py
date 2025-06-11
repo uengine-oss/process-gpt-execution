@@ -1549,14 +1549,13 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
         sender_name = notification_data.get('from_user_id', '')  # 발신자 이름
         
         if sender_name:
-            chat_noti_title = sender_name
             chat_noti_body = f"{body}\n{title}"
         
         message = messaging.Message(
             token=device_token,
             notification=messaging.Notification(
-                title=chat_noti_title if chat_noti_title else title,
-                body=chat_noti_body if chat_noti_body else body
+                title=sender_name if sender_name else body,
+                body=sender_name if chat_noti_body else title
             ),
             data=data,
             android=messaging.AndroidConfig(
