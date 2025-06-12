@@ -1382,10 +1382,69 @@ def invite_user(input):
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        response = supabase.auth.admin.invite_user_by_email(email)
-        print(f"response: {response}")
+        # tenant_id를 사용해 비밀번호 설정 페이지로 redirect URL 생성
+        redirect_url = f"https://{tenant_id}.process-gpt.io/set-password"
+        
+        # 공식 문서에 따른 올바른 사용법
+        response = supabase.auth.admin.invite_user_by_email(
+            email,
+            {
+                "redirect_to": redirect_url
+            }
+        )
+        
+        print(f"Invitation sent to {email}")
+        print(f"Redirect URL: {redirect_url}")
+        print(f"Response: {response}")
+        
+        return {
+            "success": True,
+            "message": f"Invitation sent to {email}",
+            "redirect_url": redirect_url,
+            "response": response
+        }
+        
     except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        print(f"Error inviting user: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to invite user: {str(e)}") from e
+
+
+def set_initial_password(input):
+    try:
+        supabase = supabase_client_var.get()
+        
+        user_id = input.get("user_id")
+        password = input.get("password")
+        
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID is required")
+        
+        if not password:
+            raise HTTPException(status_code=400, detail="Password is required")
+        
+        # 관리자 권한으로 사용자 비밀번호 업데이트
+        response = supabase.auth.admin.update_user_by_id(
+            user_id,
+            {
+                "password": password
+            }
+        )
+        
+        print(f"Initial password set for user: {user_id}")
+        print(f"Response: {response}")
+        
+        return {
+            "success": True,
+            "message": "Initial password has been set successfully",
+            "user_id": user_id
+        }
+        
+    except Exception as e:
+        print(f"Error setting initial password: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to set initial password: {str(e)}") from e
 
 def create_user(input):
     try:
