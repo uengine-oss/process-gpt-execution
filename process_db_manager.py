@@ -3,7 +3,7 @@ from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda
-from database import fetch_process_definition, execute_sql, generate_create_statement_for_table, insert_sample_data, update_user_admin, create_user
+from database import fetch_process_definition, execute_sql, generate_create_statement_for_table, insert_sample_data, update_user_admin, create_user, invite_user
 import re
 import os
 
@@ -154,6 +154,11 @@ async def combine_input_with_new_user_info(request: Request):
     input = json_data.get('input')
     return create_user(input)
 
+async def combine_input_with_invite_user_info(request: Request):
+    json_data = await request.json()
+    input = json_data.get('input')
+    return invite_user(input)
+
 async def combine_input_with_user_info(request: Request):
     json_data = await request.json()
     input = json_data.get('input')
@@ -176,6 +181,7 @@ def add_routes_to_app(app) :
     app.add_api_route("/insert-sample", insert_sample_data, methods=["POST"])
     app.add_api_route("/set-tenant", combine_input_with_tenant_id, methods=["POST"])
     app.add_api_route("/create-user", combine_input_with_new_user_info, methods=["POST"])
+    app.add_api_route("/invite-user", combine_input_with_invite_user_info, methods=["POST"])
     app.add_api_route("/update-user", combine_input_with_user_info, methods=["POST"])
     
 

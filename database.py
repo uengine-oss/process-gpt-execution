@@ -1372,6 +1372,20 @@ def update_user_admin(input):
     except Exception as e:
         raise HTTPException(status_code=e.status, detail=str(e)) from e
 
+def invite_user(input):
+    try:
+        supabase = supabase_client_var.get()
+     
+        email = input.get("email")
+        tenant_id = input.get('tenant_id') if input.get('tenant_id') else subdomain_var.get()
+
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.auth.admin.invite_user_by_email(email)
+        print(f"response: {response}")
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 def create_user(input):
     try:
@@ -1381,18 +1395,16 @@ def create_user(input):
         username = input.get("username")
         email = input.get("email")
         role = input.get("role")
-        tenant_id = input.get('tenant_id') if input.get('tenant_id') else subdomain_var.get()
+        tenant_id = subdomain_var.get()
 
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        # 사용자 존재 여부를 안전하게 체크
         try:
             is_user_exist = fetch_user_info(email)
         except HTTPException as e:
             is_user_exist = None
         
-        print(f"is_user_exist: {is_user_exist}")
         if is_user_exist:
             supabase.table("users").insert({
                 "id": is_user_exist["id"],
@@ -1402,7 +1414,6 @@ def create_user(input):
                 "tenant_id": tenant_id
             }).execute()
         else:
-            print(f"create auth")
             response = supabase.auth.admin.create_user({
                 "email": email,
                 "username": username,
@@ -1413,7 +1424,6 @@ def create_user(input):
                 }
             })
             
-            print(f"create user")
             if response.user:
                 supabase.table("users").insert({
                     "id": response.user.id,
