@@ -1383,7 +1383,7 @@ def invite_user(input):
             raise Exception("Supabase client is not configured for this request")
         
         # tenant_id를 사용해 비밀번호 설정 페이지로 redirect URL 생성
-        redirect_url = f"https://{tenant_id}.process-gpt.io/set-password"
+        redirect_url = f"https://{tenant_id}.process-gpt.io/auth/initial-setting"
         
         # 공식 문서에 따른 올바른 사용법
         response = supabase.auth.admin.invite_user_by_email(
@@ -1392,6 +1392,15 @@ def invite_user(input):
                 "redirect_to": redirect_url
             }
         )
+
+        if response.user:
+            supabase.table("users").insert({
+                "id": response.user.id,
+                "email": email,
+                "username": email.split('@')[0],
+                "role": "user",
+                "tenant_id": tenant_id
+            }).execute()
         
         print(f"Invitation sent to {email}")
         print(f"Redirect URL: {redirect_url}")
@@ -1409,11 +1418,12 @@ def invite_user(input):
         raise HTTPException(status_code=500, detail=f"Failed to invite user: {str(e)}") from e
 
 
-def set_initial_password(input):
+def set_initial_info(input):
     try:
         supabase = supabase_client_var.get()
         
         user_id = input.get("user_id")
+        user_name = input.get("user_name")
         password = input.get("password")
         
         if supabase is None:
@@ -1435,10 +1445,14 @@ def set_initial_password(input):
         
         print(f"Initial password set for user: {user_id}")
         print(f"Response: {response}")
+
+        supabase.table("users").update({
+            "username": user_name
+        }).eq('id', user_id).execute()
         
         return {
             "success": True,
-            "message": "Initial password has been set successfully",
+            "message": "Initial setting has been completed successfully",
             "user_id": user_id
         }
         
