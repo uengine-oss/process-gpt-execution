@@ -1686,8 +1686,7 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 마지막 알림 체크 시간을 저장하는 전역 변수 (UTC timezone 사용)
-last_notification_check = datetime.now(pytz.UTC)
+
 
 def handle_new_notification(notification_record):
     """
@@ -1722,32 +1721,53 @@ def handle_new_notification(notification_record):
         realtime_logger.error(f"알림 처리 중 오류 발생: {e}")
 
 
+def fetch_unprocessed_notifications() -> Optional[List[dict]]:
+    try:
+        pod_id = socket.gethostname()
+        db_config = db_config_var.get()
+
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
+
+        query = """
+            WITH locked_rows AS (
+                SELECT id FROM notifications
+                WHERE consumer IS NULL
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE notifications
+            SET consumer = %s
+            FROM locked_rows
+            WHERE notifications.id = locked_rows.id
+            RETURNING *;
+        """
+
+        cursor.execute(query, (pod_id,))
+        rows = cursor.fetchall()
+
+        connection.commit()
+        cursor.close()
+        connection.close()
+
+        return rows if rows else None
+
+    except Exception as e:
+        realtime_logger.error(f"미처리 알림 fetch 실패: {str(e)}")
+        return None
+
+
 async def check_new_notifications():
     """
-    새로운 알림을 체크하고 FCM 푸시를 전송합니다.
+    미처리 알림을 체크하고 FCM 푸시를 전송합니다.
     """
-    global last_notification_check
-    
     try:
-        supabase = supabase_client_var.get()
-        if supabase is None:
-            realtime_logger.error("Supabase 클라이언트가 설정되지 않았습니다.")
-            return
+        notifications = fetch_unprocessed_notifications()
         
-        # UTC 시간으로 포맷팅하여 비교
-        check_time_str = last_notification_check.strftime('%Y-%m-%d %H:%M:%S.%f+00')
-        
-        # 마지막 체크 시간 이후의 새로운 알림 조회
-        response = supabase.table('notifications').select('*').gt('time_stamp', check_time_str).execute()
-        
-        if response.data:
-            realtime_logger.info(f"{len(response.data)}개의 새로운 알림을 발견했습니다.")
+        if notifications:
+            realtime_logger.info(f"{len(notifications)}개의 미처리 알림을 처리합니다.")
             
-            for notification in response.data:
+            for notification in notifications:
                 handle_new_notification(notification)
-        
-        # 마지막 체크 시간 업데이트 (UTC)
-        last_notification_check = datetime.now(pytz.UTC)
         
     except Exception as e:
         realtime_logger.error(f"알림 체크 중 오류: {e}")
