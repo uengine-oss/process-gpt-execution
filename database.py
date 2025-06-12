@@ -1645,10 +1645,6 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
             noti_title = title
             noti_body = body
 
-
-        print(f"noti_title: {noti_title}")
-        print(f"noti_body: {noti_body}")
-
         message = messaging.Message(
             token=device_token,
             notification=messaging.Notification(
