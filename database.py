@@ -1630,23 +1630,30 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
         
         success_count = 0
         failed = False
-        
+
         title = notification_data.get('title', '알림')
         body = notification_data.get('body', notification_data.get('description', ''))
         data = notification_data.get('data', {})
         data['type'] = notification_data.get('type', 'general')
         data['url'] = notification_data.get('url', '')
         sender_name = notification_data.get('from_user_id', '')  # 발신자 이름
-        
-        chat_noti_body = ""
+
         if sender_name:
-            chat_noti_body = f"{body}\n{title}"
-        
+            noti_title = sender_name
+            noti_body = f"{body}\n{title}"
+        else:
+            noti_title = title
+            noti_body = body
+
+
+        print(f"noti_title: {noti_title}")
+        print(f"noti_body: {noti_body}")
+
         message = messaging.Message(
             token=device_token,
             notification=messaging.Notification(
-                title=sender_name if sender_name else body,
-                body=sender_name if chat_noti_body else title
+                title = noti_title,
+                body = noti_body
             ),
             data=data,
             android=messaging.AndroidConfig(
