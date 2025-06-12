@@ -1729,6 +1729,8 @@ def fetch_unprocessed_notifications() -> Optional[List[dict]]:
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor(cursor_factory=RealDictCursor)
 
+        realtime_logger.info(f"pod_id: {pod_id}")
+
         query = """
             WITH locked_rows AS (
                 SELECT id FROM notifications
@@ -1743,13 +1745,15 @@ def fetch_unprocessed_notifications() -> Optional[List[dict]]:
         """
 
         cursor.execute(query, (pod_id,))
+        affected_count = cursor.rowcount
         rows = cursor.fetchall()
 
         connection.commit()
         cursor.close()
         connection.close()
 
-        return rows if rows else None
+        realtime_logger.info(f"affected_count: {affected_count}")
+        return rows if affected_count > 0 else None
 
     except Exception as e:
         realtime_logger.error(f"미처리 알림 fetch 실패: {str(e)}")
@@ -1762,7 +1766,7 @@ async def check_new_notifications():
     """
     try:
         notifications = fetch_unprocessed_notifications()
-        
+        realtime_logger.info(f"notifications: {notifications}")
         if notifications:
             realtime_logger.info(f"{len(notifications)}개의 미처리 알림을 처리합니다.")
             
