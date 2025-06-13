@@ -76,7 +76,6 @@ async def setting_async_database():
         async_supabase: AsyncClient = await create_async_client(supabase_url, supabase_key)
         async_supabase_client_var.set(async_supabase)
         
-        realtime_logger.info("비동기 Supabase 클라이언트가 설정되었습니다.")
         return async_supabase
         
     except Exception as e:
@@ -1346,28 +1345,43 @@ def invite_user(input):
         supabase = supabase_client_var.get()
      
         email = input.get("email")
+        role = input.get("role")
+        if role == "superAdmin":
+            is_admin = True
+        else:
+            is_admin = False
+
         tenant_id = input.get('tenant_id') if input.get('tenant_id') else subdomain_var.get()
+        user_id = None
 
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        # tenant_id를 사용해 비밀번호 설정 페이지로 redirect URL 생성
-        redirect_url = f"https://{tenant_id}.process-gpt.io/auth/initial-setting"
+        try:
+            is_user_exist = fetch_user_info(email)
+        except HTTPException as e:
+            is_user_exist = None
         
-        # 공식 문서에 따른 올바른 사용법
-        response = supabase.auth.admin.invite_user_by_email(
-            email,
-            {
-                "redirect_to": redirect_url
-            }
-        )
+        if is_user_exist:
+            user_id = is_user_exist['id']
+        else:
+            redirect_url = f"https://{tenant_id}.process-gpt.io/auth/initial-setting"
+            response = supabase.auth.admin.invite_user_by_email(
+                email,
+                {
+                    "redirect_to": redirect_url
+                }
+            )
+            if response.user:
+                user_id = response.user.id
 
-        if response.user:
+        if user_id:
             supabase.table("users").insert({
-                "id": response.user.id,
+                "id": user_id,
                 "email": email,
                 "username": email.split('@')[0],
-                "role": "user",
+                "role": role,
+                "is_admin": is_admin,
                 "tenant_id": tenant_id
             }).execute()
         
@@ -1394,6 +1408,7 @@ def set_initial_info(input):
         user_id = input.get("user_id")
         user_name = input.get("user_name")
         password = input.get("password")
+        tenant_id = subdomain_var.get()
         
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
@@ -1417,7 +1432,7 @@ def set_initial_info(input):
 
         supabase.table("users").update({
             "username": user_name
-        }).eq('id', user_id).execute()
+        }).eq('id', user_id).eq('tenant_id', tenant_id).execute()
         
         return {
             "success": True,
@@ -1541,8 +1556,6 @@ def fetch_device_token(user_id: str) -> Optional[str]:
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        # user_devices 테이블에서 해당 이메일의 디바이스 토큰 조회
-        realtime_logger.info(f"유저 검색 시작: {user_id}")
         response = supabase.table('user_devices').select('device_token').eq('user_email', user_id).execute()
         
         if response.data:
@@ -1662,7 +1675,6 @@ def handle_new_notification(notification_record):
     새로운 알림에 대해 FCM 푸시 알림을 전송하는 핸들러
     """
     try:
-        realtime_logger.info(f"새로운 알림 처리: {notification_record.get('title', 'No title')}")
         
         user_id = notification_record.get('user_id')
         if not user_id:
@@ -1684,7 +1696,6 @@ def handle_new_notification(notification_record):
         
         # FCM 메시지 전송
         result = send_fcm_message(user_id, notification_data)
-        realtime_logger.info(f"FCM 전송 결과: {result}")
         
     except Exception as e:
         realtime_logger.error(f"알림 처리 중 오류 발생: {e}")
@@ -1697,8 +1708,6 @@ def fetch_unprocessed_notifications() -> Optional[List[dict]]:
 
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-        realtime_logger.info(f"pod_id: {pod_id}")
 
         query = """
             WITH locked_rows AS (
@@ -1721,7 +1730,6 @@ def fetch_unprocessed_notifications() -> Optional[List[dict]]:
         cursor.close()
         connection.close()
 
-        realtime_logger.info(f"affected_count: {affected_count}")
         return rows if affected_count > 0 else None
 
     except Exception as e:
@@ -1735,9 +1743,7 @@ async def check_new_notifications():
     """
     try:
         notifications = fetch_unprocessed_notifications()
-        realtime_logger.info(f"notifications: {notifications}")
         if notifications:
-            realtime_logger.info(f"{len(notifications)}개의 미처리 알림을 처리합니다.")
             
             for notification in notifications:
                 handle_new_notification(notification)
