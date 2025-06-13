@@ -93,10 +93,14 @@ class ProcessDefinition(BaseModel):
         Returns:
             bool: True if it's the starting activity, False otherwise.
         """
+        start_event = next((event for event in self.gateways if event.type == "startEvent"), None)
+        if not start_event:
+            return False
+
         for sequence in self.sequences:
-            if sequence.target == activity_id:
-                return False
-        return True
+            if sequence.source == start_event.id and sequence.target == activity_id:
+                return True
+        return False
 
     def find_initial_activity(self) -> Optional[ProcessActivity]:
         """
@@ -105,8 +109,9 @@ class ProcessDefinition(BaseModel):
         Returns:
             Optional[Activity]: The initial activity if found, None otherwise.
         """
+        start_event = next((event for event in self.gateways if event.type == "startEvent"), None)
         # Find the sequence with "start_event" as the source
-        start_sequence = next((seq for seq in self.sequences if "start_event" in seq.source.lower()), None)
+        start_sequence = next((seq for seq in self.sequences if start_event.id in seq.source), None)
         
         if start_sequence:
             # Find the activity that matches the target of the start sequence

@@ -7,7 +7,7 @@ import uuid
 from process_definition import ProcessDefinition, load_process_definition, UIDefinition
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import HTTPException
 from decimal import Decimal
 from datetime import datetime, timedelta
 import pytz
@@ -19,8 +19,6 @@ import firebase_admin
 from firebase_admin import credentials, messaging
 import logging
 import asyncio
-
-app = FastAPI()
 
 db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
@@ -935,7 +933,10 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
             tenant_id = subdomain_var.get()
 
 
-        initial_activity = process_definition.find_initial_activity()
+        initial_activity = next((activity for activity in process_definition.activities if process_definition.is_starting_activity(activity.id)), None)
+        if not initial_activity:
+            initial_activity = process_definition.find_initial_activity()
+
         next_activities = [activity for activity in process_definition.activities if activity.id != initial_activity.id]
         for activity in next_activities:
             prev_activities = process_definition.find_prev_activities(activity.id, [])
@@ -1126,38 +1127,6 @@ def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool, tenant_id
         supabase.table("chats").upsert(chat_item_dict).execute();
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-
-
-
-
-import jwt
-from jwt import ExpiredSignatureError, InvalidTokenError
-
-
-def parse_token(request: Request) -> Dict[str, str]:
-    if request.headers:
-        auth_header = request.headers.get('Authorization')
-        if auth_header:
-            token = auth_header.split(" ")[1]
-            try:
-                jwt_secret = jwt_secret_var.get()
-                algorithm = algorithm_var.get()
-                payload = jwt.decode(token, jwt_secret, algorithms=[algorithm], audience='authenticated')
-                
-                subdomain = subdomain_var.get()
-                if payload['app_metadata']['tenant_id'] != subdomain:
-                    raise HTTPException(status_code=401, detail="Invalid tenant")
-                
-                return payload
-            except ExpiredSignatureError:
-                raise HTTPException(status_code=401, detail={"message": "Token expired", "status_code": 401})
-            except InvalidTokenError as e:
-                raise HTTPException(status_code=401, detail={"message": f"Invalid token {e}", "status_code": 401})
-        else:
-            raise HTTPException(status_code=401, detail={"message": "Authorization header missing", "status_code": 401})
-    else:
-        raise HTTPException(status_code=401, detail={"message": "Authorization header not provided", "status_code": 401})
-
 
 def fetch_user_info(email: str) -> Dict[str, str]:
     try:
