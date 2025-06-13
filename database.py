@@ -1372,22 +1372,112 @@ def update_user_admin(input):
     except Exception as e:
         raise HTTPException(status_code=e.status, detail=str(e)) from e
 
-
-def create_user(input):
+def invite_user(input):
     try:
-        tenant_id = subdomain_var.get()
         supabase = supabase_client_var.get()
-
-
-        username = input.get("username")
+     
         email = input.get("email")
-        role = input.get("role")
-
+        tenant_id = input.get('tenant_id') if input.get('tenant_id') else subdomain_var.get()
 
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
-        is_user_exist = fetch_user_info(email)
+        # tenant_id를 사용해 비밀번호 설정 페이지로 redirect URL 생성
+        redirect_url = f"https://{tenant_id}.process-gpt.io/auth/initial-setting"
+        
+        # 공식 문서에 따른 올바른 사용법
+        response = supabase.auth.admin.invite_user_by_email(
+            email,
+            {
+                "redirect_to": redirect_url
+            }
+        )
+
+        if response.user:
+            supabase.table("users").insert({
+                "id": response.user.id,
+                "email": email,
+                "username": email.split('@')[0],
+                "role": "user",
+                "tenant_id": tenant_id
+            }).execute()
+        
+        print(f"Invitation sent to {email}")
+        print(f"Redirect URL: {redirect_url}")
+        print(f"Response: {response}")
+        
+        return {
+            "success": True,
+            "message": f"Invitation sent to {email}",
+            "redirect_url": redirect_url,
+            "response": response
+        }
+        
+    except Exception as e:
+        print(f"Error inviting user: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to invite user: {str(e)}") from e
+
+
+def set_initial_info(input):
+    try:
+        supabase = supabase_client_var.get()
+        
+        user_id = input.get("user_id")
+        user_name = input.get("user_name")
+        password = input.get("password")
+        
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID is required")
+        
+        if not password:
+            raise HTTPException(status_code=400, detail="Password is required")
+        
+        # 관리자 권한으로 사용자 비밀번호 업데이트
+        response = supabase.auth.admin.update_user_by_id(
+            user_id,
+            {
+                "password": password
+            }
+        )
+        
+        print(f"Initial password set for user: {user_id}")
+        print(f"Response: {response}")
+
+        supabase.table("users").update({
+            "username": user_name
+        }).eq('id', user_id).execute()
+        
+        return {
+            "success": True,
+            "message": "Initial setting has been completed successfully",
+            "user_id": user_id
+        }
+        
+    except Exception as e:
+        print(f"Error setting initial password: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to set initial password: {str(e)}") from e
+
+def create_user(input):
+    try:
+        
+        supabase = supabase_client_var.get()
+     
+        username = input.get("username")
+        email = input.get("email")
+        role = input.get("role")
+        tenant_id = subdomain_var.get()
+
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        try:
+            is_user_exist = fetch_user_info(email)
+        except HTTPException as e:
+            is_user_exist = None
+        
         if is_user_exist:
             supabase.table("users").insert({
                 "id": is_user_exist["id"],
@@ -1540,23 +1630,26 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
         
         success_count = 0
         failed = False
-        
+
         title = notification_data.get('title', '알림')
         body = notification_data.get('body', notification_data.get('description', ''))
         data = notification_data.get('data', {})
         data['type'] = notification_data.get('type', 'general')
         data['url'] = notification_data.get('url', '')
         sender_name = notification_data.get('from_user_id', '')  # 발신자 이름
-        
+
         if sender_name:
-            chat_noti_title = sender_name
-            chat_noti_body = f"{body}\n{title}"
-        
+            noti_title = sender_name
+            noti_body = f"{body}\n{title}"
+        else:
+            noti_title = title
+            noti_body = body
+
         message = messaging.Message(
             token=device_token,
             notification=messaging.Notification(
-                title=chat_noti_title if chat_noti_title else title,
-                body=chat_noti_body if chat_noti_body else body
+                title = noti_title,
+                body = noti_body
             ),
             data=data,
             android=messaging.AndroidConfig(
@@ -1593,8 +1686,7 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 마지막 알림 체크 시간을 저장하는 전역 변수 (UTC timezone 사용)
-last_notification_check = datetime.now(pytz.UTC)
+
 
 def handle_new_notification(notification_record):
     """
@@ -1629,32 +1721,57 @@ def handle_new_notification(notification_record):
         realtime_logger.error(f"알림 처리 중 오류 발생: {e}")
 
 
+def fetch_unprocessed_notifications() -> Optional[List[dict]]:
+    try:
+        pod_id = socket.gethostname()
+        db_config = db_config_var.get()
+
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
+
+        realtime_logger.info(f"pod_id: {pod_id}")
+
+        query = """
+            WITH locked_rows AS (
+                SELECT id FROM notifications
+                WHERE consumer IS NULL
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE notifications
+            SET consumer = %s
+            FROM locked_rows
+            WHERE notifications.id = locked_rows.id
+            RETURNING *;
+        """
+
+        cursor.execute(query, (pod_id,))
+        affected_count = cursor.rowcount
+        rows = cursor.fetchall()
+
+        connection.commit()
+        cursor.close()
+        connection.close()
+
+        realtime_logger.info(f"affected_count: {affected_count}")
+        return rows if affected_count > 0 else None
+
+    except Exception as e:
+        realtime_logger.error(f"미처리 알림 fetch 실패: {str(e)}")
+        return None
+
+
 async def check_new_notifications():
     """
-    새로운 알림을 체크하고 FCM 푸시를 전송합니다.
+    미처리 알림을 체크하고 FCM 푸시를 전송합니다.
     """
-    global last_notification_check
-    
     try:
-        supabase = supabase_client_var.get()
-        if supabase is None:
-            realtime_logger.error("Supabase 클라이언트가 설정되지 않았습니다.")
-            return
-        
-        # UTC 시간으로 포맷팅하여 비교
-        check_time_str = last_notification_check.strftime('%Y-%m-%d %H:%M:%S.%f+00')
-        
-        # 마지막 체크 시간 이후의 새로운 알림 조회
-        response = supabase.table('notifications').select('*').gt('time_stamp', check_time_str).execute()
-        
-        if response.data:
-            realtime_logger.info(f"{len(response.data)}개의 새로운 알림을 발견했습니다.")
+        notifications = fetch_unprocessed_notifications()
+        realtime_logger.info(f"notifications: {notifications}")
+        if notifications:
+            realtime_logger.info(f"{len(notifications)}개의 미처리 알림을 처리합니다.")
             
-            for notification in response.data:
+            for notification in notifications:
                 handle_new_notification(notification)
-        
-        # 마지막 체크 시간 업데이트 (UTC)
-        last_notification_check = datetime.now(pytz.UTC)
         
     except Exception as e:
         realtime_logger.error(f"알림 체크 중 오류: {e}")
