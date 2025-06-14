@@ -1713,11 +1713,20 @@ def handle_new_notification(notification_record):
             return
         
         # FCM 알림 데이터 구성
+        tenant_id = notification_record.get('tenant_id', '')
+        url = notification_record.get('url', '')
+        if tenant_id and url:
+            url = f"https://{tenant_id}.process-gpt.io{url}"
+        else:
+            url = notification_record.get('url', '')
+
+        print(f"url: {url}")
+        
         notification_data = {
             'title': notification_record.get('title', '새 알림'),
             'body': notification_record.get('description', '새로운 알림이 도착했습니다.'),
             'type': notification_record.get('type', 'general'),
-            'url': notification_record.get('url', ''),
+            'url': url,
             'from_user_id': notification_record.get('from_user_id', ''),
             'data': {
                 'notification_id': str(notification_record.get('id', '')),
