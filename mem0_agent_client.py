@@ -13,6 +13,14 @@ from database import fetch_chat_history
 
 load_dotenv()
 
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_NAME = os.getenv("DB_NAME")
+
+connection_string = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
     raise ValueError("OPENAI_API_KEY가 설정되지 않았습니다. .env 파일을 확인해주세요.")
@@ -106,7 +114,7 @@ config = {
     "vector_store": {
         "provider": "supabase",
         "config": {
-            "connection_string": "postgresql://postgres:postgres@localhost:54322/postgres",
+            "connection_string": connection_string,
             "collection_name": "memories",
             "index_method": "hnsw",
             "index_measure": "cosine_distance"
