@@ -15,12 +15,14 @@ from ..safe_tool_loader import SafeToolLoader  # 🆕 안전한 도구 로더 �
 from ..agents_repository import AgentsRepository
 from ..crews.report_crew.DynamicReportCrew import DynamicReportCrew
 from ..crews.planning_crew.AgentMatchingCrew import AgentMatchingCrew
+from ..context_manager import context_manager
 
 
 class DynamicReportState(BaseModel):
     """State for the dynamic report generation flow."""
     topic: str = ""
     user_info: Dict[str, Any] = Field(default_factory=dict)  # User information
+    previous_context: Dict[str, Any] = Field(default_factory=dict)  # 이전 작업 컨텍스트
     
     # 🆕 새로운 구조: 섹션별 데이터 배열
     sections_data: List[Dict[str, Any]] = Field(default_factory=list)
@@ -84,7 +86,11 @@ class DynamicReportFlow(Flow[DynamicReportState]):
     @start()
     async def initialize_flow(self):
         """Initialize the flow with the input topic."""
-        # In newer CrewAI versions, the inputs are stored in self.state
+        # === 이전 컨텍스트 3줄로 불러오기 ===
+        proc_inst_id = getattr(self.state, 'proc_inst_id', None)
+        if proc_inst_id:
+            self.state.previous_context = context_manager.get_context(proc_inst_id)
+        # === 기존 코드 계속 ===
         if hasattr(self, 'inputs') and "topic" in self.inputs:
             self.state.topic = self.inputs["topic"]
             print(f"Initialized flow with topic: {self.state.topic}")
@@ -103,19 +109,26 @@ class DynamicReportFlow(Flow[DynamicReportState]):
 
     @listen("initialize_flow")
     async def plan_report(self):
-        """Plan the report structure and generate TOC with agent matching."""
-        print(f"🎯 토픽 분석 및 에이전트 매칭 시작: {self.state.topic}")
+        """Analyze previous context and design activity-based tasks with agent matching."""
+        print(f"🎯 이전 컨텍스트 분석 및 액티비티 기반 작업 설계 시작: {self.state.topic}")
         
         # 🚀 crew_started 이벤트 발행 - Agent Matching 시작
         self.crew_manager.event_logger.emit_crew_started(
             crew_name="AgentMatchingCrew",
             topic=self.state.topic,
-            job_id="report_generation"
+            job_id=f"activity_execution_{self.state.topic}"
         )
         
         # 🆕 Agent Matching Crew 생성 및 Supabase agents 조회
         agent_matching_crew_instance = self.crew_manager.create_agent_matching_crew()
         agent_matching_crew = AgentMatchingCrew()
+        
+        print("🔍 이전 컨텍스트 상태 확인:")
+        if self.state.previous_context:
+            print(f"   └─ 컨텍스트 있음: {type(self.state.previous_context)}")
+            print(f"   └─ 컨텍스트 키들: {list(self.state.previous_context.keys()) if isinstance(self.state.previous_context, dict) else 'Not dict'}")
+        else:
+            print("   └─ 이전 컨텍스트 없음 - 첫 번째 단계로 가정")
         
         # Supabase에서 agents 조회 (🆕 안전한 도구 처리 포함)
         available_agents = await agent_matching_crew.get_available_agents()
@@ -134,11 +147,12 @@ class DynamicReportFlow(Flow[DynamicReportState]):
         # 🔧 CrewAI inputs용 에이전트 정보 정리 (간소화된 버전)
         crewai_safe_agents = self._sanitize_agents_for_crewai(safe_agents)
         
-        # Agent Matching Crew 실행
+        # Agent Matching Crew 실행 (previous_context 중심으로 전달)
         planning_result = await agent_matching_crew_instance.kickoff_async(inputs={
-            "topic": self.state.topic,
+            "topic": self.state.topic,  # 액티비티 이름
             "user_info": self.state.user_info,
-            "available_agents": crewai_safe_agents  # 🆕 정리된 에이전트 정보 사용
+            "available_agents": crewai_safe_agents,  # 🆕 정리된 에이전트 정보 사용
+            "previous_context": self.state.previous_context or {"info": "첫 번째 단계로 이전 컨텍스트가 없습니다."}  # 이전 작업 컨텍스트가 핵심!
         })
         
         # JSON 결과 파싱
@@ -172,20 +186,20 @@ class DynamicReportFlow(Flow[DynamicReportState]):
             # 기존 호환성을 위해 toc 정보도 추출
             self.state.toc = [section.get("toc", {}) for section in result_data]
             
-            print(f"✅ 계획 완료: {len(self.state.sections_data)}개 섹션 매칭 완료")
+            print(f"✅ 액티비티 기반 작업 설계 완료: {len(self.state.sections_data)}개 작업 구성")
             return self.state.toc
             
         except Exception as e:
             print(f"❌ 결과 파싱 실패: {e}")
             print(f"❌ 실패한 데이터: {result_data}")  # 디버깅용
-            # 기본 TOC로 폴백
+            # 기본 액티비티 작업 구조로 폴백
             self.state.toc = [
-                {"title": "서론", "id": "intro"},
-                {"title": f"{self.state.topic} 현황", "id": "current_state"},
-                {"title": "핵심 기술", "id": "technologies"},
-                {"title": "응용 분야", "id": "applications"},
-                {"title": "향후 전망", "id": "future"},
-                {"title": "결론", "id": "conclusion"}
+                {"title": "요구사항 분석", "id": "requirements"},
+                {"title": "기본 구조 설계", "id": "structure"},
+                {"title": "핵심 내용 작성", "id": "content"},
+                {"title": "세부 사항 보완", "id": "details"},
+                {"title": "검토 및 완성", "id": "review"},
+                {"title": "최종 정리", "id": "finalization"}
             ]
             return self.state.toc
 
@@ -241,56 +255,58 @@ class DynamicReportFlow(Flow[DynamicReportState]):
         return True
 
     @listen("plan_report")
-    async def generate_report_sections(self):
-        """Generate each section of the report in parallel using DynamicReportCrew."""
-        print("🚀 안전한 동적 섹션 병렬 생성 시작...")
+    async def generate_activity_tasks(self):
+        """Execute each task of the current activity in parallel using DynamicReportCrew."""
+        print(f"🚀 액티비티 '{self.state.topic}' 기반 작업 병렬 실행 시작...")
         
-        # Create tasks for each section using sections_data
-        section_tasks = []
-        for section_data in self.state.sections_data:
-            section_task = self.create_section_task(section_data)
-            section_tasks.append(section_task)
+        # Create tasks for each work item using sections_data
+        activity_tasks = []
+        for task_data in self.state.sections_data:
+            activity_task = self.create_activity_task(task_data)
+            activity_tasks.append(activity_task)
         
-        # Execute all section tasks in parallel
-        section_results = await asyncio.gather(*section_tasks)
+        # Execute all activity tasks in parallel
+        task_results = await asyncio.gather(*activity_tasks)
         
         # Store the results in the state
-        for i, section_data in enumerate(self.state.sections_data):
-            section_title = section_data.get("toc", {}).get("title", f"section_{i}")
-            self.state.section_reports[section_title] = section_results[i]
+        for i, task_data in enumerate(self.state.sections_data):
+            task_title = task_data.get("toc", {}).get("title", f"task_{i}")
+            self.state.section_reports[task_title] = task_results[i]
         
-        print(f"✅ {len(section_results)}개 안전한 동적 섹션 생성 완료")
+        print(f"✅ 액티비티 '{self.state.topic}' - {len(task_results)}개 작업 실행 완료")
         return self.state.section_reports
 
-    async def create_section_task(self, section_data):
-        """Create a task to generate a specific section using DynamicReportCrew."""
-        section_title = section_data.get("toc", {}).get("title", "Unknown Section")
-        print(f"🎯 안전한 동적 섹션 생성: {section_title}")
+    async def create_activity_task(self, task_data):
+        """Create a task to execute a specific work item using DynamicReportCrew."""
+        task_title = task_data.get("toc", {}).get("title", "Unknown Task")
+        print(f"🎯 액티비티 작업 실행: {task_title}")
         
-        # 🆕 섹션별 Agent 안전성 재검증 (설정 파일 기반)
-        agent_data = section_data.get("agent", {})
+        # 🆕 작업별 Agent 안전성 재검증 (설정 파일 기반)
+        agent_data = task_data.get("agent", {})
         if not self._validate_section_agent_safety(agent_data):
-            print(f"⚠️  섹션 Agent 안전성 문제 - 기본 모드로 실행: {section_title}")
+            print(f"⚠️  작업 Agent 안전성 문제 - 기본 모드로 실행: {task_title}")
             # 안전한 기본 Agent 설정으로 대체
             agent_data = self._get_safe_fallback_agent(agent_data)
-            section_data["agent"] = agent_data
+            task_data["agent"] = agent_data
         
-        # DynamicReportCrew 생성
-        dynamic_crew_instance = DynamicReportCrew(section_data, self.state.topic)
+        # DynamicReportCrew 생성 (previous_context가 핵심!)
+        dynamic_crew_instance = DynamicReportCrew(task_data, self.state.topic, self.state.previous_context or {})
         crew = dynamic_crew_instance.create_crew()
         
-        # Execute the dynamic crew
+        # Execute the dynamic crew with context-aware inputs
         inputs = {
-            "topic": self.state.topic,
-            "user_info": self.state.user_info
+            "topic": self.state.topic,  # 액티비티 이름
+            "user_info": self.state.user_info,
+            "previous_context": self.state.previous_context or {"info": "첫 번째 단계입니다."},  # 핵심!
+            "current_task": task_title  # 현재 수행 중인 작업명
         }
         
         try:
-            report_result = await crew.kickoff_async(inputs=inputs)
-            return report_result.raw if report_result else ""
+            task_result = await crew.kickoff_async(inputs=inputs)
+            return task_result.raw if task_result else ""
         except Exception as e:
-            print(f"❌ 섹션 생성 실패: {section_title} - {e}")
-            return f"섹션 '{section_title}' 생성 중 오류가 발생했습니다. 안전한 기본 내용으로 대체합니다."
+            print(f"❌ 작업 실행 실패: {task_title} - {e}")
+            return f"작업 '{task_title}' 실행 중 오류가 발생했습니다. 이전 컨텍스트를 기반으로 기본 결과를 제공합니다."
 
     def _validate_section_agent_safety(self, agent_data: Dict[str, Any]) -> bool:
         """섹션별 Agent 추가 안전성 검증 (간소화된 버전)"""
@@ -323,68 +339,55 @@ class DynamicReportFlow(Flow[DynamicReportState]):
         print(f"🛡️  안전한 폴백 Agent 생성: {safe_agent.get('name', 'Unknown')}")
         return safe_agent
 
-    @listen("generate_report_sections")
-    def compile_final_report(self):
-        """Compile all sections into the final report."""
-        print("📋 안전한 최종 리포트 컴파일...")
+    @listen("generate_activity_tasks")
+    def compile_final_result(self):
+        """Compile all task results into the final activity output."""
+        print(f"📋 액티비티 '{self.state.topic}' 최종 결과 컴파일...")
         
         # 🎯 task_started 이벤트 발행
         self.crew_manager.event_logger.emit_task_started(
-            role="Report Compiler",
-            goal="Compile all sections into a comprehensive final report",
-            job_id="final_report_compilation"
+            role="Activity Result Compiler",
+            goal=f"Compile all task results for activity '{self.state.topic}' based on previous context",
+            job_id=f"activity_compilation_{self.state.topic}"
         )
         
-        # Create the report header with user info if available
-        report = f"# REPORT: {self.state.topic}\n\n"
+        # Create the activity result header
+        result = ""
         
         # Add author information if user_info is available
         if self.state.user_info and self.state.user_info.get('name'):
-            report += f"**Author:** {self.state.user_info.get('name')}\n"
+            result += f"**담당자:** {self.state.user_info.get('name')}\n"
             if self.state.user_info.get('position') and self.state.user_info.get('department'):
-                report += f"**Position:** {self.state.user_info.get('position')}, {self.state.user_info.get('department')}\n"
+                result += f"**부서/직급:** {self.state.user_info.get('position')}, {self.state.user_info.get('department')}\n"
             if self.state.user_info.get('email'):
-                report += f"**Contact:** {self.state.user_info.get('email')}\n"
-            report += f"**Date:** [Report Draft - Date TBD]\n\n"
+                result += f"**연락처:** {self.state.user_info.get('email')}\n"
+            result += f"**작업 일시:** [작업 완료 - 날짜 TBD]\n\n"
         
-        # 🆕 안전성 공지 추가
-        report += f"*이 리포트는 안전한 도구 시스템을 사용하여 생성되었습니다.*\n\n"
-        
-        report += f"## Table of Contents\n\n"
-        
-        # Add the table of contents
-        for i, section_data in enumerate(self.state.sections_data):
-            toc = section_data.get("toc", {})
-            section_title = toc.get("title", "Unknown Section")
-            report += f"{i+1}. {section_title}\n"
-        
-        report += "\n\n"
-        
-        # Add each section content using new structure
-        for section_data in self.state.sections_data:
-            toc = section_data.get("toc", {})
-            section_title = toc.get("title", "Unknown Section")
-            section_content = self.state.section_reports.get(section_title, "No content generated for this section.")
+        # Add each task result using new structure
+        for task_data in self.state.sections_data:
+            toc = task_data.get("toc", {})
+            task_title = toc.get("title", "Unknown Task")
+            task_content = self.state.section_reports.get(task_title, "이 작업에 대한 결과가 생성되지 않았습니다.")
             
-            report += f"{section_content}\n\n"
+            result += f"{task_content}\n\n"
         
-        # Store the final report in the state
-        self.state.final_report = report
+        # Store the final result in the state
+        self.state.final_report = result
         
         # 🎯 task_completed 이벤트 발행
         self.crew_manager.event_logger.emit_task_completed(
             final_result=self.state.final_report,
-            job_id="final_report_compilation"
+            job_id=f"activity_compilation_{self.state.topic}"
         )
         
-        # ✅ 전체 리포트 작업 완료 - crew_completed 이벤트 발행
+        # ✅ 전체 액티비티 작업 완료 - crew_completed 이벤트 발행
         self.crew_manager.event_logger.emit_crew_completed(
             crew_name="DynamicReportFlow",
             topic=self.state.topic,
-            job_id="report_generation"
+            job_id=f"activity_execution_{self.state.topic}"
         )
         
-        print("✅ 안전한 최종 리포트 컴파일 완료")
+        print(f"✅ 액티비티 '{self.state.topic}' 최종 결과 컴파일 완료")
         
         return self.state.final_report
     

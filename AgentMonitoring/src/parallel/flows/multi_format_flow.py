@@ -15,6 +15,7 @@ from ..crews.slide_crew.SlideCrew import SlideCrew
 from ..crews.form_crew.FormCrew import FormCrew
 from ..crew_config_manager import CrewConfigManager
 from ..event_logging.crew_event_logger import GlobalContextManager
+from ..context_manager import context_manager
 
 
 # 🔧 Configuration Constants
@@ -106,6 +107,20 @@ class MultiFormatFlow(Flow[MultiFormatState]):
         self._crew_cache = {}
         
         print(f"🎯 MultiFormatFlow 초기화 완료 - Supabase: {'✅' if enable_supabase_logging else '❌'}, 파일: {'✅' if enable_file_logging else '❌'}")
+        print(f"[DEBUG] context_manager id (조회): {id(context_manager)}")
+
+    def _get_previous_context(self) -> Dict[str, Any]:
+        """현재 proc_inst_id에 해당하는 이전 작업 컨텍스트를 가져옵니다."""
+        if not self.state.proc_inst_id:
+            print("⚠️ proc_inst_id가 없어서 빈 컨텍스트 반환")
+            return {}
+        
+        print(f"🔍 [MultiFormatFlow] 이전 컨텍스트 조회 중: proc_inst_id={self.state.proc_inst_id}")
+        previous_context = context_manager.get_context(self.state.proc_inst_id) or {}
+        print(f"[DEBUG] 파일에서 읽은 컨텍스트: {previous_context}")
+        print(f"🔍 [MultiFormatFlow] 조회 완료: {len(previous_context)}개 이전 작업 발견")
+        
+        return previous_context
 
     def _get_flow_timestamp(self) -> str:
         """Get cached flow timestamp (computed once per flow execution)."""
@@ -346,9 +361,12 @@ class MultiFormatFlow(Flow[MultiFormatState]):
                     enable_file_logging=True
                 )
                 
+                # 이전 작업 컨텍스트 가져오기
+                previous_context = self._get_previous_context() or {}
+                
                 flow.state.topic = self.state.topic
                 flow.state.user_info = self.state.user_info
-                # flow.state.proc_inst_id = self.state.proc_inst_id  # Commented out to avoid StateWithId field error
+                flow.state.previous_context = previous_context
                 
                 report_content = await flow.kickoff_async()
                 final_report = flow.state.final_report if hasattr(flow.state, 'final_report') else str(report_content)
@@ -413,7 +431,6 @@ class MultiFormatFlow(Flow[MultiFormatState]):
                 slide_crew = self.crew_manager.create_slide_crew()
                 result = await slide_crew.kickoff_async(inputs={
                     "report_content": combined_content,
-                    "topic": self.state.topic,
                     "user_info": self.state.user_info
                 })
                 
@@ -457,14 +474,12 @@ class MultiFormatFlow(Flow[MultiFormatState]):
             try:
                 # Reuse cached combined content (no duplicate computation)
                 all_reports = self._get_cached_report_content()
-                all_slides = self._get_cached_slide_content()
                 
                 self._emit_crew_events("FormCrew", "text_generation", started=True)
                 
                 form_crew = self.crew_manager.create_form_crew()
                 result = await form_crew.kickoff_async(inputs={
                     "report_content": all_reports,
-                    "slide_content": all_slides,
                     "topic": self.state.topic,
                     "field_info": fields,
                     "user_info": self.state.user_info
@@ -636,17 +651,41 @@ class MultiFormatFlow(Flow[MultiFormatState]):
         merged_contents.update(self.state.slide_contents)
         merged_contents.update(self.state.text_contents)
         
-        # 최종 반환: todolist_poller에서 전달받은 form_id를 사용하여 올바른 구조로 반환
+        # 🆕 새로운 형식: 리포트와 폼을 구분해서 저장 (컨텍스트용)
+        new_format = {
+            "reports": {},
+            "forms": {}
+        }
+        
+        # 리포트 내용 추가
+        for report_key, report_content in self.state.report_contents.items():
+            if not self._is_error_content(report_content):
+                new_format["reports"][report_key] = report_content
+        
+        # 폼 데이터 추가 (text_contents)
+        for form_key, form_value in self.state.text_contents.items():
+            if not self._is_error_content(str(form_value)):
+                new_format["forms"][form_key] = form_value
+        
+        # 기존 형식: todolist_poller에서 전달받은 form_id를 사용하여 올바른 구조로 반환
         # form_id는 "formHandler:" 접두어가 제거된 실제 form_def의 id 값
         form_id = getattr(self.state, 'form_id', None)
         if not form_id:
             # fallback: todo_id나 기본값 사용
             form_id = self.state.todo_id or 'default_form'
         
-        return { form_id: merged_contents }
+        legacy_format = { form_id: merged_contents }
+        
+        print(f"\n📊 반환 데이터 요약:")
+        print(f"   기존 형식: {form_id} → {len(merged_contents)}개 항목")
+        print(f"   새 형식: {len(new_format['reports'])}개 리포트, {len(new_format['forms'])}개 폼")
+        
+        return (legacy_format, new_format)
 
 
 def plot():
     """Plot the flow diagram."""
     flow = MultiFormatFlow()
     flow.plot() 
+
+print(f"[DEBUG] context_manager id (조회): {id(context_manager)}") 

@@ -9,16 +9,28 @@ class DynamicReportCrew:
     동적으로 Agent와 Task를 생성해서 Crew를 만드는 클래스 (도구 연결 버전)
     """
     
-    def __init__(self, section_data: Dict[str, Any], topic: str):
+    def __init__(self, section_data: Dict[str, Any], topic: str, previous_context: Dict[str, Any] = None):
         """
         Args:
             section_data: 섹션별 {toc, agent, task} 데이터
             topic: 주제
+            previous_context: 이전 작업 컨텍스트
         """
         self.topic = topic
+        self.previous_context = previous_context or {}
         self.toc_info = section_data.get("toc", {})
         self.agent_config = section_data.get("agent", {})
         self.task_config = section_data.get("task", {})
+        
+        # 🔄 이전 컨텍스트 디버깅 출력
+        print("="*60)
+        print("🔄 [DynamicReportCrew] 전달받은 이전 컨텍스트:")
+        print(f"   타입: {type(self.previous_context)}")
+        if self.previous_context:
+            print(f"   내용: (생략)")
+        else:
+            print("   내용: 비어있음")
+        print("="*60)
         
         # SafeToolLoader 다시 생성 (실제 도구 로딩용)
         self.safe_tool_loader = SafeToolLoader()
@@ -66,9 +78,15 @@ class DynamicReportCrew:
         
         base_description = self.task_config.get("description", "")
         expected_output = self.task_config.get("expected_output", "")
-        
+
+        # 🔄 이전 작업 컨텍스트를 description에 추가 (제한 없음)
+        context_info = ""
+        if self.previous_context:
+            context_str = str(self.previous_context)
+            context_info = f"\n\n[이전 작업 컨텍스트]\n{context_str}"
+
         # 🆕 안전한 작업 지침 추가
-        safe_description = base_description + """
+        safe_description = base_description + context_info + """
         
         🚨 작업 안전 지침:
         1. 웹사이트 URL 직접 접속 시도 금지
@@ -76,7 +94,7 @@ class DynamicReportCrew:
         3. perplexity 도구만 사용하여 정보 검색
         4. 구체적인 웹사이트가 필요한 경우 일반적인 지식 활용
         5. 에러 발생 시 즉시 중단하고 다른 접근법 시도
-        6. 휴가신청서/보고서 등은 표준 양식과 모범 사례 활용
+        6. 대표적인 표준 양식과 모범 사례 활용
         7. 내용에 섹션 제목을 포함하지 말고 작성
         
         위 지침을 준수하여 안전하게 작업을 수행하세요.
