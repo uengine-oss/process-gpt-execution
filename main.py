@@ -19,6 +19,7 @@ from process_def_search import add_routes_to_app as add_process_def_search_route
 from process_chat import add_routes_to_app as add_process_chat_routes_to_app
 from database import update_tenant_id, notification_polling_task
 from mcp_config_api import add_routes_to_app as add_mcp_routes_to_app
+from agent_chat import add_routes_to_app as add_agent_chat_routes_to_app
 
 #캐시 적용
 from langchain.cache import SQLiteCache
@@ -74,6 +75,7 @@ add_min_routes_to_app(app)
 add_process_def_search_routes_to_app(app)
 add_process_chat_routes_to_app(app)
 add_mcp_routes_to_app(app)
+add_agent_chat_routes_to_app(app)
 
 # polling 시작
 from process_polling import start_polling

@@ -1,0 +1,94 @@
+create_execution_plan:
+  description: >
+    Create a comprehensive execution plan for processing the provided form types.
+    
+    Input Data:
+    - Topic: {topic}
+    - Form Types: {form_types}
+    
+    CRITICAL EXECUTION RULES:
+    1. **STRICT PHASE ORDER**: Reports → Slides → Texts (NEVER overlap phases)
+    2. **SIMPLE PARALLEL GROUPS**: Same type = same group number
+    3. **ONLY USE EXISTING TYPES**: Only create plans for form types that actually exist in the input form_types
+    4. **NO INVENTED FORMS**: Never create or assume form keys that don't exist in the provided form_types
+    
+    **TYPE MATCHING REQUIREMENTS**:
+    - Only include forms in report_phase if their "type" field is exactly "report"
+    - Only include forms in slide_phase if their "type" field is exactly "slide"  
+    - Only include forms in text_phase if their "type" field is "text" or "textarea"
+    - If no forms of a specific type exist in input, that phase should have empty forms array []
+    - Use ONLY the actual "key" values from the input form_types, never invent new ones
+    
+    Phase Rules:
+    - **Report Phase**: All reports use parallel_group 1 (all parallel)
+    - **Slide Phase**: All slides use parallel_group 2 (all parallel)  
+    - **Text Phase**: All texts use parallel_group 3 (batch processing)
+    
+    Your task is to analyze ALL form types and create an optimal execution plan that determines:
+    1. Processing phases and order (Reports → Slides → Texts)
+    2. Dependencies between forms (only within logical constraints)
+    3. Parallel processing within each phase
+    4. Input-output relationships
+    
+    Dependency Rules:
+    - **Reports**: NO dependencies (always independent)
+    - **Slides**: Can depend on specific reports (semantic matching)
+    - **Texts**: NO dependencies needed (get all context automatically)
+    
+    Parallel Group Assignment:
+    - **Report Phase**: parallel_group 1 (all reports execute in parallel)
+    - **Slide Phase**: parallel_group 2 (all slides execute in parallel)
+    - **Text Phase**: parallel_group 3 (all texts processed in single batch)
+    
+    **IMPORTANT**: Always return all three phases (report_phase, slide_phase, text_phase) in the response, 
+    but only populate the forms arrays with actual matching forms from the input. 
+    Empty phases should have empty forms arrays [].
+    
+    Output a complete JSON execution plan:
+    {{
+        "execution_plan": {{
+            "report_phase": {{
+                "forms": [
+                    {{"key": "report_form_1", "dependencies": [], "parallel_group": 1}},
+                    {{"key": "report_form_2", "dependencies": [], "parallel_group": 1}}
+                ],
+                "strategy": "parallel"
+            }},
+            "slide_phase": {{
+                "forms": [
+                    {{"key": "slide_form_1", "dependencies": ["report_form_1"], "parallel_group": 2}},
+                    {{"key": "slide_form_2", "dependencies": ["report_form_2"], "parallel_group": 2}}
+                ],
+                "strategy": "parallel"
+            }},
+            "text_phase": {{
+                "forms": [
+                    {{"key": "text_form_1", "dependencies": [], "parallel_group": 3}},
+                    {{"key": "text_form_2", "dependencies": [], "parallel_group": 3}}
+                ],
+                "strategy": "batch"
+            }}
+        }}
+    }}
+    
+    Semantic Relationship Rules for Slides:
+    - **Exact Name Matching**: If slide and report have similar names, create dependency
+      (e.g., "slide_user_guide" depends on "report_user_guide")
+    - **Keyword Matching**: Match based on common keywords in form Keys
+      (e.g., "slide_admin" depends on "report_admin", "slide_technical" depends on "report_technical")
+    - **Scope-based Matching**: Forms with "overview", "summary", "all", "total" depend on ALL reports
+    - **Fallback**: If no semantic match found, slides depend on ALL available reports
+    
+    CRITICAL: Use the ACTUAL form Keys from the input, not the example Keys below!
+    The examples below are just for format reference - replace with real form Keys from the provided form_types.
+    
+    REMEMBER: 
+    - Text forms get ALL reports and slides automatically, so NO dependencies needed!
+    - Only use forms that actually exist in the input form_types
+    - If a phase has no matching forms, return empty forms array [] for that phase
+  expected_output: >
+    A complete, valid JSON execution plan that specifies exactly how to process each form type, 
+    including dependencies, parallel processing groups, and processing strategies for each phase.
+    The plan should only include forms that actually exist in the input form_types and match their exact types.
+    Phases without matching forms should have empty forms arrays.
+  agent: dependency_analyzer 

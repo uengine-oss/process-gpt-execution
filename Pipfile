@@ -160,8 +160,11 @@ yarl = "==1.18.3"
 zipp = "==3.21.0"
 zstandard = "==0.23.0"
 firebase-admin = "*"
+a2a-sdk = "*"
+mem0ai = "*"
+vecs = "*"
 
 [dev-packages]
 
 [requires]
-python_version = "3.11"
+python_version = "3.12"

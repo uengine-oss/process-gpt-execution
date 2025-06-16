@@ -1,0 +1,54 @@
+generate_field_value:
+  description: >
+    Generate realistic, detailed, and meaningful values for ONLY the specific form fields provided in field_info.
+    Create professional, high-quality values that demonstrate care and attention to detail.
+    
+    Report content: {report_content}
+    Slide content: {slide_content}
+    Topic: {topic}
+    Fields: {field_info}
+    User information: {user_info}
+    
+    CRITICAL RULES - MUST FOLLOW EXACTLY:
+    1. **STRICT FIELD MATCHING**: Generate values for ONLY the exact field keys specified in field_info
+    2. **NO ADDITIONAL FIELDS**: Never create extra fields, nested objects, or any structure beyond what's requested
+    3. **EXACT KEY USAGE**: Use the exact "key" from each field_info item as the JSON key in your response
+    4. **HIGH QUALITY VALUES**: Generate detailed, meaningful, professional values - not generic placeholders
+    5. **CONTEXT AWARENESS**: If report/slide content is empty, generate values based purely on the topic with high quality
+    
+    Value Generation Strategy:
+    - **User-related fields** (name, applicant, department, position, email): Use exact user_info values when available
+    - **Date fields** (containing "date", "start", "end", "time"): Generate realistic, specific dates in appropriate Korean format
+    - **Type/Category fields** (containing "type", "category", "kind"): Generate contextually relevant, specific values
+    - **Reason/Purpose fields** (containing "reason", "purpose", "description"): Generate detailed, professional explanations
+    - **Duration/Period fields**: Generate specific, realistic time periods with proper Korean formatting
+    - **Contact fields**: Generate appropriate contact information based on context
+    - **All other fields**: Analyze semantically and generate detailed, contextually appropriate values
+    
+    QUALITY STANDARDS:
+    - Values must be detailed and specific, not generic (e.g., "2024년 12월 23일부터 12월 27일까지 (5일간)" not just "5일")
+    - Use proper Korean business language and formatting
+    - Generate realistic scenarios that fit the topic context
+    - If no report/slide content available, create high-quality values based purely on topic and field context
+    
+    IMPORTANT: The field_info contains objects with "key", "type", and "text" properties. 
+    Use the "key" as your JSON key and the "text" as context for understanding what kind of detailed value to generate.
+    ALL USER INFORMATION MUST BE PRESERVED EXACTLY AS PROVIDED.
+  expected_output: >
+    A flat JSON object containing ONLY the requested field keys with their high-quality generated values.
+    Use the exact "key" from field_info as JSON keys. 
+    
+    STRICT FORMAT EXAMPLE:
+    {{
+      "field_key_1": "detailed_meaningful_value_1",
+      "field_key_2": "detailed_meaningful_value_2"
+    }}
+    
+    ABSOLUTE REQUIREMENTS:
+    - NO nested objects or additional fields beyond what's requested
+    - NO "user_related_fields", "generated_fields", or any grouping structures
+    - Generate values for ALL field keys provided in field_info
+    - Generate ONLY the field keys provided in field_info
+    - Each value must be detailed, professional, and contextually appropriate
+    - The output MUST be valid JSON format
+    - NEVER change or modify user_info values - use them exactly as provided! 
