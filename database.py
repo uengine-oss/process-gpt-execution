@@ -1627,19 +1627,14 @@ def send_fcm_message(user_id: str, notification_data: dict) -> dict:
             noti_title = title
             noti_body = body
 
+        data['title'] = noti_title
+        data['body'] = noti_body
+
         message = messaging.Message(
             token=device_token,
-            notification=messaging.Notification(
-                title = noti_title,
-                body = noti_body
-            ),
             data=data,
             android=messaging.AndroidConfig(
                 priority='high',
-                notification=messaging.AndroidNotification(
-                    icon='notification_icon',
-                    color='#4285F4'
-                )
             ),
             apns=messaging.APNSConfig(
                 payload=messaging.APNSPayload(
