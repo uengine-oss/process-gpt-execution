@@ -964,11 +964,11 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
             if not workitem:
                 user_id = ""
                 assignees = []
-                if process_instance_data['role_bindings']:
-                    role_bindings = process_instance_data['role_bindings']
+                if process_result_data['roleBindings']:
+                    role_bindings = process_result_data['roleBindings']
                     for role_binding in role_bindings:
-                        if role_binding['roleName'] == activity.role:
-                            user_id = role_binding['userId'][0] if isinstance(role_binding['userId'], list) else role_binding['userId']
+                        if role_binding['name'] == activity.role:
+                            user_id = role_binding['endpoint'][0] if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
                 workitem = WorkItem(
