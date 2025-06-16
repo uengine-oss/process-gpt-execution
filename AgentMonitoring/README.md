@@ -54,18 +54,10 @@ AgentMonitoring/
 
 2. **가상 환경 생성**
    ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # Windows: .venv\Scripts\activate
-   ```
-
-3. **의존성 설치**
-   ```bash
-   pip install -e .
-   ```
-   
-   또는 `uv` 사용 시:
-   ```bash
-   uv sync
+   cd AgentMonitoring
+   uv venv --python 3.11.9
+   파이썬 인터프리터 변경 (필요시 경로 직접 넣기 예: AgentMonitoring\.venv\Scripts\python.exe)
+   uv run main.py
    ```
 
 ### 환경 설정
@@ -80,13 +72,14 @@ AgentMonitoring/
 
 2. **데이터베이스 설정** (Supabase 사용 시)
    ```sql
+   events 테이블에 RLS 보완 설정 해제(Anno 키로 접근하기 위함) + RealTime 모드 ON해야 실시간 구독 가능
    -- database_schema.sql 파일의 내용을 Supabase에서 실행
    ```
 
 ### 실행
 
 ```bash
-python main.py
+uv run main.py
 ```
 
 서버가 `http://localhost:8001`에서 실행됩니다.
