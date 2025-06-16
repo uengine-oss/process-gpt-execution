@@ -1,0 +1,17 @@
+research_section:
+  description: >
+    Research and gather comprehensive information for a specific section of the report.
+    Find relevant facts, statistics, examples, and expert opinions that will provide a solid foundation for this section.
+  expected_output: >
+    A detailed research brief containing key information, data points, quotes, and insights for the section.
+    This brief should be well-structured and comprehensive enough to serve as the basis for writing the section.
+  agent: section_researcher
+
+write_section:
+  description: >
+    Write a specific section of the report. Use the research brief provided to create a comprehensive, informative, and engaging section
+    that flows well and fits into the overall report structure.
+  expected_output: >
+    A well-written, polished section for the report. The section should be approximately 500-1000 words, properly structured with
+    subheadings if appropriate, and contain all the key information from the research brief presented in an engaging and readable manner.
+  agent: section_writer 

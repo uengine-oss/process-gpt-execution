@@ -1,0 +1,45 @@
+analyze_report_structure:
+  description: >
+    Analyze the provided markdown report content and create a detailed outline for presentation slides.
+    Identify the main sections, key points, and important data that should be highlighted in separate slides.
+    Consider the logical flow and determine how to break down the content into engaging presentation segments.
+    
+    Report content: {report_content}
+    Topic: {topic}
+    User information: {user_info}
+  expected_output: >
+    A detailed slide structure outline containing:
+    1. Title slide information (include presenter name from user_info if available)
+    2. Table of contents/agenda slide
+    3. Main content slides with titles and key points
+    4. Conclusion slide
+    5. 한국어로 작성
+    Each slide should be clearly defined with its purpose, main content, and any special formatting needs.
+    If user information is provided, incorporate the presenter's name and relevant details into the slides.
+    
+
+create_reveal_slides:
+  description: >
+    Create reveal.js compatible markdown slides based on the analyzed report structure and original content.
+    Use proper reveal.js markdown syntax including horizontal slides (---) and vertical slides (--).
+    Ensure proper formatting with headers, bullet points, and emphasis where appropriate.
+    Include transitions and maintain visual consistency throughout the presentation.
+    
+    Original report content: {report_content}
+    Topic: {topic}
+    User information: {user_info}
+    
+    IMPORTANT: If user information is provided, include it in the presentation:
+    - Use user_info.name as the presenter name on title slide
+    - Include user_info.position and user_info.department if relevant
+    - Personalize the presentation with user context where appropriate
+  expected_output: >
+    Complete reveal.js markdown formatted slide presentation including:
+    - Title slide with topic, presenter name (from user_info), and metadata
+    - Content slides with proper reveal.js syntax (--- for new slides)
+    - Bullet points, headers, and emphasis formatting
+    - Logical slide transitions and flow
+    - Clean, professional presentation structure
+    - User information integrated where appropriate (presenter name, department, etc.)
+    - 한국어로 작성
+    The output should be ready to use directly with reveal.js presentation framework. 
