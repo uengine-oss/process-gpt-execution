@@ -12,7 +12,9 @@ import logging
 import re
 
 from dotenv import load_dotenv
-load_dotenv('../.env')
+
+# .env 파일 로드
+load_dotenv()
 
 
 # 로깅 설정

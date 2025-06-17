@@ -7,7 +7,9 @@ from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 from crewai.tools import BaseTool
 from dotenv import load_dotenv
-load_dotenv('../.env')
+
+# .env 파일 로드
+load_dotenv()
 
 # Mem0 임포트 (필수)
 try:

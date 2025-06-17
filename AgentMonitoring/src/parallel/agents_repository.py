@@ -6,7 +6,7 @@ import os
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 from supabase import create_client, Client
-
+load_dotenv()
 
 class AgentsRepository:
     """Supabase agents 테이블에서 데이터 조회만"""
