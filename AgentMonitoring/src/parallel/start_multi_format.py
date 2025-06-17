@@ -2,9 +2,9 @@
 import os
 import asyncio
 import warnings
-from AgentMonitoring.src.parallel.flows.multi_format_flow import MultiFormatFlow
-from AgentMonitoring.src.parallel.event_logging.crew_event_logger import GlobalContextManager
-from AgentMonitoring.src.parallel.context_manager import context_manager
+from .flows.multi_format_flow import MultiFormatFlow
+from .event_logging.crew_event_logger import GlobalContextManager
+from .context_manager import context_manager
 
 warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 

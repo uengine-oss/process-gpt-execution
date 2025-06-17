@@ -31,6 +31,7 @@ except ImportError:
 class GlobalContextManager:
     """전역 컨텍스트를 관리하여 현재 실행 중인 작업의 출신 정보를 추적"""
     _context_stack = []  # 중첩된 작업을 위한 스택 구조
+    _role_profile_mapping = {}  # role -> profile 매핑
     
     @classmethod
     def set_context(cls, output_type: str, form_id: str, filename: str = None, todo_id: str = None, proc_inst_id: str = None):
@@ -45,6 +46,34 @@ class GlobalContextManager:
         }
         cls._context_stack.append(context)
         logger.info(f"🎯 컨텍스트 설정: {output_type}/{form_id}")
+    
+    @classmethod
+    def set_role_profile_mapping(cls, role_profile_mapping: Dict[str, str]):
+        """role -> profile 매핑 설정"""
+        # role 키에서 탭/공백 제거
+        cleaned_mapping = {k.strip(): v for k, v in role_profile_mapping.items()}
+        cls._role_profile_mapping = cleaned_mapping
+        logger.info(f"🎭 role->profile 매핑 설정: {len(cleaned_mapping)}개")
+    
+    @classmethod
+    def get_profile_by_role(cls, role: str) -> str:
+        """role로 profile 조회, 매칭 안되면 기본값 반환"""
+        # 디버깅: 현재 매핑 상태 확인
+        print(f"🔍 [DEBUG] role 매칭 시도: '{role}'")
+        print(f"🔍 [DEBUG] 현재 매핑 개수: {len(cls._role_profile_mapping)}")
+        if cls._role_profile_mapping:
+            print(f"🔍 [DEBUG] 매핑 키들: {list(cls._role_profile_mapping.keys())}")
+        
+        # 정확한 매칭 시도
+        clean_role = role.strip()
+        profile = cls._role_profile_mapping.get(clean_role, "")
+        if profile:
+            print(f"✅ [DEBUG] 매칭 성공: '{clean_role}'")
+            return profile
+            
+        # 매칭 실패시 기본값 반환
+        print(f"❌ [DEBUG] 매칭 실패: '{clean_role}' → 기본값 사용")
+        return "/images/chat-icon.png"
     
     @classmethod
     def get_current_context(cls):
@@ -92,13 +121,14 @@ class CrewAIEventLogger:
         if self.enable_file_logging:
             os.makedirs("logs", exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.log_file = f"logs/crew_events_{timestamp}_{self.run_id}.jsonl"
+            # self.log_file = f"logs/crew_events_{timestamp}_{self.run_id}.jsonl"  # 파일 로깅 비활성화
+            self.log_file = None
         else:
             self.log_file = None
         
         logger.info(f"🎯 CrewAI Event Logger 초기화 (run_id: {self.run_id})")
         print(f"   - Supabase: {'✅' if self.supabase_client else '❌'}")
-        print(f"   - 파일 로깅: {'✅' if self.log_file else '❌'}")
+        print(f"   - 파일 로깅: ❌")  # 파일 로깅 상태 표시 수정
 
     def _init_supabase(self) -> Optional[Client]:
         """Supabase 클라이언트 초기화"""
@@ -191,9 +221,12 @@ class CrewAIEventLogger:
             
             # ✅ Task 이벤트만 유지
             if event_type == "task_started":
+                role = event_obj.task.agent.role if hasattr(event_obj.task, 'agent') else "Unknown"
+                agent_profile = GlobalContextManager.get_profile_by_role(role)
                 return {
-                    "role": event_obj.task.agent.role if hasattr(event_obj.task, 'agent') else "Unknown",
-                    "goal": event_obj.task.agent.goal if hasattr(event_obj.task, 'agent') else "Unknown"
+                    "role": role,
+                    "goal": event_obj.task.agent.goal if hasattr(event_obj.task, 'agent') else "Unknown",
+                    "agent_profile": agent_profile
                     }
                 
             elif event_type == "task_completed":
@@ -226,10 +259,13 @@ class CrewAIEventLogger:
                 return result_data
                 
             elif event_type == "task_failed":
+                role = event_obj.task.agent.role if hasattr(event_obj.task, 'agent') else "Unknown"
+                agent_profile = GlobalContextManager.get_profile_by_role(role)
                 return {
-                    "role": event_obj.task.agent.role if hasattr(event_obj.task, 'agent') else "Unknown",
+                    "role": role,
                     "goal": event_obj.task.description if hasattr(event_obj.task, 'description') else "Unknown", 
-                    "error": str(getattr(event_obj, 'error', 'Task failed'))
+                    "error": str(getattr(event_obj, 'error', 'Task failed')),
+                    "agent_profile": agent_profile
                 }
             
             # 🆕 커스텀 이벤트 (crew_started, crew_completed)
@@ -271,25 +307,25 @@ class CrewAIEventLogger:
                 for key, value in event_record.get('data', {}).items():
                     print(f"🔍 data.{key}: {type(value)} = {str(value)[:100]}...")
         
-        # 파일 기록 (동기화 처리로 안정성 확보)
-        if self.log_file:
-            record_str = json.dumps(event_record, ensure_ascii=False, default=str, separators=(',', ':'))
-            try:
-                with open(self.log_file, "a", encoding="utf-8") as f:
-                    f.write(record_str + "\n")
-                    f.flush()  # 즉시 디스크에 쓰기
-            except Exception as e:
-                logger.error(f"❌ 파일 저장 실패 (ID: {event_record.get('id', 'unknown')}): {e}")
-                # 백업 파일에 저장 시도
-                try:
-                    backup_file = self.log_file + ".backup"
-                    backup_record_str = json.dumps(event_record, ensure_ascii=False, default=str, separators=(',', ':'))
-                    with open(backup_file, "a", encoding="utf-8") as f:
-                        f.write(backup_record_str + "\n")
-                        f.flush()
-                    logger.warning(f"⚠️ 백업 파일에 저장됨: {backup_file}")
-                except Exception as backup_e:
-                    logger.error(f"❌ 백업 파일 저장도 실패: {backup_e}")
+        # 파일 기록 (비활성화)
+        # if self.log_file:
+        #     record_str = json.dumps(event_record, ensure_ascii=False, default=str, separators=(',', ':'))
+        #     try:
+        #         with open(self.log_file, "a", encoding="utf-8") as f:
+        #             f.write(record_str + "\n")
+        #             f.flush()  # 즉시 디스크에 쓰기
+        #     except Exception as e:
+        #         logger.error(f"❌ 파일 저장 실패 (ID: {event_record.get('id', 'unknown')}): {e}")
+        #         # 백업 파일에 저장 시도
+        #         try:
+        #             backup_file = self.log_file + ".backup"
+        #             backup_record_str = json.dumps(event_record, ensure_ascii=False, default=str, separators=(',', ':'))
+        #             with open(backup_file, "a", encoding="utf-8") as f:
+        #                 f.write(backup_record_str + "\n")
+        #                 f.flush()
+        #             logger.warning(f"⚠️ 백업 파일에 저장됨: {backup_file}")
+        #         except Exception as backup_e:
+        #             logger.error(f"❌ 백업 파일 저장도 실패: {backup_e}")
 
     # === Event Processing Entry Point ===
     def on_event(self, event_obj: TypeAny, source: Optional[TypeAny] = None) -> None:
@@ -357,7 +393,7 @@ class CrewAIEventLogger:
             self._write_to_backends(event_record)
             
             # 출신 정보 포함한 상세한 콘솔 출력
-            print(f"📝 [{event_obj.type}] [{crew_type}] {job_id[:8]} → 파일: {'✅' if self.log_file else '❌'}, Supabase: {'✅' if self.supabase_client else '❌'}")
+            print(f"📝 [{event_obj.type}] [{crew_type}] {job_id[:8]} → 파일: ❌(비활성화), Supabase: {'✅' if self.supabase_client else '❌'}")
             
         except Exception as e:
             logger.error(f"❌ 이벤트 처리 실패 ({getattr(event_obj, 'type', 'unknown')}): {e}")
@@ -381,6 +417,7 @@ class CrewAIEventLogger:
         crew_type = current_context.get("output_type") if current_context else "unknown"
         todo_id = current_context.get("todo_id") if current_context else None
         proc_inst_id = current_context.get("proc_inst_id") if current_context else None
+        agent_profile = GlobalContextManager.get_profile_by_role(role)
         
         event_record = {
             "id": str(uuid.uuid4()),
@@ -392,12 +429,13 @@ class CrewAIEventLogger:
             "crew_type": crew_type,           # 🆕 커스텀 이벤트에도 crew_type 적용!
             "data": {
                 "role": role,
-                "goal": goal
+                "goal": goal,
+                "agent_profile": agent_profile
             },
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self._write_to_backends(event_record)
-        print(f"📝 [task_started] [{crew_type}] {job_id[:8]} → 파일: {'✅' if self.log_file else '❌'}, Supabase: {'✅' if self.supabase_client else '❌'}")
+        print(f"📝 [task_started] [{crew_type}] {job_id[:8]} → 파일: ❌(비활성화), Supabase: {'✅' if self.supabase_client else '❌'}")
 
     def emit_task_completed(self, final_result: str, job_id: str = "final_compilation"):
         """🆕 커스텀 task_completed 이벤트 발행 (crew_type 포함)"""
@@ -421,7 +459,7 @@ class CrewAIEventLogger:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self._write_to_backends(event_record)
-        print(f"📝 [task_completed] [{crew_type}] {job_id[:8]} → 파일: {'✅' if self.log_file else '❌'}, Supabase: {'✅' if self.supabase_client else '❌'}")
+        print(f"📝 [task_completed] [{crew_type}] {job_id[:8]} → 파일: ❌(비활성화), Supabase: {'✅' if self.supabase_client else '❌'}")
 
     def emit_crew_started(self, crew_name: str, topic: str, job_id: str = "crew_execution"):
         """🆕 crew_started 이벤트 발행 - 전체 crew 작업 시작"""
@@ -446,7 +484,7 @@ class CrewAIEventLogger:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self._write_to_backends(event_record)
-        print(f"🚀 [crew_started] [{crew_type}] {crew_name} → {job_id[:8]} → 파일: {'✅' if self.log_file else '❌'}, Supabase: {'✅' if self.supabase_client else '❌'}")
+        print(f"🚀 [crew_started] [{crew_type}] {crew_name} → {job_id[:8]} → 파일: ❌(비활성화), Supabase: {'✅' if self.supabase_client else '❌'}")
 
     def emit_crew_completed(self, crew_name: str, topic: str, job_id: str = "crew_execution"):
         """🆕 crew_completed 이벤트 발행 - 전체 crew 작업 완료"""
@@ -471,7 +509,7 @@ class CrewAIEventLogger:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self._write_to_backends(event_record)
-        print(f"✅ [crew_completed] [{crew_type}] {crew_name} → {job_id[:8]} → 파일: {'✅' if self.log_file else '❌'}, Supabase: {'✅' if self.supabase_client else '❌'}")
+        print(f"✅ [crew_completed] [{crew_type}] {crew_name} → {job_id[:8]} → 파일: ❌(비활성화), Supabase: {'✅' if self.supabase_client else '❌'}")
 
 
 # 호환성을 위한 별칭

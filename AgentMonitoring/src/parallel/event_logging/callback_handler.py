@@ -17,9 +17,10 @@ class CallbackHandler:
         
         # 현재 실행용 로그 파일
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        self.log_file = self.log_dir / f"agent_steps_{timestamp}.jsonl"
+        # self.log_file = self.log_dir / f"agent_steps_{timestamp}.jsonl"  # 파일 로깅 비활성화
+        self.log_file = None
         
-        print(f"📁 Agent 스텝 로그가 {self.log_file}에 저장됩니다.")
+        print(f"📁 Agent 스텝 로그가 메모리에만 저장됩니다.")
     
     def step_callback(self, step: Dict[str, Any], agent_name: str = "Unknown"):
         """에이전트 스텝 콜백 (최적화)"""
@@ -36,8 +37,8 @@ class CallbackHandler:
             # 간단한 콘솔 출력
             self._log_step(step_info)
             
-            # 파일 저장
-            self._save_step(step_info)
+            # 파일 저장 (비활성화)
+            # self._save_step(step_info)
             
         except Exception as e:
             print(f"❌ 콜백 오류: {e}")
@@ -61,12 +62,13 @@ class CallbackHandler:
             print(f"   Thought: {thought}")
     
     def _save_step(self, step_info: Dict[str, Any]):
-        """스텝 정보를 JSONL 파일에 저장"""
-        try:
-            with open(self.log_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(step_info, ensure_ascii=False) + "\n")
-        except Exception as e:
-            print(f"❌ 파일 저장 실패: {e}")
+        """스텝 정보를 JSONL 파일에 저장 (비활성화)"""
+        # try:
+        #     with open(self.log_file, "a", encoding="utf-8") as f:
+        #         f.write(json.dumps(step_info, ensure_ascii=False) + "\n")
+        # except Exception as e:
+        #     print(f"❌ 파일 저장 실패: {e}")
+        pass
     
     def create_callback_for_agent(self, agent_name: str):
         """특정 에이전트용 콜백 함수 생성"""

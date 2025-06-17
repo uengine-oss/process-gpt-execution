@@ -6,6 +6,8 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 import os
 import asyncio
+from dotenv import load_dotenv
+load_dotenv()
 
 # 현재 디렉토리를 Python 경로에 추가
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -48,4 +50,4 @@ async def start_background_tasks():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="localhost", port=8001) 
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))

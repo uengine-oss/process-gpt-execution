@@ -93,14 +93,15 @@ async def handle_todolist_item(item: dict):
     tool 필드에서 formHandler: 접두어를 제거하고 form_def 테이블에서 fields_json을 가져와 처리에 사용합니다.
     첫번째 시퀀스 액티비티면 context에 output 저장만 하고 draft만 빈 객체로.
     """
+    # Supabase 클라이언트를 미리 가져와서 스코프 문제 해결
+    supabase = supabase_client_var.get()
+    if supabase is None:
+        logger.error("Supabase client is not configured")
+        return
+        
     try:
         logger.info(f"Processing todolist item: {item['id']}")
         print(f"[처리중] activity_name: {item.get('activity_name')}")
-
-        # Supabase 클라이언트 가져오기
-        supabase = supabase_client_var.get()
-        if supabase is None:
-            raise Exception("Supabase client is not configured")
 
         # tool 필드에서 formHandler: 제거하여 form_def id 추출
         tool_value = item.get('tool', '') or ''
@@ -164,15 +165,14 @@ async def handle_todolist_item(item: dict):
         if fields_json:
             for field in fields_json:
                 field_type = field.get('type', '').lower()
-                # textarea도 text로 간주
-                if field_type in ['report', 'slide', 'text', 'textarea']:
-                    normalized_type = 'text' if field_type == 'textarea' else field_type
-                    form_types.append({
-                        'id': field.get('key'),
-                        'type': normalized_type,
-                        'key': field.get('key'),
-                        'text': field.get('text', '')
-                    })
+                # report와 slide는 그대로 유지하고 나머지는 모두 text로 처리
+                normalized_type = field_type if field_type in ['report', 'slide'] else 'text'
+                form_types.append({
+                    'id': field.get('key'),
+                    'type': normalized_type,
+                    'key': field.get('key'),
+                    'text': field.get('text', '')
+                })
 
         # 만약 form_types가 비어있다면 기본값 추가
         if not form_types:
@@ -196,6 +196,30 @@ async def handle_todolist_item(item: dict):
     except Exception as e:
         logger.error(f"Error handling todolist item {item['id']}: {str(e)}")
         
+        # 오류 발생 시 draft를 NULL로 되돌려서 재처리 가능하게 함
+        # 안전하게 여러 방법으로 시도
+        try:
+            supabase.table('todolist').update({
+                'draft': None
+            }).eq('id', item['id']).execute()
+            logger.info(f"Successfully reset draft for item {item['id']}")
+        except Exception as reset_error:
+            logger.error(f"Failed to reset draft for item {item['id']}: {str(reset_error)}")
+            # Supabase가 안되면 직접 PostgreSQL로 시도
+            try:
+                db_config = db_config_var.get()
+                connection = psycopg2.connect(**db_config)
+                cursor = connection.cursor()
+                cursor.execute("UPDATE todolist SET draft = NULL WHERE id = %s", (item['id'],))
+                connection.commit()
+                cursor.close()
+                connection.close()
+                logger.info(f"Successfully reset draft via PostgreSQL for item {item['id']}")
+            except Exception as pg_error:
+                logger.error(f"Failed to reset draft via PostgreSQL for item {item['id']}: {str(pg_error)}")
+                # 최악의 경우 수동 개입 필요
+                logger.critical(f"MANUAL INTERVENTION NEEDED: Item {item['id']} is stuck with draft='{{}}'")
+
 
 async def todolist_polling_task():
     """

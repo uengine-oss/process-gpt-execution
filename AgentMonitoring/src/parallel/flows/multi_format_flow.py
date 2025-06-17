@@ -87,9 +87,12 @@ class MultiFormatFlow(Flow[MultiFormatState]):
             enable_file_logging=enable_file_logging
         )
         
+        # agents 조회해서 profile 매핑 설정
+        self._setup_profile_mapping()
+        
         # 🔧 Advanced optimization: Pre-cache frequently used values
         self.output_dir = Path(output_dir or Config.OUTPUT_DIR)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # 🚀 Flow-level cached values (computed once, reused many times)
         self._flow_timestamp = None
@@ -108,6 +111,29 @@ class MultiFormatFlow(Flow[MultiFormatState]):
         
         print(f"🎯 MultiFormatFlow 초기화 완료 - Supabase: {'✅' if enable_supabase_logging else '❌'}, 파일: {'✅' if enable_file_logging else '❌'}")
         print(f"[DEBUG] context_manager id (조회): {id(context_manager)}")
+
+    def _setup_profile_mapping(self):
+        """초창기에 agents 조회해서 profile 매핑 설정"""
+        try:
+            from ..agents_repository import AgentsRepository
+            from ..event_logging.crew_event_logger import GlobalContextManager
+            import asyncio
+            
+            async def load_agents():
+                agents_repo = AgentsRepository()
+                agents = await agents_repo.get_all_agents()
+                role_profile_mapping = {agent.get('role'): agent.get('profile', '') for agent in agents if agent.get('role')}
+                GlobalContextManager.set_role_profile_mapping(role_profile_mapping)
+                print(f"🎭 Profile 매핑 설정 완료: {len(role_profile_mapping)}개")
+            
+            # 비동기 실행
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(load_agents())
+            except:
+                asyncio.run(load_agents())
+        except Exception as e:
+            print(f"⚠️ Profile 매핑 설정 실패: {e}")
 
     def _get_previous_context(self) -> Dict[str, Any]:
         """현재 proc_inst_id에 해당하는 이전 작업 컨텍스트를 가져옵니다."""
@@ -242,7 +268,9 @@ class MultiFormatFlow(Flow[MultiFormatState]):
                 raw_result = planning_result.raw if planning_result else ""
                 
                 # Save planning result
-                self._save_planning_result(raw_result, planning_filename)
+                # filepath = self.output_dir / filename
+                # if self._save_json(planning_data, filepath):
+                #     print(f"💾 계획 결과 저장: {filename}")
                 
                 # Parse and create execution plan
                 plan = self._create_execution_plan(raw_result)
@@ -325,7 +353,7 @@ class MultiFormatFlow(Flow[MultiFormatState]):
             return "No reports requested"
         
         reports = self.state.execution_plan.report_forms
-        print(f"📝 리포트 {len(reports)}개 병렬 생성 시작...")
+        print(f"�� 리포트 {len(reports)}개 병렬 생성 시작...")
         
         start_time = datetime.now()
         
@@ -372,9 +400,9 @@ class MultiFormatFlow(Flow[MultiFormatState]):
                 final_report = flow.state.final_report if hasattr(flow.state, 'final_report') else str(report_content)
                 
                 # Save file using Path
-                filepath = self.output_dir / filename
-                if self._save_file(final_report, filepath):
-                    self.state.results[form_id] = str(filepath)
+                # filepath = self.output_dir / filename
+                # if self._save_file(final_report, filepath):
+                #     self.state.results[form_id] = str(filepath)
                     
                 return final_report
                 
@@ -439,9 +467,9 @@ class MultiFormatFlow(Flow[MultiFormatState]):
                 content = result.raw if result else f"Slide content for {form_id}"
                 
                 # Save file using Path
-                filepath = self.output_dir / filename
-                if self._save_file(content, filepath):
-                    self.state.results[form_id] = str(filepath)
+                # filepath = self.output_dir / filename
+                # if self._save_file(content, filepath):
+                #     self.state.results[form_id] = str(filepath)
                     
                 return content
                 
@@ -475,9 +503,6 @@ class MultiFormatFlow(Flow[MultiFormatState]):
                 # Reuse cached combined content (no duplicate computation)
                 all_reports = self._get_cached_report_content()
                 
-                # 이전 컨텍스트 가져오기
-                previous_context = self._get_previous_context()
-                
                 self._emit_crew_events("FormCrew", "text_generation", started=True)
                 
                 form_crew = self.crew_manager.create_form_crew()
@@ -486,7 +511,7 @@ class MultiFormatFlow(Flow[MultiFormatState]):
                     "topic": self.state.topic,
                     "field_info": fields,
                     "user_info": self.state.user_info,
-                    "previous_context": previous_context
+                    "previous_context": self._get_previous_context()
                 })
                 
                 self._emit_crew_events("FormCrew", "text_generation", started=False)
@@ -500,14 +525,14 @@ class MultiFormatFlow(Flow[MultiFormatState]):
                     batch_json = {field_name: f"Generated value for {field_name}" for field_name in field_names}
                 
                 # Save JSON file using Path
-                json_filepath = self.output_dir / json_filename
-                if self._save_json(batch_json, json_filepath):
-                    # Store results
-                    self.state.text_contents = batch_json
-                    for form in texts:
-                        self.state.results[form.get("id", "unknown")] = str(json_filepath)
-                    
-                    print(f"✅ 텍스트 배치 처리 완료 - 필드 {len(batch_json)}개 생성: {json_filename}")
+                # json_filepath = self.output_dir / json_filename
+                # if self._save_json(batch_json, json_filepath):
+                # Store results
+                self.state.text_contents = batch_json
+                for form in texts:
+                    self.state.results[form.get("id", "unknown")] = "in_memory"
+                
+                print(f"✅ 텍스트 배치 처리 완료 - 필드 {len(batch_json)}개 생성: {json_filename}")
                 
                 # 🧹 Memory cleanup: Clear cached content after final use
                 self._cleanup_cached_content()
@@ -605,8 +630,8 @@ class MultiFormatFlow(Flow[MultiFormatState]):
             }
             
             filepath = self.output_dir / filename
-            if self._save_json(planning_data, filepath):
-                print(f"💾 계획 결과 저장: {filename}")
+            # if self._save_json(planning_data, filepath):
+            #     print(f"💾 계획 결과 저장: {filename}")
             
         except Exception as e:
             print(f"⚠️ 계획 결과 저장 실패: {e}")

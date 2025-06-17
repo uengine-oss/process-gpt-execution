@@ -134,6 +134,11 @@ class DynamicReportFlow(Flow[DynamicReportState]):
         available_agents = await agent_matching_crew.get_available_agents()
         print(f"✅ {len(available_agents)}개 에이전트 조회 완료 (안전한 도구 처리됨)")
         
+        # role -> profile 매핑 설정
+        from ..event_logging.crew_event_logger import GlobalContextManager
+        role_profile_mapping = {agent.get('role'): agent.get('profile', '') for agent in available_agents if agent.get('role')}
+        GlobalContextManager.set_role_profile_mapping(role_profile_mapping)
+        
         # 🆕 Agent 도구 안전성 검증
         safe_agents = []
         for agent in available_agents:
