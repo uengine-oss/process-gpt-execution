@@ -20,19 +20,34 @@ class AgentsRepository:
         print("✅ AgentsRepository - Supabase 연결 완료")
     
     async def get_all_agents(self, tenant_id: str = "default") -> List[Dict[str, Any]]:
-        """agents 테이블 모든 데이터 조회 (tenant_id 필터링 없이 전체)"""
+        """agents 테이블에서 5개 필드(name, role, goal, persona, description)가 모두 비어있지 않은 데이터만 조회"""
         try:
-            # 모든 에이전트 조회 (tenant_id 필터링 없음)
-            response = self.client.table("agents").select("*").execute()
+            # 5개 필드가 모두 null이 아니고 비어있지 않은 에이전트만 조회
+            response = (self.client.table("agents")
+                       .select("*")
+                       .not_.is_("name", "null")
+                       .not_.is_("role", "null") 
+                       .not_.is_("goal", "null")
+                       .not_.is_("persona", "null")
+                       .neq("name", "")
+                       .neq("role", "")
+                       .neq("goal", "")
+                       .neq("persona", "")
+                       .execute())
             
-            # role -> profile 매핑 캐시 업데이트
+            # 🆕 tools 필드 기본값 처리
             for agent in response.data:
+                tools = agent.get('tools')
+                if not tools or tools.strip() == "":  # null이거나 빈값이면
+                    agent['tools'] = "mem0"  # 기본값 설정
+                
+                # role -> profile 매핑 캐시 업데이트
                 role = agent.get('role')
                 profile = agent.get('profile')
                 if role and profile:
                     self._role_profile_cache[role] = profile
             
-            print(f"✅ {len(response.data)}개 에이전트 조회 완료 (전체 데이터)")
+            print(f"✅ {len(response.data)}개 완전한 에이전트 조회 완료 (tools 기본값 처리됨)")
             return response.data
             
         except Exception as e:

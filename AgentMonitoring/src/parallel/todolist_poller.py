@@ -70,7 +70,7 @@ async def fetch_pending_todolist(limit: int = 1) -> Optional[List[dict]]:
             SET draft = '{}'
             WHERE id = (
                 SELECT id FROM todolist
-                WHERE draft IS NULL
+                WHERE is_agent = 'REQUIRED' AND draft IS NULL
                 ORDER BY start_date ASC
                 LIMIT 1
                 FOR UPDATE SKIP LOCKED
@@ -123,21 +123,25 @@ async def handle_todolist_item(item: dict):
         is_first_activity = False
         if proc_def_id:
             proc_def_resp = supabase.table('proc_def').select('definition').eq('id', proc_def_id).execute()
-            if proc_def_resp.data and len(proc_def_resp.data) > 0:
-                definition_str = proc_def_resp.data[0].get('definition')
-                try:
-                    definition = json.loads(definition_str) if isinstance(definition_str, str) else definition_str
-                    sequences = definition.get('sequences', [])
-                    first_target = None
-                    for seq in sequences:
-                        if seq.get('source') == 'start_event':
-                            first_target = seq.get('target')
-                            break
-                    print(f"[시퀀스 첫번째(실제 시작) target(activity_id)] {first_target}")
-                    if first_target and first_target == item.get('activity_id'):
-                        is_first_activity = True
-                except Exception as e:
-                    logger.error(f"Error parsing proc_def definition: {e}")
+            if proc_def_resp.data:
+                # 모든 proc_def 결과에서 start_event의 target들 수집
+                start_targets = []
+                for proc_data in proc_def_resp.data:
+                    try:
+                        definition_str = proc_data.get('definition')
+                        definition = json.loads(definition_str) if isinstance(definition_str, str) else definition_str
+                        sequences = definition.get('sequences', [])
+                        for seq in sequences:
+                            if seq.get('source') == 'start_event':
+                                start_targets.append(seq.get('target'))
+                    except Exception as e:
+                        logger.error(f"Error parsing proc_def definition: {e}")
+                
+                print(f"[시퀀스 첫번째(실제 시작) targets] {start_targets}")
+                if item.get('activity_id') in start_targets:
+                    is_first_activity = True
+            else:
+                logger.warning(f"No proc_def found for id {proc_def_id}")
 
         if is_first_activity:
             # 첫 번째 액티비티면 output을 context에 저장하고 draft만 빈 객체로
@@ -231,7 +235,7 @@ async def todolist_polling_task():
             if items:
                 for item in items:
                     await handle_todolist_item(item)
-            await asyncio.sleep(5)
+            await asyncio.sleep(15)
         except Exception as e:
             logger.error(f"Polling error: {str(e)}")
             await asyncio.sleep(15) 

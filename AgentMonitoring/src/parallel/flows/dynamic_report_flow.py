@@ -2,6 +2,7 @@ import asyncio
 from typing import Dict, List, Any
 import json
 import os
+import traceback
 from datetime import datetime
 
 from crewai.crew import Crew
@@ -275,56 +276,75 @@ class DynamicReportFlow(Flow[DynamicReportState]):
     @listen("plan_report")
     async def generate_activity_tasks(self):
         """Execute each task of the current activity in parallel using DynamicReportCrew."""
-        print(f"🚀 액티비티 '{self.state.topic}' 기반 작업 병렬 실행 시작...")
-        
-        # Create tasks for each work item using sections_data
-        activity_tasks = []
-        for task_data in self.state.sections_data:
-            activity_task = self.create_activity_task(task_data)
-            activity_tasks.append(activity_task)
-        
-        # Execute all activity tasks in parallel
-        task_results = await asyncio.gather(*activity_tasks)
-        
-        # Store the results in the state
-        for i, task_data in enumerate(self.state.sections_data):
-            task_title = task_data.get("toc", {}).get("title", f"task_{i}")
-            self.state.section_reports[task_title] = task_results[i]
-        
-        print(f"✅ 액티비티 '{self.state.topic}' - {len(task_results)}개 작업 실행 완료")
-        return self.state.section_reports
+        try:
+            print(f"🚀 액티비티 '{self.state.topic}' 기반 작업 병렬 실행 시작...")
+            
+            # Create tasks for each work item using sections_data
+            activity_tasks = []
+            for task_data in self.state.sections_data:
+                activity_task = self.create_activity_task(task_data)
+                activity_tasks.append(activity_task)
+            
+            # Execute all activity tasks in parallel (예외도 결과로 반환)
+            task_results = await asyncio.gather(*activity_tasks, return_exceptions=True)
+            
+            # 예외 로그 및 정상 결과 처리
+            for i, result in enumerate(task_results):
+                task_title = self.state.sections_data[i].get("toc", {}).get("title", f"task_{i}")
+                
+                if isinstance(result, Exception):
+                    print(f"❌ Task '{task_title}' 실패: {str(result)}")
+                    print(f"   상세 에러:\n{traceback.format_exception(type(result), result, result.__traceback__)}")
+                    # 실패한 작업도 기본 메시지로 저장
+                    self.state.section_reports[task_title] = f"작업 '{task_title}' 실행 중 오류가 발생했습니다: {str(result)}"
+                else:
+                    self.state.section_reports[task_title] = result
+            
+            success_count = sum(not isinstance(r, Exception) for r in task_results)
+            print(f"✅ 액티비티 '{self.state.topic}' - {success_count}/{len(task_results)}개 작업 성공")
+            return self.state.section_reports
+            
+        except Exception as e:
+            # 예상치 못한 전체 예외
+            print("🔥 generate_activity_tasks 전체 예외:\n", traceback.format_exc())
+            raise
 
     async def create_activity_task(self, task_data):
         """Create a task to execute a specific work item using DynamicReportCrew."""
         task_title = task_data.get("toc", {}).get("title", "Unknown Task")
-        print(f"🎯 액티비티 작업 실행: {task_title}")
-        
-        # 🆕 작업별 Agent 안전성 재검증 (설정 파일 기반)
-        agent_data = task_data.get("agent", {})
-        if not self._validate_section_agent_safety(agent_data):
-            print(f"⚠️  작업 Agent 안전성 문제 - 기본 모드로 실행: {task_title}")
-            # 안전한 기본 Agent 설정으로 대체
-            agent_data = self._get_safe_fallback_agent(agent_data)
-            task_data["agent"] = agent_data
-        
-        # DynamicReportCrew 생성 (previous_context가 핵심!)
-        dynamic_crew_instance = DynamicReportCrew(task_data, self.state.topic, self.state.previous_context or {})
-        crew = dynamic_crew_instance.create_crew()
-        
-        # Execute the dynamic crew with context-aware inputs
-        inputs = {
-            "topic": self.state.topic,  # 액티비티 이름
-            "user_info": self.state.user_info,
-            "previous_context": self.state.previous_context or {"info": "첫 번째 단계입니다."},  # 핵심!
-            "current_task": task_title  # 현재 수행 중인 작업명
-        }
         
         try:
+            print(f"🎯 액티비티 작업 실행: {task_title}")
+            
+            # 🆕 작업별 Agent 안전성 재검증 (설정 파일 기반)
+            agent_data = task_data.get("agent", {})
+            if not self._validate_section_agent_safety(agent_data):
+                print(f"⚠️  작업 Agent 안전성 문제 - 기본 모드로 실행: {task_title}")
+                # 안전한 기본 Agent 설정으로 대체
+                agent_data = self._get_safe_fallback_agent(agent_data)
+                task_data["agent"] = agent_data
+            
+            # DynamicReportCrew 생성 (previous_context가 핵심!)
+            dynamic_crew_instance = DynamicReportCrew(task_data, self.state.topic, self.state.previous_context or {})
+            crew = dynamic_crew_instance.create_crew()
+            
+            # Execute the dynamic crew with context-aware inputs
+            inputs = {
+                "topic": self.state.topic,  # 액티비티 이름
+                "user_info": self.state.user_info,
+                "previous_context": self.state.previous_context or {"info": "첫 번째 단계입니다."},  # 핵심!
+                "current_task": task_title  # 현재 수행 중인 작업명
+            }
+            
             task_result = await crew.kickoff_async(inputs=inputs)
+            print(f"✅ Task '{task_title}' 완료")
             return task_result.raw if task_result else ""
+            
         except Exception as e:
-            print(f"❌ 작업 실행 실패: {task_title} - {e}")
-            return f"작업 '{task_title}' 실행 중 오류가 발생했습니다. 이전 컨텍스트를 기반으로 기본 결과를 제공합니다."
+            print(f"❌ create_activity_task 오류 ({task_title}): {str(e)}")
+            print(f"   상세 에러:\n{traceback.format_exc()}")
+            # 예외를 다시 발생시켜서 상위에서 처리하도록 함
+            raise Exception(f"Task '{task_title}' 실행 실패: {str(e)}")
 
     def _validate_section_agent_safety(self, agent_data: Dict[str, Any]) -> bool:
         """섹션별 Agent 추가 안전성 검증 (간소화된 버전)"""

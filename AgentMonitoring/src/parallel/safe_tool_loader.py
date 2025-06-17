@@ -77,40 +77,39 @@ class SafeToolLoader:
                     from mcp import StdioServerParameters
                     from crewai_tools import MCPServerAdapter
                     
-                    # Windows에서만 적용
-                    if platform.system() == "Windows":
-                        print("🪟 Windows MCP stderr 몽키패치 적용")
+                    # 모든 플랫폼에서 MCP stderr 몽키패치 적용
+                    print(f"🔧 MCP stderr 몽키패치 적용 (OS: {platform.system()})")
 
-                        async def _patched_open_process(*args, **kwargs):
-                            # Windows에서는 모든 stderr를 PIPE로 강제 교체
-                            if 'stderr' in kwargs:
-                                stderr_arg = kwargs['stderr']
-                                print(f"🔍 원본 stderr 타입: {type(stderr_arg)}")
-                                
-                                # fileno() 체크를 더 안전하게
-                                has_fileno = False
-                                try:
-                                    if hasattr(stderr_arg, 'fileno'):
-                                        stderr_arg.fileno()  # 실제 호출 테스트
-                                        has_fileno = True
-                                        print(f"✅ stderr에 유효한 fileno() 있음")
-                                except Exception as e:
-                                    print(f"❌ stderr.fileno() 실패: {e}")
-                                    has_fileno = False
-                                
-                                # fileno()가 없거나 실패하면 PIPE로 교체
-                                if not has_fileno:
-                                    print("🔧 stderr를 subprocess.PIPE로 강제 교체")
-                                    kwargs['stderr'] = subprocess.PIPE
-                                else:
-                                    print("⚠️  stderr fileno() 작동 - 그대로 유지")
+                    async def _patched_open_process(*args, **kwargs):
+                        # 모든 stderr를 PIPE로 강제 교체
+                        if 'stderr' in kwargs:
+                            stderr_arg = kwargs['stderr']
+                            print(f"🔍 원본 stderr 타입: {type(stderr_arg)}")
                             
-                            return await _original_open_process(*args, **kwargs)
+                            # fileno() 체크를 더 안전하게
+                            has_fileno = False
+                            try:
+                                if hasattr(stderr_arg, 'fileno'):
+                                    stderr_arg.fileno()  # 실제 호출 테스트
+                                    has_fileno = True
+                                    print(f"✅ stderr에 유효한 fileno() 있음")
+                            except Exception as e:
+                                print(f"❌ stderr.fileno() 실패: {e}")
+                                has_fileno = False
+                            
+                            # fileno()가 없거나 실패하면 PIPE로 교체
+                            if not has_fileno:
+                                print("🔧 stderr를 subprocess.PIPE로 강제 교체")
+                                kwargs['stderr'] = subprocess.PIPE
+                            else:
+                                print("⚠️  stderr fileno() 작동 - 그대로 유지")
+                        
+                        return await _original_open_process(*args, **kwargs)
 
-                        # 실제 사용 함수 교체
-                        anyio.open_process = _patched_open_process
-                        anyio._core._subprocesses.open_process = _patched_open_process
-                        print("✅ anyio.open_process 몽키패치 완료")
+                    # 실제 사용 함수 교체
+                    anyio.open_process = _patched_open_process
+                    anyio._core._subprocesses.open_process = _patched_open_process
+                    print("✅ anyio.open_process 몽키패치 완료")
                     
                     # MCP 설정 로드
                     # 현재 파일 위치를 기준으로 절대 경로 생성

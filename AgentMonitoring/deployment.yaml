@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-monitoring-deployment
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: agent-monitoring
+  template:
+    metadata:
+      labels:
+        app: agent-monitoring
+    spec:
+      containers:
+      - name: agent-monitoring
+        image: uhnpybara/agent-monitoring:0618fintest
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "512Mi"
+        env:
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: openai-secret
+              key: OPENAI_API_KEY
+        - name: SUPABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: my-config
+              key: SUPABASE_URL
+        - name: SUPABASE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: my-secrets
+              key: SERVICE_ROLE_KEY
+        - name: SUPABASE_JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: my-secrets
+              key: JWT_SECRET
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: my-secrets
+              key: DB_NAME
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: my-secrets
+              key: DB_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: my-secrets
+              key: DB_PASSWORD
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: my-secrets
+              key: DB_HOST
+        - name: DB_PORT
+          valueFrom:
+            secretKeyRef:
+              name: my-secrets
+              key: DB_PORT
+        # ↓ 여기에 하드코딩된 값들을 추가합니다 ↓
+        - name: MEM_ZERO_API_KEY
+          value: "m0-IKB31hWGdMOMD9pB1mXStrBdjx3qnw7E4qndtF3k"
+        - name: PERPLEXITY_API_KEY
+          value: "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"
+        - name: PERPLEXITY_MODEL
+          value: "sonar"
+        - name: MODEL
+          value: "gpt-4.1"
+        volumeMounts:
+        - mountPath: /data
+          name: cache-volume
+      volumes:
+      - name: cache-volume
+        persistentVolumeClaim:
+          claimName: langchain-cache-pvc-execution
