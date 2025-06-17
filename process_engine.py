@@ -10,6 +10,7 @@ from process_definition import ProcessDefinition
 import uuid
 import json
 import pytz
+import requests
 
 # ChatOpenAI 객체 생성
 model = ChatOpenAI(model="gpt-4o", streaming=True)
@@ -137,24 +138,44 @@ async def submit_workitem(input: dict):
     return workitem_data
 
 
+def process_output(workitem, tenant_id):
+    try:
+        if workitem["output"] is None or workitem["output"] == {}:
+            return
+        url = f"http://localhost:8005/process/database"
+        response = requests.post(url, json={
+            "storage_type": "database",
+            "options": {
+                "proc_inst_id": workitem["proc_inst_id"],
+                "activity_id": workitem["activity_id"],
+                "tenant_id": tenant_id
+            }
+        })
+        return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 ############# start of role binding #############
 role_binding_prompt = PromptTemplate.from_template(
     """
-    Now, we will create a system that recommends role performers at each stage when our employees start the process. Please refer to the resolution rule of the role in the process definition provided and our organization chart to find and return the best person for each role. If there is no suitable person, select yourself.
+Now, we will create a system that recommends role performers at each stage when our employees start the process. Please refer to the resolution rule of the role in the process definition provided and our organization chart to find and return the best person for each role. If there is no suitable person, select yourself.
 
-    - Roles in Process Definition: {roles}
+- Roles in Process Definition: {roles}
 
-    - Organization Chart: {organizationChart}
-    
-    - My Email: {myEmail}
-    
-    result should be in this JSON format:
-    {{
-        "roleBindings": [{{
-            "roleName": "role name",
-            "userId": "user email"
-        }}]
-    }}
+- Organization Chart: {organizationChart}
+
+- My Email: {myEmail}
+
+If the agent is a role performer, enter the agent ID in userId.
+
+result should be in this JSON format:
+{{
+    "roleBindings": [{{
+        "roleName": "role name",
+        "userId": "user email"
+    }}]
+}}
     """
     )
 

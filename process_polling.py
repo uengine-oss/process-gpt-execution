@@ -7,13 +7,12 @@ from langchain.output_parsers.json import SimpleJsonOutputParser  # JsonOutputPa
 from pydantic import BaseModel
 from typing import List, Optional, Any
 from code_executor import execute_python_code
-from langchain_core.runnables import RunnableLambda
 from datetime import datetime
-import time
 
 from database import fetch_process_definition, fetch_process_instance, fetch_organization_chart, fetch_ui_definition_by_activity_id, fetch_user_info, get_vector_store, fetch_workitem_with_submitted_status, fetch_workitem_by_proc_inst_and_activity
 from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, upsert_todo_workitems, upsert_workitem, delete_workitem
 from database import ProcessInstance
+from process_engine import process_output
 import uuid
 import json
 
@@ -505,7 +504,10 @@ async def handle_workitem(workitem):
             "id": workitem['id'],
             "status": "DONE",
         }, tenant_id)
-
+        try:
+            process_output(workitem, tenant_id)
+        except Exception as e:
+            print(f"[ERROR] Error in process_output for workitem {workitem['id']}: {str(e)}")
 
 async def safe_handle_workitem(workitem):
     try:
@@ -518,6 +520,8 @@ async def safe_handle_workitem(workitem):
         if workitem['retry'] >= 3:
             workitem['status'] = "DONE"
             workitem['description'] = f"[Workitem Error] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}"
+        else:
+            workitem['log'] = f"실행하는 중 오류가 발생했습니다. 다시 시도하겠습니다."
         upsert_workitem(workitem, workitem['tenant_id'])
 
 async def polling_workitem():
