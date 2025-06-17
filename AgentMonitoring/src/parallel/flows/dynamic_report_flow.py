@@ -255,7 +255,7 @@ class DynamicReportFlow(Flow[DynamicReportState]):
         print(f"🔍 Agent 안전성 검증: {agent.get('name', 'Unknown')} ({agent_role})")
         
         # 기본적으로 안전한 도구들
-        safe_tools = ["mem0", "perplexity(mcp)"]
+        safe_tools = ["mem0", "perplexity(mcp)", "perplexity", "playwright"]
         
         if tools_config:
             tool_names = [t.strip() for t in tools_config.split(",")]

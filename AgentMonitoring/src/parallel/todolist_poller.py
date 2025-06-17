@@ -1,14 +1,15 @@
 import asyncio
 import logging
 from typing import Optional, List
-import socket
 import sys
 import os
 import json
+from contextvars import ContextVar
+from dotenv import load_dotenv
+from supabase import create_client, Client
 
 # 상위 디렉토리를 Python 경로에 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
-from database import db_config_var, supabase_client_var
 
 # 같은 디렉토리의 파일을 임포트
 from .start_multi_format import run_multi_format_generation  # main_multi_format.py가 아닌 start_multi_format.py를 사용
@@ -24,7 +25,35 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
-# 순서/대기 큐 관련 변수 및 함수 모두 제거
+db_config_var = ContextVar('db_config', default={})
+supabase_client_var = ContextVar('supabase', default=None)
+
+
+def setting_database():
+    try:
+        if os.getenv("ENV") != "production":
+            load_dotenv()
+
+        supabase_url = os.getenv("SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_KEY")
+        supabase: Client = create_client(supabase_url, supabase_key)
+        supabase_client_var.set(supabase)
+        
+        db_config = {
+            "dbname": os.getenv("DB_NAME"),
+            "user": os.getenv("DB_USER"),
+            "password": os.getenv("DB_PASSWORD"),
+            "host": os.getenv("DB_HOST"),
+            "port": os.getenv("DB_PORT")
+        }
+        db_config_var.set(db_config)
+        
+    except Exception as e:
+        print(f"Database configuration error: {e}")
+
+
+setting_database()
+
 
 async def fetch_pending_todolist(limit: int = 1) -> Optional[List[dict]]:
     """
@@ -178,7 +207,7 @@ async def todolist_polling_task():
             if items:
                 for item in items:
                     await handle_todolist_item(item)
-            await asyncio.sleep(15)
+            await asyncio.sleep(5)
         except Exception as e:
             logger.error(f"Polling error: {str(e)}")
             await asyncio.sleep(15) 

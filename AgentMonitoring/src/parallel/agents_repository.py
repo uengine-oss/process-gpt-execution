@@ -20,8 +20,14 @@ class AgentsRepository:
         print("✅ AgentsRepository - Supabase 연결 완료")
     
     async def get_all_agents(self, tenant_id: str = "default") -> List[Dict[str, Any]]:
-        """agents 테이블 모든 데이터 조회 (원본 그대로)"""
-        response = self.client.table("agents").select("*").eq("tenant_id", tenant_id).execute()
-        
-        print(f"✅ {len(response.data)}개 에이전트 조회 완료 (원본 데이터)")
-        return response.data 
+        """agents 테이블 모든 데이터 조회 (tenant_id 필터링 없이 전체)"""
+        try:
+            # 모든 에이전트 조회 (tenant_id 필터링 없음)
+            response = self.client.table("agents").select("*").execute()
+            
+            print(f"✅ {len(response.data)}개 에이전트 조회 완료 (전체 데이터)")
+            return response.data
+            
+        except Exception as e:
+            print(f"❌ 에이전트 조회 실패: {e}")
+            return [] 

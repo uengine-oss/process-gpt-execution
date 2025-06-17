@@ -475,6 +475,9 @@ class MultiFormatFlow(Flow[MultiFormatState]):
                 # Reuse cached combined content (no duplicate computation)
                 all_reports = self._get_cached_report_content()
                 
+                # 이전 컨텍스트 가져오기
+                previous_context = self._get_previous_context()
+                
                 self._emit_crew_events("FormCrew", "text_generation", started=True)
                 
                 form_crew = self.crew_manager.create_form_crew()
@@ -482,7 +485,8 @@ class MultiFormatFlow(Flow[MultiFormatState]):
                     "report_content": all_reports,
                     "topic": self.state.topic,
                     "field_info": fields,
-                    "user_info": self.state.user_info
+                    "user_info": self.state.user_info,
+                    "previous_context": previous_context
                 })
                 
                 self._emit_crew_events("FormCrew", "text_generation", started=False)
