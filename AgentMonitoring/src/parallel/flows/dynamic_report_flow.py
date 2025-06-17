@@ -218,10 +218,23 @@ class DynamicReportFlow(Flow[DynamicReportState]):
                 elif key == "tools" and isinstance(value, str):
                     # tools 문자열을 tool_names 배열로 변환
                     if value.strip():
-                        tool_names = [t.strip() for t in value.split(",")]
-                        sanitized_agent["tool_names"] = tool_names
+                        tool_names = [t.strip() for t in value.split(",") if t.strip()]
+                        new_tool_names = []
+                        for t in tool_names:
+                            t_lower = t.lower()
+                            if t_lower == "mem0":
+                                new_tool_names.append("mem0")
+                            elif t_lower == "perplexity":
+                                new_tool_names.append("perplexity(mcp)")
+                            # Playwrite 등 기타 도구는 무시
+                        # mem0이 없으면 추가
+                        if "mem0" not in new_tool_names:
+                            new_tool_names.insert(0, "mem0")
+                        # 중복 제거
+                        new_tool_names = list(dict.fromkeys(new_tool_names))
+                        sanitized_agent["tool_names"] = new_tool_names
                     else:
-                        sanitized_agent["tool_names"] = []
+                        sanitized_agent["tool_names"] = ["mem0"]
                 elif isinstance(value, (str, int, float, bool, list, dict)) or value is None:
                     # 기본 타입만 포함
                     sanitized_agent[key] = value
