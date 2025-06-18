@@ -1,21 +1,21 @@
 import asyncio
 import logging
-from typing import Optional, List
-import sys
-import os
 import json
+import os
+import sys
+from typing import Optional, List
 from contextvars import ContextVar
 from dotenv import load_dotenv
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from supabase import create_client, Client
 
 # 상위 디렉토리를 Python 경로에 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
-
 # 같은 디렉토리의 파일을 임포트
-from .start_multi_format import run_multi_format_generation  # main_multi_format.py가 아닌 start_multi_format.py를 사용
+from .start_multi_format import run_multi_format_generation
 from .context_manager import context_manager
-import psycopg2
-from psycopg2.extras import RealDictCursor
 
 # 로거 설정
 logger = logging.getLogger("todolist_poller")
@@ -25,6 +25,7 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
+# ContextVar 로 설정 저장
 db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
 
@@ -34,11 +35,13 @@ def setting_database():
         if os.getenv("ENV") != "production":
             load_dotenv()
 
+        # Supabase 클라이언트 설정
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_KEY")
         supabase: Client = create_client(supabase_url, supabase_key)
         supabase_client_var.set(supabase)
-        
+
+        # PostgreSQL 접속 정보 설정
         db_config = {
             "dbname": os.getenv("DB_NAME"),
             "user": os.getenv("DB_USER"),
@@ -47,184 +50,146 @@ def setting_database():
             "port": os.getenv("DB_PORT")
         }
         db_config_var.set(db_config)
-        
+
     except Exception as e:
         print(f"Database configuration error: {e}")
 
 
+# 초기 설정
 setting_database()
 
 
 async def fetch_pending_todolist(limit: int = 1) -> Optional[List[dict]]:
     """
-    start_date 기준 최신 1개 todolist 항목을 선점해서 반환합니다.
+    start_date 기준 최신 1개 todolist 항목을 row-level lock(FOR UPDATE SKIP LOCKED) 후 반환합니다.
+    반환 값에는 raw row, connection, cursor 번들을 포함합니다.
     """
-    try:
-        db_config = db_config_var.get()
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
+    db_config = db_config_var.get()
+    connection = psycopg2.connect(**db_config)
+    connection.autocommit = False
+    cursor = connection.cursor(cursor_factory=RealDictCursor)
 
-        # 최신 1개만 선점 (draft = '{}'), IN_PROGRESS와 DONE 상태 모두 처리
-        query = """
-            UPDATE todolist
-            SET draft = '{}'
-            WHERE id = (
-                SELECT id FROM todolist
-                WHERE agent_mode = 'DRAFT' AND draft IS NULL AND status IN ('IN_PROGRESS', 'DONE')
-                ORDER BY start_date ASC
-                LIMIT 1
-                FOR UPDATE SKIP LOCKED
-            )
-            RETURNING *;
-        """
-        cursor.execute(query)
-        row = cursor.fetchone()
-        connection.commit()
+    cursor.execute("""
+        SELECT *
+        FROM todolist
+        WHERE agent_mode = 'DRAFT'
+          AND draft IS NULL
+          AND status = 'IN_PROGRESS'
+        ORDER BY start_date ASC
+        LIMIT %s
+        FOR UPDATE SKIP LOCKED
+    """, (limit,))
+
+    row = cursor.fetchone()
+    if row:
+        return [{ 'row': row, 'connection': connection, 'cursor': cursor }]
+    else:
         cursor.close()
         connection.close()
-        return [row] if row else None
-    except Exception as e:
-        logger.error(f"DB fetch failed: {str(e)}")
         return None
 
-async def handle_todolist_item(item: dict):
+
+async def handle_todolist_item(bundle: dict):
     """
-    개별 todolist 항목을 처리합니다.
-    status가 IN_PROCESS인 경우: tool 필드에서 formHandler: 접두어를 제거하고 form_def 테이블에서 fields_json을 가져와 처리에 사용합니다.
-    status가 DONE인 경우: output 필드를 context에 저장합니다.
+    잠금된 todolist 항목을 처리합니다.
+    - 먼저 같은 proc_inst_id에 대해 status='DONE'인 모든 row를 조회하여 컨텍스트에 저장
+    - 이후 run_multi_format_generation 실행 및 draft 업데이트
     """
-    # Supabase 클라이언트를 미리 가져와서 스코프 문제 해결
-    supabase = supabase_client_var.get()
-    if supabase is None:
-        logger.error("Supabase client is not configured")
-        return
-        
+    row = bundle['row']
+    conn = bundle['connection']
+    cur = bundle['cursor']
+
     try:
-        logger.info(f"Processing todolist item: {item['id']}")
-        print(f"[처리중] activity_name: {item.get('activity_name')}, status: {item.get('status')}")
+        logger.info(f"Processing todolist item: {row['id']}")
 
-        # status에 따른 분기 처리
-        status = item.get('status')
-        
-        if status == 'DONE':
-            # DONE 상태인 경우 output을 context에 저장
-            output_data = item.get('output', {})
-            if item.get('proc_inst_id') and item.get('activity_name'):
+        proc_inst_id = row.get('proc_inst_id')
+        # 1) 이전에 완료된(DONE) 항목들을 컨텍스트에 저장
+        done_cursor = conn.cursor(cursor_factory=RealDictCursor)
+        done_cursor.execute(
+            "SELECT * FROM todolist WHERE proc_inst_id = %s AND status = 'DONE'",
+            (proc_inst_id,)
+        )
+        done_rows = done_cursor.fetchall()
+        for done in done_rows:
+            if done.get('activity_name'):
+                print(f"Saving context for {done.get('activity_name')}")
                 context_manager.save_context(
-                    proc_inst_id=item.get('proc_inst_id'),
-                    activity_name=item.get('activity_name'),
-                    content=output_data
+                    proc_inst_id=proc_inst_id,
+                    activity_name=done.get('activity_name'),
+                    content=done.get('output', {})
                 )
-                print(f"[DONE 상태] context 저장 완료: {item.get('activity_name')}")
-            
-            # draft를 빈 객체로 설정
-            supabase.table('todolist').update({
-                'draft': {}
-            }).eq('id', item['id']).execute()
-            return
-            
-        elif status == 'IN_PROGRESS':
-            # IN_PROGRESS 상태인 경우 실제 로직 실행
-            print(f"[IN_PROGRESS 상태] 실제 로직 실행: {item.get('activity_name')}")
-            
-            # tool 필드에서 formHandler: 제거하여 form_def id 추출
-            tool_value = item.get('tool', '') or ''
-            form_id = tool_value[12:] if tool_value.startswith('formHandler:') else tool_value
+        done_cursor.close()
 
-            # user_info 조회: email로 username 검색
-            user_email = item.get('user_id')
-            user_resp = supabase.table('users').select('username').eq('email', user_email).execute()
-            user_name = user_resp.data[0]['username'] if user_resp.data and len(user_resp.data) > 0 else None
-            user_info = {
-                'email': user_email,
-                'name': user_name,
-                'department': '인사팀',  # 하드코딩
-                'position': '사원'      # 하드코딩
-            }
+        # 2) IN_PROGRESS 항목에 대한 MultiFormatFlow 실행
+        tool_val = row.get('tool', '') or ''
+        form_id = tool_val[12:] if tool_val.startswith('formHandler:') else tool_val
 
-            # form_def에서 fields_json 조회
-            response = supabase.table('form_def').select('fields_json').eq('id', form_id).execute()
-            fields_json = None
-            if response.data and len(response.data) > 0:
-                fields_json = response.data[0].get('fields_json')
+        # user_info 조회
+        supabase = supabase_client_var.get()
+        user_email = row.get('user_id')
+        user_resp = supabase.table('users').select('username').eq('email', user_email).execute()
+        user_name = user_resp.data[0]['username'] if user_resp.data else None
+        user_info = {
+            'email': user_email,
+            'name': user_name,
+            'department': '인사팀',
+            'position': '사원'
+        }
 
-            # 새로운 코드
-            form_types = []
-            if fields_json:
-                for field in fields_json:
-                    field_type = field.get('type', '').lower()
-                    # report와 slide는 그대로 유지하고 나머지는 모두 text로 처리
-                    normalized_type = field_type if field_type in ['report', 'slide'] else 'text'
-                    form_types.append({
-                        'id': field.get('key'),
-                        'type': normalized_type,
-                        'key': field.get('key'),
-                        'text': field.get('text', '')
-                    })
+        # form_def 조회
+        resp = supabase.table('form_def').select('fields_json').eq('id', form_id).execute()
+        fields_json = resp.data[0].get('fields_json') if resp.data else None
 
-            # 만약 form_types가 비어있다면 기본값 추가
-            if not form_types:
-                form_types = [{'id': form_id, 'type': 'default'}]
+        # 필드 타입 정규화
+        form_types = []
+        if fields_json:
+            for f in fields_json:
+                t = f.get('type', '').lower()
+                norm = t if t in ['report', 'slide'] else 'text'
+                form_types.append({
+                    'id': f.get('key'),
+                    'type': norm,
+                    'key': f.get('key'),
+                    'text': f.get('text', '')
+                })
+        if not form_types:
+            form_types = [{'id': form_id, 'type': 'default'}]
 
-            # MultiFormatFlow 실행 (fields_json 및 user_info, todo_id, form_id 전달)
-            result = await run_multi_format_generation(
-                topic=item.get('activity_name', ''),
-                form_types=form_types,
-                user_info=user_info,
-                todo_id=item.get('id'),
-                proc_inst_id=item.get('proc_inst_id'),
-                form_id=form_id  # "formHandler:" 접두어가 제거된 실제 form_def id
-            )
-            
-            # 처리 완료 후 draft 업데이트
-            supabase.table('todolist').update({
-                'draft': result
-            }).eq('id', item['id']).execute()
-            
-        else:
-            # 다른 status는 처리하지 않음
-            print(f"[무시] 처리하지 않는 status: {status}")
-            return
+        # MultiFormatFlow 실행
+        result = await run_multi_format_generation(
+            topic=row.get('activity_name', ''),
+            form_types=form_types,
+            user_info=user_info,
+            todo_id=row.get('id'),
+            proc_inst_id=proc_inst_id,
+            form_id=form_id
+        )
+
+        # 3) draft 업데이트 및 COMMIT
+        cur.execute(
+            "UPDATE todolist SET draft = %s WHERE id = %s",
+            (json.dumps(result), row['id'])
+        )
+        conn.commit()
 
     except Exception as e:
-        logger.error(f"Error handling todolist item {item['id']}: {str(e)}")
-        
-        # 오류 발생 시 draft를 NULL로 되돌려서 재처리 가능하게 함
-        # 안전하게 여러 방법으로 시도
-        try:
-            supabase.table('todolist').update({
-                'draft': None
-            }).eq('id', item['id']).execute()
-            logger.info(f"Successfully reset draft for item {item['id']}")
-        except Exception as reset_error:
-            logger.error(f"Failed to reset draft for item {item['id']}: {str(reset_error)}")
-            # Supabase가 안되면 직접 PostgreSQL로 시도
-            try:
-                db_config = db_config_var.get()
-                connection = psycopg2.connect(**db_config)
-                cursor = connection.cursor()
-                cursor.execute("UPDATE todolist SET draft = NULL WHERE id = %s", (item['id'],))
-                connection.commit()
-                cursor.close()
-                connection.close()
-                logger.info(f"Successfully reset draft via PostgreSQL for item {item['id']}")
-            except Exception as pg_error:
-                logger.error(f"Failed to reset draft via PostgreSQL for item {item['id']}: {str(pg_error)}")
-                # 최악의 경우 수동 개입 필요
-                logger.critical(f"MANUAL INTERVENTION NEEDED: Item {item['id']} is stuck with draft='{{}}'")
+        logger.error(f"Error handling item {row['id']}: {e}")
+        conn.rollback()
+    finally:
+        cur.close()
+        conn.close()
 
 
 async def todolist_polling_task():
     """
-    todolist 테이블을 주기적으로 폴링하는 태스크
+    주기적으로 fetch -> handle 을 수행하는 태스크
     """
     while True:
         try:
             items = await fetch_pending_todolist()
             if items:
-                for item in items:
-                    await handle_todolist_item(item)
-            await asyncio.sleep(15)
+                for bundle in items:
+                    await handle_todolist_item(bundle)
         except Exception as e:
-            logger.error(f"Polling error: {str(e)}")
-            await asyncio.sleep(15) 
+            logger.error(f"Polling error: {e}")
+        await asyncio.sleep(15)
