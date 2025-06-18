@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, HttpUrl
 from typing import Optional, Dict, Any
 from uuid import uuid4
@@ -7,11 +7,14 @@ from a2a_agent_client import process_a2a_message, cleanup_resources
 from mem0_agent_client import process_mem0_message
 from fastapi.responses import StreamingResponse, JSONResponse
 
+import requests
+
 load_dotenv()
 
 def add_routes_to_app(app):
     app.add_api_route("/multi-agent/chat", chat_message, methods=["POST"])
     app.add_api_route("/multi-agent/health-check", health_check, methods=["GET"])
+    app.add_api_route("/multi-agent/fetch-data", fetch_data, methods=["GET"])
     app.add_event_handler("shutdown", cleanup_resources)
 
 class ChatMessage(BaseModel):
@@ -37,7 +40,8 @@ async def chat_message(message: ChatMessage):
                 text=message.text,
                 agent_url=agent_url,
                 task_id=task_id,
-                context_id=chat_room_id
+                context_id=chat_room_id,
+                stream=True
             )
             
             if isinstance(response, StreamingResponse):
@@ -67,4 +71,17 @@ async def chat_message(message: ChatMessage):
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy"}
+
+def fetch_data(agent_url: str = Query(..., description="Agent URL to fetch data from")):
+    """Fetch agent data endpoint."""
+    try:
+        if not agent_url.startswith(('http://', 'https://')):
+            agent_url = 'http://' + agent_url
+        agent_data = requests.get(
+            f'{agent_url}/.well-known/agent.json'
+        )
+        return agent_data.json()
+    except Exception as e:
+        print(f"Error in fetch_data endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 

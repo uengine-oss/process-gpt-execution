@@ -5,8 +5,10 @@ from langchain.output_parsers.json import SimpleJsonOutputParser
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 
-from database import WorkItem, fetch_process_instance, fetch_process_definition, fetch_organization_chart, fetch_user_info, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance
+from database import WorkItem, fetch_process_instance, fetch_process_definition, fetch_organization_chart, fetch_user_info, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, fetch_agent_by_id, fetch_ui_definition_by_activity_id, fetch_todolist_by_proc_inst_id
 from process_definition import ProcessDefinition
+from a2a_agent_client import process_a2a_message
+
 import uuid
 import json
 import pytz
@@ -156,6 +158,270 @@ def process_output(workitem, tenant_id):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+############## start of handle workitem with agent #############
+agent_request_prompt = PromptTemplate.from_template(
+"""
+Please create a request text for the agent using the information provided below. 
+
+Previous Output: {previous_output}
+Workitem: {workitem}
+
+Generate a clear and concise request text that the agent can understand and process.
+The text should include all relevant context from the previous output and workitem information.
+"""
+)
+
+output_processing_prompt = PromptTemplate.from_template(
+"""
+Please process the agent's response and convert it to the required output format.
+
+Agent Response: {agent_response}
+Form Id: {form_id}
+Form Fields: {form_fields}
+
+Convert the agent's response into the following JSON format:
+{{
+    "form_id": {{
+        "field_key": "field value",
+        ...
+    }}
+}}
+
+Map the agent's response to the appropriate form fields based on the context and form structure.
+The form_id should be the key, and the field values should be directly under it.
+Do not include any nested "output" or "fields" structure.
+IMPORTANT: Return ONLY valid JSON without any comments, explanations, or additional text.
+If a field value is not available from the agent response, use an empty string "" instead of adding comments.
+"""
+)
+
+def check_agent_workitem(user_id: str, is_name: bool = False, process_definition: ProcessDefinition = None):
+    try:
+        id = None
+        if is_name:
+            roles = process_definition.roles
+            for role in roles:
+                if role.name == user_id:
+                    id = role.endpoint
+                    break
+        else:
+            id = user_id
+        
+        if isinstance(id, list):
+            for agent_id in id:
+                agent = fetch_agent_by_id(agent_id)
+                if agent:
+                    return agent
+            return None
+        else:
+            agent = fetch_agent_by_id(id)
+            return agent
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+preprocessing_chain = (
+    agent_request_prompt | model
+)
+
+output_processing_chain = (
+    output_processing_prompt | model | parser
+)
+
+async def generate_agent_request_text(prev_workitem, current_workitem, tenant_id):
+    """Step 1: LLM에게 output과 workitem 정보를 주고 에이전트 요청 텍스트 생성"""
+    try:
+        worklist = fetch_todolist_by_proc_inst_id(prev_workitem["proc_inst_id"], tenant_id)
+        previous_output = {}
+        if worklist:
+            for todo_item in worklist:
+                if hasattr(todo_item, 'output') and todo_item.output is not None:
+                    previous_output[todo_item.activity_id] = todo_item.output
+
+        preprocessing_input = {
+            "previous_output": previous_output,
+            "workitem": current_workitem.dict() if current_workitem else {}
+        }
+        response = await preprocessing_chain.ainvoke(preprocessing_input)
+        
+        request_text = response.content if hasattr(response, 'content') else str(response)
+        
+        upsert_workitem({
+            "id": current_workitem.id,
+            "log": f"에이전트에게 전송할 메시지를 생성하였습니다..."
+        }, tenant_id)
+        
+        return request_text
+    except Exception as e:
+        print(f"[ERROR] Failed to generate agent request text: {str(e)}")
+        raise e
+
+async def send_request_to_agent(request_text, agent_url, current_workitem, proc_inst_id):
+    """Step 2: 생성된 텍스트를 A2A에 전송"""
+    try:
+        upsert_workitem({
+            "id": current_workitem.id,
+            "log": f"에이전트에게 메시지를 전송 중 입니다..."
+        }, current_workitem.tenant_id)
+        
+        agent_response = await process_a2a_message(
+            text=request_text, 
+            agent_url=agent_url,
+            task_id=current_workitem.id if current_workitem else None,
+            context_id=proc_inst_id,
+            stream=False
+        )
+        
+        if hasattr(agent_response, 'content'):
+            agent_response = agent_response.content
+        elif not isinstance(agent_response, str):
+            agent_response = str(agent_response)
+        
+        upsert_workitem({
+            "id": current_workitem.id,
+            "log": f"에이전트에게 응답을 받았습니다..."
+        }, current_workitem.tenant_id)
+        
+        return agent_response
+    except Exception as e:
+        print(f"[ERROR] Failed to send request to agent: {str(e)}")
+        raise e
+
+async def process_agent_response(agent_response, form, current_workitem):
+    """Step 3: A2A 응답을 LLM에게 form 정보와 함께 전달하여 output JSON 형식으로 반환"""
+    try:
+        upsert_workitem({
+            "id": current_workitem.id,
+            "log": f"에이전트에게 받은 응답을 기반으로 결과를 처리 중 입니다..."
+        }, current_workitem.tenant_id)
+        
+        output_processing_input = {
+            "agent_response": agent_response,
+            "form_id": form.id if form else None,
+            "form_fields": form.fields_json if form else {}
+        }
+        final_output = await output_processing_chain.ainvoke(output_processing_input)
+        
+        if hasattr(final_output, 'content'):
+            final_output = final_output.content
+        elif not isinstance(final_output, (dict, str)):
+            final_output = str(final_output)
+        
+        if isinstance(final_output, str):
+            lines = final_output.split('\n')
+            cleaned_lines = []
+            for line in lines:
+                stripped_line = line.strip()
+                if not stripped_line.startswith('//') and not stripped_line.startswith('#') and stripped_line:
+                    cleaned_lines.append(line)
+            final_output = '\n'.join(cleaned_lines)
+            
+            try:
+                import json
+                final_output = json.loads(final_output)
+            except json.JSONDecodeError as e:
+                print(f"[WARNING] JSON parsing failed, treating as string: {str(e)}")
+                final_output = {}
+        
+        if isinstance(final_output, dict):
+            if 'output' in final_output and isinstance(final_output['output'], dict):
+                if 'fields' in final_output['output']:
+                    form_id = final_output['output'].get('form_id', form.id if form else 'unknown_form')
+                    field_values = final_output['output']['fields']
+                    final_output = {form_id: field_values}
+                elif 'form_id' in final_output['output']:
+                    form_id = final_output['output']['form_id']
+                    field_values = {k: v for k, v in final_output['output'].items() if k != 'form_id'}
+                    final_output = {form_id: field_values}
+            elif 'output' in final_output:
+                final_output = final_output['output']
+        
+        upsert_workitem({
+            "id": current_workitem.id,
+            "status": "SUBMITTED",
+            "consumer": None,
+            "output": final_output,
+            "log": f"Agent processing completed successfully"
+        }, current_workitem.tenant_id)
+        
+        return final_output
+    except Exception as e:
+        print(f"[ERROR] Failed to process agent response: {str(e)}")
+        raise e
+
+async def handle_workitem_with_agent(prev_workitem, activity, agent):
+    try:
+        if agent:
+            proc_def_id = prev_workitem["proc_def_id"]
+            proc_inst_id = prev_workitem["proc_inst_id"]
+            tenant_id = prev_workitem["tenant_id"]
+            activity_id = activity.id
+            agent_url = agent.get("url")
+            
+            current_workitem = fetch_workitem_by_proc_inst_and_activity(proc_inst_id, activity_id, tenant_id)
+            if not current_workitem:
+                print(f"[ERROR] Workitem not found for activity {activity_id}")
+                return None
+                
+            form = None
+            if current_workitem:
+                form = fetch_ui_definition_by_activity_id(proc_def_id, activity_id, tenant_id)
+            
+            # Step 1: 에이전트 요청 텍스트 생성 (최대 3회 재시도)
+            request_text = None
+            for attempt in range(3):
+                try:
+                    upsert_workitem({
+                        "id": current_workitem.id,
+                        "log": f"에이전트가 업무를 시작합니다..."
+                    }, tenant_id)
+                    request_text = await generate_agent_request_text(prev_workitem, current_workitem, tenant_id)
+                    break
+                except Exception as e:
+                    if attempt == 2:  # 마지막 시도
+                        print(f"[ERROR] Failed to generate request text after 3 attempts: {str(e)}")
+                        return None
+                    print(f"[WARNING] Request text generation failed, retrying... (attempt {attempt + 1}/3)")
+            
+            # Step 2: A2A에 요청 전송 (최대 3회 재시도)
+            agent_response = None
+            for attempt in range(3):
+                try:
+                    agent_response = await send_request_to_agent(request_text, agent_url, current_workitem, proc_inst_id)
+                    break
+                except Exception as e:
+                    if attempt == 2:  # 마지막 시도
+                        print(f"[ERROR] Failed to send request to agent after 3 attempts: {str(e)}")
+                        return None
+                    print(f"[WARNING] Agent request failed, retrying... (attempt {attempt + 1}/3)")
+            
+            # Step 3: 에이전트 응답 처리 (최대 3회 재시도)
+            final_output = None
+            for attempt in range(3):
+                try:
+                    final_output = await process_agent_response(agent_response, form, current_workitem)
+                    break
+                except Exception as e:
+                    if attempt == 2:  # 마지막 시도
+                        print(f"[ERROR] Failed to process agent response after 3 attempts: {str(e)}")
+                        return None
+                    print(f"[WARNING] Agent response processing failed, retrying... (attempt {attempt + 1}/3)")
+            
+            return final_output
+            
+    except Exception as e:
+        if 'current_workitem' in locals() and current_workitem:
+            upsert_workitem({
+                "id": current_workitem.id,
+                "status": "DONE",
+                "consumer": None,
+                "log": f"Agent processing failed for activity {activity.id}: {str(e)}"
+            }, tenant_id)
+            print(f"[ERROR] Agent processing failed for activity {activity.id}: {str(e)}")
+
+        print(f"[ERROR] Agent processing failed for activity {activity.id}: {str(e)}")
+        return None
+############## end of handle workitem with agent #############
+
 ############# start of role binding #############
 role_binding_prompt = PromptTemplate.from_template(
     """
@@ -210,8 +476,6 @@ async def combine_input_with_role_binding(request: Request):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-############# end of role binding #############
-
 
 def add_routes_to_app(app) :
     app.add_api_route("/complete", handle_submit, methods=["POST"])
