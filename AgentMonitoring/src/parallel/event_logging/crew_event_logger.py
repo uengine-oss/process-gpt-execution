@@ -149,33 +149,11 @@ class CrewAIEventLogger:
 
     # === Job ID Generation ===
     def _generate_job_id(self, event_obj: TypeAny, source: TypeAny) -> str:
-        """Task/Agent 이벤트 매칭을 위한 job_id 생성 (최적화)"""
-        
-        # 🎯 Task 이벤트: source_fingerprint 사용
-        if event_obj.type.startswith('task_'):
-            if hasattr(event_obj, 'source_fingerprint') and event_obj.source_fingerprint:
-                return str(event_obj.source_fingerprint)
-        
-        # 🎯 Agent 이벤트: 연관된 task ID 찾기 (최적화된 순서)
-        elif event_obj.type.startswith('agent_'):
-            if hasattr(event_obj, 'task') and event_obj.task:
-                
-                # 🥇 1순위: task의 security_config.fingerprint.uuid_str (가장 일반적)
-                if (hasattr(event_obj.task, 'security_config') and 
-                    hasattr(event_obj.task.security_config, 'fingerprint') and
-                    hasattr(event_obj.task.security_config.fingerprint, 'uuid_str')):
-                    task_id = event_obj.task.security_config.fingerprint.uuid_str
-                    return str(task_id)
-                
-                # 🥈 2순위: task의 source_fingerprint (대안)
-                if hasattr(event_obj.task, 'source_fingerprint') and event_obj.task.source_fingerprint:
-                    return str(event_obj.task.source_fingerprint)
-            
-            # 🥉 3순위: agent 자체의 source_fingerprint (fallback)
-            if hasattr(event_obj, 'source_fingerprint') and event_obj.source_fingerprint:
-                return str(event_obj.source_fingerprint)
-        
-        # ❌ 기본값
+        # 항상 task.id 사용
+        if hasattr(event_obj, 'task') and hasattr(event_obj.task, 'id'):
+            return str(event_obj.task.id)
+        if source and hasattr(source, 'task') and hasattr(source.task, 'id'):
+            return str(source.task.id)
         return 'unknown'
 
     # === Event Signature Creation ===
@@ -194,89 +172,29 @@ class CrewAIEventLogger:
 
     # === Event Data Extraction ===
     def _extract_event_data(self, event_obj: TypeAny, source: Optional[TypeAny] = None) -> Dict[str, Any]:
-        """기본 이벤트 데이터만 추출 (role, goal, final_result)"""
         event_type = event_obj.type
-        
         try:
-            # 🚫 Agent 이벤트 주석 처리 - 필요 없음
-            # if event_type == "agent_execution_started":
-            #     return {
-            #         "role": event_obj.agent.role,
-            #         "goal": event_obj.agent.goal
-            #     }
-            #     
-            # elif event_type == "agent_execution_completed":
-            #     return {
-            #         "role": event_obj.agent.role,
-            #         "goal": event_obj.agent.goal,
-            #         "final_result": event_obj.output
-            #     }
-            #     
-            # elif event_type == "agent_execution_failed":
-            #     return {
-            #         "role": getattr(event_obj.agent, 'role', 'Unknown') if hasattr(event_obj, 'agent') else 'Unknown',
-            #         "goal": getattr(event_obj.agent, 'goal', 'Unknown') if hasattr(event_obj, 'agent') else 'Unknown',
-            #         "error": str(getattr(event_obj, 'error', 'Unknown error'))
-            #     }
-            
-            # ✅ Task 이벤트만 유지
             if event_type == "task_started":
-                role = event_obj.task.agent.role if hasattr(event_obj.task, 'agent') else "Unknown"
+                role = getattr(event_obj.task.agent, 'role', 'Unknown')
+                goal = getattr(event_obj.task.agent, 'goal', 'Unknown')
                 agent_profile = GlobalContextManager.get_profile_by_role(role)
-                return {
-                    "role": role,
-                    "goal": event_obj.task.agent.goal if hasattr(event_obj.task, 'agent') else "Unknown",
-                    "agent_profile": agent_profile
-                    }
-                
+                return {"role": role, "goal": goal, "agent_profile": agent_profile}
             elif event_type == "task_completed":
-                # 🔧 강력한 TaskOutput 처리 - 모든 경우의 수 대응
-                final_result = "Completed"
-                if hasattr(event_obj, 'output'):
+                final_result = getattr(event_obj, 'output', 'Completed')
+                return {"final_result": str(final_result)}
+            elif event_type.startswith('tool_'):
+                tool_name = getattr(event_obj, 'tool_name', None)
+                tool_args = getattr(event_obj, 'tool_args', None)
+                query = None
+                if tool_args:
                     try:
-                        output_obj = event_obj.output
-                        
-                        # 1. .raw 속성이 있는 경우
-                        if hasattr(output_obj, 'raw'):
-                            final_result = str(output_obj.raw)
-                        
-                        # 2. 문자열로 변환 가능한 경우
-                        elif isinstance(output_obj, str):
-                            final_result = output_obj
-                        
-                        # 3. 기타 모든 경우 - 강제 문자열 변환
-                        else:
-                            final_result = str(output_obj)
-                            
-                    except Exception as e:
-                        logger.warning(f"TaskOutput 변환 실패: {e}")
-                        final_result = "Task completed (output conversion failed)"
-                
-                result_data = {
-                    "final_result": final_result  # 이제 확실히 문자열
-                }
-                
-                return result_data
-                
-            elif event_type == "task_failed":
-                role = event_obj.task.agent.role if hasattr(event_obj.task, 'agent') else "Unknown"
-                agent_profile = GlobalContextManager.get_profile_by_role(role)
-                return {
-                    "role": role,
-                    "goal": event_obj.task.description if hasattr(event_obj.task, 'description') else "Unknown", 
-                    "error": str(getattr(event_obj, 'error', 'Task failed')),
-                    "agent_profile": agent_profile
-                }
-            
-            # 🆕 커스텀 이벤트 (crew_started, crew_completed)
-            elif event_type in ["crew_started", "crew_completed"]:
-                # 커스텀 이벤트는 이미 data가 준비되어 있음
-                return getattr(event_obj, 'data', {})
-                
+                        args_dict = json.loads(tool_args)
+                        query = args_dict.get('query')
+                    except Exception:
+                        query = None
+                return {"tool_name": tool_name, "query": query}
             else:
-                # 다른 이벤트 타입은 기본 데이터만 반환
                 return {"info": f"Event type: {event_type}"}
-            
         except Exception as e:
             logger.error(f"Error extracting event data: {e}")
             return {"error": f"Failed to extract data: {str(e)}"}
@@ -329,7 +247,7 @@ class CrewAIEventLogger:
 
     # === Event Processing Entry Point ===
     def on_event(self, event_obj: TypeAny, source: Optional[TypeAny] = None) -> None:
-        """Task 이벤트만 처리 (Agent/Crew 이벤트는 완전히 제외)"""
+        """Task와 Tool 이벤트 처리 (Agent/Crew 이벤트는 완전히 제외)"""
         try:
             # 🚫 Crew 이벤트 완전 차단
             if event_obj.type.startswith('crew_'):
@@ -339,8 +257,8 @@ class CrewAIEventLogger:
             if event_obj.type.startswith('agent_'):
                 return  # 조용히 무시
             
-            # ✅ Task 이벤트만 처리
-            if not event_obj.type.startswith('task_'):
+            # ✅ Task 이벤트와 Tool 이벤트만 처리
+            if not (event_obj.type.startswith('task_') or event_obj.type.startswith('tool_')):
                 return  # 조용히 무시
             
             # 중복 제거
@@ -393,7 +311,8 @@ class CrewAIEventLogger:
             self._write_to_backends(event_record)
             
             # 출신 정보 포함한 상세한 콘솔 출력
-            print(f"📝 [{event_obj.type}] [{crew_type}] {job_id[:8]} → 파일: ❌(비활성화), Supabase: {'✅' if self.supabase_client else '❌'}")
+            tool_info = f" ({safe_data.get('tool_name', 'unknown tool')})" if event_obj.type.startswith('tool_') else ""
+            print(f"📝 [{event_obj.type}]{tool_info} [{crew_type}] {job_id[:8]} → 파일: ❌(비활성화), Supabase: {'✅' if self.supabase_client else '❌'}")
             
         except Exception as e:
             logger.error(f"❌ 이벤트 처리 실패 ({getattr(event_obj, 'type', 'unknown')}): {e}")

@@ -80,7 +80,7 @@ class DynamicReportFlow(Flow[DynamicReportState]):
             print("✅ AgentsRepository 초기화 완료")
         except Exception as e:
             print(f"❌ AgentsRepository 초기화 실패: {e}")
-            raise e
+            self.agents_repo = None
         
         print("🚀 DynamicReportFlow 초기화 완료")
 
@@ -132,7 +132,15 @@ class DynamicReportFlow(Flow[DynamicReportState]):
             print("   └─ 이전 컨텍스트 없음 - 첫 번째 단계로 가정")
         
         # Supabase에서 agents 조회 (🆕 안전한 도구 처리 포함)
-        available_agents = await agent_matching_crew.get_available_agents()
+        try:
+            available_agents = await agent_matching_crew.get_available_agents()
+            if not available_agents:
+                print("⚠️ 조회된 에이전트 없음 - 기본 에이전트 사용")
+                available_agents = self._get_fallback_agents()
+        except Exception as e:
+            print(f"❌ 에이전트 조회 실패: {e} - 기본 에이전트 사용")
+            available_agents = self._get_fallback_agents()
+        
         print(f"✅ {len(available_agents)}개 에이전트 조회 완료 (안전한 도구 처리됨)")
         
         # role -> profile 매핑 설정
@@ -437,6 +445,17 @@ class DynamicReportFlow(Flow[DynamicReportState]):
             "agents_repo_status": "연결됨" if self.agents_repo else "연결 안됨",
             "tool_status": self.safe_tool_loader.get_tool_connection_status() if self.safe_tool_loader else {},
         }
+
+    def _get_fallback_agents(self) -> List[Dict[str, Any]]:
+        """기본 6개 에이전트 반환 (agents_repo 실패시)"""
+        return [
+            {"name": "리서처", "role": "researcher", "goal": "정보 조사", "persona": "분석적 연구원", "tool_names": ["mem0"]},
+            {"name": "분석가", "role": "analyst", "goal": "데이터 분석", "persona": "논리적 분석가", "tool_names": ["mem0"]},
+            {"name": "작성자", "role": "writer", "goal": "글 작성", "persona": "창의적 작가", "tool_names": ["mem0"]},
+            {"name": "검토자", "role": "reviewer", "goal": "품질 검토", "persona": "세심한 검토자", "tool_names": ["mem0"]},
+            {"name": "기획자", "role": "planner", "goal": "계획 수립", "persona": "체계적 기획자", "tool_names": ["mem0"]},
+            {"name": "전문가", "role": "expert", "goal": "전문 자문", "persona": "해박한 전문가", "tool_names": ["mem0"]}
+        ]
 
 
 def plot():

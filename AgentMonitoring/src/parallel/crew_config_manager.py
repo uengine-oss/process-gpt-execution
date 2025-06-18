@@ -71,6 +71,15 @@ class CrewConfigManager:
         from crewai.utilities.events.task_events import TaskStartedEvent, TaskCompletedEvent
         from crewai.utilities.events.agent_events import AgentExecutionStartedEvent, AgentExecutionCompletedEvent
 
+        # 🆕 Tool 이벤트 추가 (단순화)
+        try:
+            from crewai.utilities.events import (
+                ToolUsageStartedEvent, ToolUsageFinishedEvent
+            )
+            tool_events_available = True
+        except ImportError:
+            tool_events_available = False
+
         # 🆕 Flow와 LLM 이벤트 추가
         try:
             from crewai.utilities.events import (
@@ -89,6 +98,13 @@ class CrewConfigManager:
             AgentExecutionStartedEvent,
             AgentExecutionCompletedEvent
         ]
+        
+        # 🆕 Tool 이벤트 추가 (사용 가능한 경우)
+        if tool_events_available:
+            events.extend([
+                ToolUsageStartedEvent, ToolUsageFinishedEvent
+            ])
+            print("🔧 Tool 이벤트 추가됨")
         
         # 🆕 Flow/LLM 이벤트 추가 (사용 가능한 경우)
         if flow_llm_events_available:
@@ -150,6 +166,15 @@ class CrewConfigManager:
             
         elif event_type == "llm_call_completed":
             print(f"\n✅ AI 응답 완료!")
+            
+        # 🆕 Tool 이벤트 처리 (단순화)
+        elif event_type == "tool_usage_started":
+            tool_name = getattr(event, 'tool_name', 'unknown')
+            print(f"🔧 {tool_name} 도구를 사용하고 있습니다...")
+            
+        elif event_type == "tool_usage_finished":
+            tool_name = getattr(event, 'tool_name', 'unknown')
+            print(f"✅ {tool_name} 도구 사용 완료!")
             
         # Agent 이벤트에 더 친근한 메시지 추가
         elif event_type == "agent_execution_started":
