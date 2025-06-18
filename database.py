@@ -469,6 +469,7 @@ class WorkItem(BaseModel):
     retry: Optional[int] = 0
     consumer: Optional[str] = None
     log: Optional[str] = None
+    agent_mode: Optional[str] = None
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
@@ -688,15 +689,19 @@ def fetch_todolist_by_user_id(user_id: str) -> Optional[List[WorkItem]]:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
-def fetch_todolist_by_proc_inst_id(proc_inst_id: str) -> Optional[List[WorkItem]]:
+def fetch_todolist_by_proc_inst_id(proc_inst_id: str, tenant_id: Optional[str] = None) -> Optional[List[WorkItem]]:
     try:
         supabase = supabase_client_var.get()
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
         
         subdomain = subdomain_var.get()
-        response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('tenant_id', subdomain).execute()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('tenant_id', tenant_id).execute()
         
+
         if response.data:
             return [WorkItem(**item) for item in response.data]
         else:
@@ -985,7 +990,8 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     due_date=due_date,
                     tenant_id=tenant_id,
                     assignees=assignees if assignees else [],
-                    duration=activity.duration
+                    duration=activity.duration,
+                    agent_mode="DRAFT"
                 )
                 workitem_dict = workitem.dict()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
@@ -1771,3 +1777,13 @@ async def notification_polling_task():
 
 
 
+def fetch_agent_by_id(agent_id: str) -> Optional[dict]:
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table("agents").select("*").eq('id', agent_id).execute()
+        return response.data[0]
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
