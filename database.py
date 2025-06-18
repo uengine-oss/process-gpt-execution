@@ -1220,7 +1220,8 @@ def fetch_assignee_info(assignee_id: str) -> Dict[str, str]:
                 # 유저를 찾을 수 없으면 에이전트 정보를 찾아봅니다
                 try:
                     agent_info = fetch_agent_by_id(assignee_id)
-                    is_a2a = agent_info.get("url") is not None
+                    url = agent_info.get("url")
+                    is_a2a = url is not None and url.strip() != ""
                     return {
                         "type": "a2a" if is_a2a else "agent",
                         "id": assignee_id,
