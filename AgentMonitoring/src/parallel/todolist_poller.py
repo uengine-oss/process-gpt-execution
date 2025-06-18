@@ -64,13 +64,13 @@ async def fetch_pending_todolist(limit: int = 1) -> Optional[List[dict]]:
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor(cursor_factory=RealDictCursor)
 
-        # 최신 1개만 선점 (draft = '{}')
+        # 최신 1개만 선점 (draft = '{}'), IN_PROGRESS와 DONE 상태 모두 처리
         query = """
             UPDATE todolist
             SET draft = '{}'
             WHERE id = (
                 SELECT id FROM todolist
-                WHERE is_agent = 'REQUIRED' AND draft IS NULL
+                WHERE agent_mode = 'DRAFT' AND draft IS NULL AND status IN ('IN_PROGRESS', 'DONE')
                 ORDER BY start_date ASC
                 LIMIT 1
                 FOR UPDATE SKIP LOCKED
@@ -90,8 +90,8 @@ async def fetch_pending_todolist(limit: int = 1) -> Optional[List[dict]]:
 async def handle_todolist_item(item: dict):
     """
     개별 todolist 항목을 처리합니다.
-    tool 필드에서 formHandler: 접두어를 제거하고 form_def 테이블에서 fields_json을 가져와 처리에 사용합니다.
-    첫번째 시퀀스 액티비티면 context에 output 저장만 하고 draft만 빈 객체로.
+    status가 IN_PROCESS인 경우: tool 필드에서 formHandler: 접두어를 제거하고 form_def 테이블에서 fields_json을 가져와 처리에 사용합니다.
+    status가 DONE인 경우: output 필드를 context에 저장합니다.
     """
     # Supabase 클라이언트를 미리 가져와서 스코프 문제 해결
     supabase = supabase_client_var.get()
@@ -101,50 +101,13 @@ async def handle_todolist_item(item: dict):
         
     try:
         logger.info(f"Processing todolist item: {item['id']}")
-        print(f"[처리중] activity_name: {item.get('activity_name')}")
+        print(f"[처리중] activity_name: {item.get('activity_name')}, status: {item.get('status')}")
 
-        # tool 필드에서 formHandler: 제거하여 form_def id 추출
-        tool_value = item.get('tool', '') or ''
-        form_id = tool_value[12:] if tool_value.startswith('formHandler:') else tool_value
-
-        # user_info 조회: email로 username 검색
-        user_email = item.get('user_id')
-        user_resp = supabase.table('users').select('username').eq('email', user_email).execute()
-        user_name = user_resp.data[0]['username'] if user_resp.data and len(user_resp.data) > 0 else None
-        user_info = {
-            'email': user_email,
-            'name': user_name,
-            'department': '인사팀',  # 하드코딩
-            'position': '사원'      # 하드코딩
-        }
-
-        # proc_def에서 definition(시퀀스) 조회 및 첫번째 target(activity_id) 출력/비교
-        proc_def_id = item.get('proc_def_id')
-        is_first_activity = False
-        if proc_def_id:
-            proc_def_resp = supabase.table('proc_def').select('definition').eq('id', proc_def_id).execute()
-            if proc_def_resp.data:
-                # 모든 proc_def 결과에서 start_event의 target들 수집
-                start_targets = []
-                for proc_data in proc_def_resp.data:
-                    try:
-                        definition_str = proc_data.get('definition')
-                        definition = json.loads(definition_str) if isinstance(definition_str, str) else definition_str
-                        sequences = definition.get('sequences', [])
-                        for seq in sequences:
-                            if seq.get('source') == 'start_event':
-                                start_targets.append(seq.get('target'))
-                    except Exception as e:
-                        logger.error(f"Error parsing proc_def definition: {e}")
-                
-                print(f"[시퀀스 첫번째(실제 시작) targets] {start_targets}")
-                if item.get('activity_id') in start_targets:
-                    is_first_activity = True
-            else:
-                logger.warning(f"No proc_def found for id {proc_def_id}")
-
-        if is_first_activity:
-            # 첫 번째 액티비티면 output을 context에 저장하고 draft만 빈 객체로
+        # status에 따른 분기 처리
+        status = item.get('status')
+        
+        if status == 'DONE':
+            # DONE 상태인 경우 output을 context에 저장
             output_data = item.get('output', {})
             if item.get('proc_inst_id') and item.get('activity_name'):
                 context_manager.save_context(
@@ -152,50 +115,76 @@ async def handle_todolist_item(item: dict):
                     activity_name=item.get('activity_name'),
                     content=output_data
                 )
+                print(f"[DONE 상태] context 저장 완료: {item.get('activity_name')}")
+            
+            # draft를 빈 객체로 설정
             supabase.table('todolist').update({
                 'draft': {}
             }).eq('id', item['id']).execute()
-            print(f"[첫번째 액티비티] context 저장 및 draft 완료: {item.get('activity_name')}")
             return
+            
+        elif status == 'IN_PROGRESS':
+            # IN_PROGRESS 상태인 경우 실제 로직 실행
+            print(f"[IN_PROGRESS 상태] 실제 로직 실행: {item.get('activity_name')}")
+            
+            # tool 필드에서 formHandler: 제거하여 form_def id 추출
+            tool_value = item.get('tool', '') or ''
+            form_id = tool_value[12:] if tool_value.startswith('formHandler:') else tool_value
 
-        # form_def에서 fields_json 조회
-        response = supabase.table('form_def').select('fields_json').eq('id', form_id).execute()
-        fields_json = None
-        if response.data and len(response.data) > 0:
-            fields_json = response.data[0].get('fields_json')
+            # user_info 조회: email로 username 검색
+            user_email = item.get('user_id')
+            user_resp = supabase.table('users').select('username').eq('email', user_email).execute()
+            user_name = user_resp.data[0]['username'] if user_resp.data and len(user_resp.data) > 0 else None
+            user_info = {
+                'email': user_email,
+                'name': user_name,
+                'department': '인사팀',  # 하드코딩
+                'position': '사원'      # 하드코딩
+            }
 
-        # 새로운 코드
-        form_types = []
-        if fields_json:
-            for field in fields_json:
-                field_type = field.get('type', '').lower()
-                # report와 slide는 그대로 유지하고 나머지는 모두 text로 처리
-                normalized_type = field_type if field_type in ['report', 'slide'] else 'text'
-                form_types.append({
-                    'id': field.get('key'),
-                    'type': normalized_type,
-                    'key': field.get('key'),
-                    'text': field.get('text', '')
-                })
+            # form_def에서 fields_json 조회
+            response = supabase.table('form_def').select('fields_json').eq('id', form_id).execute()
+            fields_json = None
+            if response.data and len(response.data) > 0:
+                fields_json = response.data[0].get('fields_json')
 
-        # 만약 form_types가 비어있다면 기본값 추가
-        if not form_types:
-            form_types = [{'id': form_id, 'type': 'default'}]
+            # 새로운 코드
+            form_types = []
+            if fields_json:
+                for field in fields_json:
+                    field_type = field.get('type', '').lower()
+                    # report와 slide는 그대로 유지하고 나머지는 모두 text로 처리
+                    normalized_type = field_type if field_type in ['report', 'slide'] else 'text'
+                    form_types.append({
+                        'id': field.get('key'),
+                        'type': normalized_type,
+                        'key': field.get('key'),
+                        'text': field.get('text', '')
+                    })
 
-        # MultiFormatFlow 실행 (fields_json 및 user_info, todo_id, form_id 전달)
-        result = await run_multi_format_generation(
-            topic=item.get('activity_name', ''),
-            form_types=form_types,
-            user_info=user_info,
-            todo_id=item.get('id'),
-            proc_inst_id=item.get('proc_inst_id'),
-            form_id=form_id  # "formHandler:" 접두어가 제거된 실제 form_def id
-        )
-        
-        # 처리 완료 후 draft 업데이트
-        supabase.table('todolist').update({
-            'draft': result
-        }).eq('id', item['id']).execute()
+            # 만약 form_types가 비어있다면 기본값 추가
+            if not form_types:
+                form_types = [{'id': form_id, 'type': 'default'}]
+
+            # MultiFormatFlow 실행 (fields_json 및 user_info, todo_id, form_id 전달)
+            result = await run_multi_format_generation(
+                topic=item.get('activity_name', ''),
+                form_types=form_types,
+                user_info=user_info,
+                todo_id=item.get('id'),
+                proc_inst_id=item.get('proc_inst_id'),
+                form_id=form_id  # "formHandler:" 접두어가 제거된 실제 form_def id
+            )
+            
+            # 처리 완료 후 draft 업데이트
+            supabase.table('todolist').update({
+                'draft': result
+            }).eq('id', item['id']).execute()
+            
+        else:
+            # 다른 status는 처리하지 않음
+            print(f"[무시] 처리하지 않는 status: {status}")
+            return
 
     except Exception as e:
         logger.error(f"Error handling todolist item {item['id']}: {str(e)}")

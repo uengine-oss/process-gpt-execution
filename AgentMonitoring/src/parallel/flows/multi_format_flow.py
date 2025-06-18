@@ -133,7 +133,25 @@ class MultiFormatFlow(Flow[MultiFormatState]):
             except:
                 asyncio.run(load_agents())
         except Exception as e:
-            print(f"⚠️ Profile 매핑 설정 실패: {e}")
+            print(f"⚠️ Profile 매핑 설정 실패: {e} - 기본 매핑 사용")
+            self._set_fallback_profile_mapping()
+    
+    def _set_fallback_profile_mapping(self):
+        """기본 프로필 매핑 설정"""
+        try:
+            from ..event_logging.crew_event_logger import GlobalContextManager
+            fallback_mapping = {
+                "researcher": "정보수집 및 분석 전문가",
+                "analyst": "데이터 분석 및 인사이트 전문가", 
+                "writer": "콘텐츠 작성 및 편집 전문가",
+                "reviewer": "품질 검토 및 개선 전문가",
+                "planner": "전략 수립 및 기획 전문가",
+                "expert": "분야별 전문 지식 자문가"
+            }
+            GlobalContextManager.set_role_profile_mapping(fallback_mapping)
+            print(f"🔧 기본 프로필 매핑 설정: {len(fallback_mapping)}개")
+        except Exception as e:
+            print(f"❌ 기본 프로필 매핑 설정도 실패: {e}")
 
     def _get_previous_context(self) -> Dict[str, Any]:
         """현재 proc_inst_id에 해당하는 이전 작업 컨텍스트를 가져옵니다."""
