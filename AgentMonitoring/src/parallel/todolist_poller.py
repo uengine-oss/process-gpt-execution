@@ -139,6 +139,7 @@ async def handle_todolist_item(bundle: dict):
         # form_def 조회
         resp = supabase.table('form_def').select('fields_json').eq('id', form_id).execute()
         fields_json = resp.data[0].get('fields_json') if resp.data else None
+        print("[fields_json 출력]", json.dumps(fields_json, ensure_ascii=False, indent=2))
 
         # 필드 타입 정규화
         form_types = []
@@ -192,4 +193,4 @@ async def todolist_polling_task():
                     await handle_todolist_item(bundle)
         except Exception as e:
             logger.error(f"Polling error: {e}")
-        await asyncio.sleep(15)
+        await asyncio.sleep(7)

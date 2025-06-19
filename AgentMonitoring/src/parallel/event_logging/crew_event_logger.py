@@ -430,6 +430,31 @@ class CrewAIEventLogger:
         self._write_to_backends(event_record)
         print(f"✅ [crew_completed] [{crew_type}] {crew_name} → {job_id[:8]} → 파일: ❌(비활성화), Supabase: {'✅' if self.supabase_client else '❌'}")
 
+    def emit_feedback_event(self, event_type: str, feedback_json: dict, job_id: str = "feedback"):
+        """
+        피드백 생성 전후 이벤트 기록
+        event_type: 'feedback_started' 또는 'feedback_completed'
+        feedback_json: {agent, role, feedback} 등
+        """
+        current_context = GlobalContextManager.get_current_context()
+        crew_type = current_context.get("output_type") if current_context else "unknown"
+        todo_id = current_context.get("todo_id") if current_context else None
+        proc_inst_id = current_context.get("proc_inst_id") if current_context else None
+
+        event_record = {
+            "id": str(uuid.uuid4()),
+            "run_id": getattr(self, "run_id", None),
+            "job_id": job_id,
+            "todo_id": todo_id,
+            "proc_inst_id": proc_inst_id,
+            "event_type": event_type,
+            "crew_type": crew_type,
+            "data": feedback_json,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        self._write_to_backends(event_record)
+        print(f"📝 [{event_type}] [{crew_type}] {job_id[:8]} → Supabase: {'✅' if self.supabase_client else '❌'}")
+
 
 # 호환성을 위한 별칭
 SupabaseGlobalListener = CrewAIEventLogger 
