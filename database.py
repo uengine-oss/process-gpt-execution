@@ -1104,7 +1104,7 @@ class ChatMessage(BaseModel):
     timeStamp: Optional[int] = None
     jsonContent: Optional[Any] = None
     htmlContent: Optional[str] = None
-
+    contentType: Optional[str] = None
 
 class ChatItem(BaseModel):
     id: str
@@ -1156,6 +1156,7 @@ def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool, tenant_id
                     email="system@uengine.org",
                     image="",
                     content=json_data["description"],
+                    contentType="html" if "html" in json_data else "text",
                     jsonContent=json_data["jsonData"] if "jsonData" in json_data else None,
                     htmlContent=json_data["html"] if "html" in json_data else None,
                     timeStamp=int(datetime.now(pytz.timezone('Asia/Seoul')).timestamp() * 1000)
