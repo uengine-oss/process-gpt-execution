@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: agent-monitoring
-        image: uhnpybara/agent-monitoring:0618tool
+        image: uhnpybara/agent-monitoring:0619tf
         ports:
         - containerPort: 8000
         resources:

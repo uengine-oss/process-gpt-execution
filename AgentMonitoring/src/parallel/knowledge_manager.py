@@ -35,7 +35,6 @@ class Mem0Tool(BaseTool):
     Mem0 클라우드 기반 지식 관리 시스템입니다.
     - 에이전트별 지식 저장 및 검색
     - Mem0 클라우드에서만 지식을 검색
-    - 지식이 없으면 명확히 "없음" 응답
     """
     args_schema: type = KnowledgeQuerySchema
     

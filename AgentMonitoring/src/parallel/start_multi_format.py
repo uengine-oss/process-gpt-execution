@@ -53,6 +53,10 @@ async def run_multi_format_generation(topic: str, form_types: list = None, user_
         print(f"⚠️ [start_multi_format] 단일 형식 결과 - 호환성 모드")
     
     # 컨텍스트에 새 형식 결과 저장 (proc_inst_id와 activity_name으로 구분)
+    print(f"🔍 [DEBUG] proc_inst_id: {proc_inst_id}")
+    print(f"🔍 [DEBUG] topic: {topic}")
+    print(f"🔍 [DEBUG] new_format: {new_format}")
+    
     if proc_inst_id and topic:
         print(f"🎯 [start_multi_format] 작업 완료, 컨텍스트 저장 시작")
         print(f"   proc_inst_id: {proc_inst_id}")

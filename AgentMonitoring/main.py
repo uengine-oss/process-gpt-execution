@@ -42,11 +42,14 @@ add_routes_to_app(app)
 
 # polling 시작
 from src.parallel.todolist_poller import todolist_polling_task
+from src.parallel.feedback_poller import feedback_polling_loop
 
 @app.on_event("startup")
 async def start_background_tasks():
     # todolist 폴링 태스크 시작
     asyncio.create_task(todolist_polling_task())
+    # feedback polling을 백그라운드에서 계속 실행
+    asyncio.create_task(feedback_polling_loop(poll_interval=15))  # 10초마다 polling
 
 if __name__ == "__main__":
     import uvicorn
