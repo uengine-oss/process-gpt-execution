@@ -86,7 +86,7 @@ async def start_background_tasks():
     # 기존 polling 태스크 시작
     asyncio.create_task(start_polling())
     # 알림 실시간 구독 태스크 시작
-    asyncio.create_task(notification_polling_task())
+    # asyncio.create_task(notification_polling_task())
 
 if __name__ == "__main__":
     import uvicorn

@@ -12,9 +12,11 @@ from a2a.types import (
     MessageSendParams,
     SendMessageRequest,
     SendMessageResponse,
+    SendMessageSuccessResponse,
     GetTaskRequest,
     GetTaskResponse,
-    TaskQueryParams
+    TaskQueryParams,
+    Task
 )
 
 client_cache: Dict[str, A2AClient] = {}
@@ -72,7 +74,19 @@ async def non_stream_a2a_response(text: str, agent_url: str, task_id: str = None
         request = SendMessageRequest(id=str(uuid4()), params=MessageSendParams(**send_payload))
         send_response: SendMessageResponse = await client.send_message(request)
         
-        response = send_response.root.model_dump_json(exclude_none=True)
+        if not isinstance(send_response.root, SendMessageSuccessResponse):
+            print('received non-success response. Aborting get task ')
+            return
+
+        if not isinstance(send_response.root.result, Task):
+            print('received non-task response. Aborting get task ')
+            return
+
+        task_id: str = send_response.root.result.id
+        get_request = GetTaskRequest(id=str(uuid4()), params=TaskQueryParams(id=task_id))
+        get_response: GetTaskResponse = await client.get_task(get_request)
+        
+        response = get_response.root.model_dump_json(exclude_none=True)
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
