@@ -1102,6 +1102,8 @@ class ChatMessage(BaseModel):
     image: Optional[str] = None
     content: Optional[str] = None
     timeStamp: Optional[int] = None
+    jsonContent: Optional[Any] = None
+    htmlContent: Optional[str] = None
 
 
 class ChatItem(BaseModel):
@@ -1131,29 +1133,43 @@ def fetch_chat_history(chat_room_id: str) -> List[ChatItem]:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
-def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool, tenant_id: Optional[str] = None) -> None:
+def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool, tenant_id: Optional[str] = None, is_agent: Optional[bool] = False) -> None:
     try:
-        if is_system:
-            json_data = json.loads(data)
+        if is_agent:
             message = ChatMessage(
-                name="system",
-                role="system",
-                email="system@uengine.org",
-                image="",
-                content=json_data["description"],
-                timeStamp=int(datetime.now(pytz.timezone('Asia/Seoul')).timestamp() * 1000)
+                name=data["name"],
+                role="agent",
+                content=data["content"],
+                jsonContent=data["jsonData"] if "jsonData" in data else None,
+                htmlContent=data["html"] if "html" in data else None,
+                timeStamp=int(datetime.now(pytz.timezone('Asia/Seoul')).timestamp() * 1000),
             )
         else:
-            user_info = fetch_user_info(data["email"])
-            message = ChatMessage(
-                name=user_info["username"],
-                role="user",
-                email=data["email"],
-                image="",
-                content=data["command"],
-                timeStamp=int(datetime.now(pytz.timezone('Asia/Seoul')).timestamp() * 1000)
-            )
-
+            if is_system:
+                if isinstance(data, str):
+                    json_data = json.loads(data)
+                else:
+                    json_data = data
+                message = ChatMessage(
+                    name="system",
+                    role="system",
+                    email="system@uengine.org",
+                    image="",
+                    content=json_data["description"],
+                    jsonContent=json_data["jsonData"] if "jsonData" in json_data else None,
+                    htmlContent=json_data["html"] if "html" in json_data else None,
+                    timeStamp=int(datetime.now(pytz.timezone('Asia/Seoul')).timestamp() * 1000)
+                )
+            else:
+                user_info = fetch_user_info(data["email"])
+                message = ChatMessage(
+                    name=user_info["username"],
+                    role="user",
+                    email=data["email"],
+                    image="",
+                    content=data["command"],
+                    timeStamp=int(datetime.now(pytz.timezone('Asia/Seoul')).timestamp() * 1000)
+                )
 
         if not tenant_id:
             tenant_id = subdomain_var.get()

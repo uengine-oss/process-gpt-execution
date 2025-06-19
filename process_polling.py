@@ -460,6 +460,7 @@ async def handle_workitem(workitem):
     today = datetime.now().strftime("%Y-%m-%d")
     ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id, tenant_id)
     form_fields = ui_definition.fields_json if ui_definition else None
+    form_html = ui_definition.html if ui_definition else None
     
     chain_input = {
         "answer": '',
@@ -512,6 +513,21 @@ async def handle_workitem(workitem):
             "id": workitem['id'],
             "status": "DONE",
         }, tenant_id)
+        
+        if workitem['output'] and isinstance(workitem['output'], str):
+            output = json.loads(workitem['output'])
+        else:
+            output = workitem['output']
+        form_id = ui_definition.id if ui_definition else None
+        if form_id and output.get(form_id):
+            output = output.get(form_id)
+        
+        message_data = {
+            "description": f"{workitem['activity_name']} 업무를 완료하였습니다.",
+            "jsonData": output if output else {},
+            "html": form_html if form_html else ""
+        }
+        upsert_chat_message(workitem['proc_inst_id'], message_data, True, tenant_id, False)
         try:
             print(f"[DEBUG] process_output for workitem {workitem['id']}")
             process_output(workitem, tenant_id)
@@ -539,7 +555,7 @@ async def safe_handle_workitem(workitem):
         workitem['consumer'] = None
         if workitem['retry'] >= 3:
             workitem['status'] = "DONE"
-            workitem['description'] = f"[Workitem Error] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}"
+            workitem['log'] = f"[Error] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}"
         else:
             workitem['log'] = f"실행하는 중 오류가 발생했습니다. 다시 시도하겠습니다."
         upsert_workitem(workitem, workitem['tenant_id'])
