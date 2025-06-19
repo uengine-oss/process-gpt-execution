@@ -430,16 +430,14 @@ class CrewAIEventLogger:
         self._write_to_backends(event_record)
         print(f"✅ [crew_completed] [{crew_type}] {crew_name} → {job_id[:8]} → 파일: ❌(비활성화), Supabase: {'✅' if self.supabase_client else '❌'}")
 
-    def emit_feedback_event(self, event_type: str, feedback_json: dict, job_id: str = "feedback"):
+    def emit_feedback_event(self, event_type: str, feedback_json: dict, todo_id: str = None, proc_inst_id: str = None, job_id: str = "feedback"):
         """
         피드백 생성 전후 이벤트 기록
         event_type: 'feedback_started' 또는 'feedback_completed'
         feedback_json: {agent, role, feedback} 등
+        todo_id: TODO 리스트 레코드 ID
+        proc_inst_id: 프로세스 인스턴스 ID
         """
-        current_context = GlobalContextManager.get_current_context()
-        todo_id = current_context.get("todo_id") if current_context else None
-        proc_inst_id = current_context.get("proc_inst_id") if current_context else None
-
         event_record = {
             "id": str(uuid.uuid4()),
             "run_id": getattr(self, "run_id", None),

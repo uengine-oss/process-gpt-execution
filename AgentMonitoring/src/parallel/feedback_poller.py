@@ -69,23 +69,36 @@ async def fetch_oldest_completed_todolist(limit: int = 1) -> Optional[List[dict]
     connection.autocommit = False
     cursor = connection.cursor(cursor_factory=RealDictCursor)
 
-    cursor.execute("""
-        SELECT *
-        FROM todolist
-        WHERE status = 'DONE'
-        AND output IS NOT NULL
-        AND draft IS NOT NULL
-        AND feedback IS NULL
-        ORDER BY start_date ASC
-        LIMIT %s
-        FOR UPDATE SKIP LOCKED
-    """, (limit,))
+    try:
+        # 먼저 feedback이 NULL인 항목을 찾아서 {}로 업데이트하고 락을 겁니다
+        cursor.execute("""
+            UPDATE todolist 
+            SET feedback = '{}'::jsonb
+            WHERE id = (
+                SELECT id 
+                FROM todolist 
+                WHERE status = 'DONE'
+                AND output IS NOT NULL
+                AND draft IS NOT NULL
+                AND feedback IS NULL
+                ORDER BY start_date ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING *
+        """)
 
-    row = cursor.fetchone()
-    if row:
-        print("row를 가져옴")
-        return [{ 'row': row, 'connection': connection, 'cursor': cursor }]
-    else:
+        row = cursor.fetchone()
+        if row:
+            print("row를 가져옴")
+            return [{ 'row': row, 'connection': connection, 'cursor': cursor }]
+        else:
+            cursor.close()
+            connection.close()
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error in fetch_oldest_completed_todolist: {e}")
         cursor.close()
         connection.close()
         return None
@@ -164,7 +177,9 @@ async def handle_completed_item(bundle: dict):
                         analyzer = AgentFeedbackAnalyzer()
                         feedback_list = await analyzer.analyze_diff_and_generate_feedback(
                             json.dumps(draft_value) if isinstance(draft_value, dict) else str(draft_value),
-                            json.dumps(output_value) if isinstance(output_value, dict) else str(output_value)
+                            json.dumps(output_value) if isinstance(output_value, dict) else str(output_value),
+                            todo_id=row.get("id"),
+                            proc_inst_id=row.get("proc_inst_id")
                         )
                         
                         if feedback_list:
@@ -172,8 +187,7 @@ async def handle_completed_item(bundle: dict):
                             for feedback in feedback_list:
                                 logger.info(f"🤖 {feedback.get('agent', 'Unknown')}: {feedback.get('feedback', 'No feedback')}")
                             
-                            
-                            # 피드백 결과를 feedback 필드에 저장
+                            # 피드백 결과를 feedback 필드에 저장 (이미 락이 걸린 상태)
                             try:
                                 cur.execute(
                                     "UPDATE todolist SET feedback = %s WHERE id = %s",
@@ -182,11 +196,12 @@ async def handle_completed_item(bundle: dict):
                                 logger.info(f"💾 피드백 결과가 feedback 필드에 저장되었습니다: {len(feedback_list)}개")
                             except Exception as e:
                                 logger.error(f"피드백 저장 중 오류: {e}")
+                                raise e
                             
                         else:
                             logger.info("💡 의미 있는 변화가 아니어서 피드백이 생성되지 않았습니다. (단순 형식 변경)")
                             
-                            # 빈 피드백 결과도 저장
+                            # 빈 피드백 결과도 저장 (이미 락이 걸린 상태)
                             try:
                                 cur.execute(
                                     "UPDATE todolist SET feedback = %s WHERE id = %s",
@@ -195,6 +210,7 @@ async def handle_completed_item(bundle: dict):
                                 logger.info("💾 빈 피드백 결과가 저장되었습니다.")
                             except Exception as e:
                                 logger.error(f"빈 피드백 저장 중 오류: {e}")
+                                raise e
                     except Exception as e:
                         logger.error(f"피드백 생성 중 오류: {e}")
                 else:
@@ -229,8 +245,6 @@ async def feedback_polling_loop(poll_interval: int = 10):
             if items:
                 for bundle in items:
                     await handle_completed_item(bundle)
-            else:
-                logger.info("No completed items to process")
         except Exception as e:
             logger.error(f"Polling loop error: {e}")
         await asyncio.sleep(poll_interval)
