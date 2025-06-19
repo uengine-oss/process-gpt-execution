@@ -6,10 +6,10 @@ from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from dataclasses import dataclass
 
-from agents_repository import AgentsRepository
-from diff_util import compare_report_changes, extract_changes
-from knowledge_manager import Mem0Tool
-from event_logging.crew_event_logger import CrewAIEventLogger
+from .agents_repository import AgentsRepository
+from .diff_util import compare_report_changes, extract_changes
+from .knowledge_manager import Mem0Tool
+from .event_logging.crew_event_logger import CrewAIEventLogger
 
 # 로거 설정
 logger = logging.getLogger("agent_feedback_analyzer")
@@ -59,12 +59,11 @@ class AgentFeedbackAnalyzer:
             diff_result = compare_report_changes(draft_content, output_content)
             
             if not diff_result.get('unified_diff'):
-                logger.info("변화가 없어 피드백 분석을 건너뜁니다.")
+                print("변화가 없어 피드백 분석을 건너뜁니다.")
                 return []
             
             # 2. 에이전트 목록 조회
             agents = await self.agents_repository.get_all_agents(tenant_id)
-            logger.info(f"📋 {len(agents)}명의 에이전트 조회 완료")
             
             # 3. 변화 분석
             changes = extract_changes(
@@ -255,7 +254,6 @@ class AgentFeedbackAnalyzer:
             # JSON 파싱
             feedback_list = json.loads(content)
             
-            logger.info(f"🤖 LLM이 {len(feedback_list)}개의 피드백을 생성했습니다")
             return feedback_list
             
         except Exception as e:
@@ -290,21 +288,4 @@ class AgentFeedbackAnalyzer:
             
         except Exception as e:
             logger.error(f"Mem0 지식 적재 중 오류: {e}")
-    
-
-
-# 사용 예시
-if __name__ == "__main__":
-    async def test_feedback_analyzer():
-        analyzer = AgentFeedbackAnalyzer()
-        
-        # 테스트용 샘플 데이터
-        draft = '{"report": "```mermaid\\ngraph TD\\nA --> B\\n```"}'
-        output = '{"report": "graph TD\\nA --> B"}'
-        
-        feedback = await analyzer.analyze_diff_and_generate_feedback(draft, output)
-        
-        print("🎯 생성된 피드백:")
-        for item in feedback:
-            print(f"- {item['agent']}: {item['feedback']}")
     
