@@ -8,6 +8,32 @@
             "command": "uvx",
             "args": ["perplexity-mcp"],
             "transport": "stdio"
+        },
+        "odoo ERP": {
+            "command": "/opt/anaconda3/bin/python3",
+            "args": [
+                "-m",
+                "odoo_mcp"
+            ],
+            "env": {
+                "ODOO_URL": "https://uengine.odoo.com",
+                "ODOO_DB": "uengine",
+                "ODOO_USERNAME": "jyjang@uengine.org",
+                "ODOO_PASSWORD": "bca96d3d9716c1dddef9c159097aca3cb2b16352"
+            },
+            "transport": "stdio"
+        },
+        "ableton": {
+            "command": "npx",
+            "args": ["-y", "@xiaolaa2/ableton-copilot-mcp"]
+        },
+        "agent-marketplace": {
+            "command": "uvx",
+            "args": ["mcp_server_agent_marketplace"]
+        },
+        "ai-bible": {
+            "command": "uvx",
+            "args": ["mcp_server_ai_bible"]
         }
     }
 }
