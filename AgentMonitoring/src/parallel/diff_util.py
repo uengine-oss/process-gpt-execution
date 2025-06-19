@@ -129,28 +129,3 @@ def show_side_by_side_diff(original: str, modified: str, width: int = 80) -> str
             result.append(f"? {line[2:]}")
     
     return '\n'.join(result)
-
-
-if __name__ == "__main__":
-    # 테스트 예제
-    original_code = """def hello():
-    print("Hello World")
-    return True"""
-    
-    modified_code = """def hello():
-    print("Hello Python")
-    print("Modified version")
-    return True"""
-    
-    print("=== 기본 DIFF ===")
-    print(compare_strings(original_code, modified_code))
-    
-    print("\n=== 변화된 부분만 추출 ===")
-    changes = extract_changes(original_code, modified_code)
-    print("원본 내용:")
-    print(changes['original_changes'])
-    print("\n변한 내용:")
-    print(changes['modified_changes'])
-    
-    print("\n=== 상세 DIFF ===")
-    print(show_side_by_side_diff(original_code, modified_code)) 

@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from supabase import create_client, Client
+from .event_logging.crew_event_logger import CrewAIEventLogger, GlobalContextManager
 
 # 상위 디렉토리를 Python 경로에 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
@@ -82,6 +83,7 @@ async def fetch_oldest_completed_todolist(limit: int = 1) -> Optional[List[dict]
 
     row = cursor.fetchone()
     if row:
+        print("row를 가져옴")
         return [{ 'row': row, 'connection': connection, 'cursor': cursor }]
     else:
         cursor.close()
@@ -96,6 +98,17 @@ async def handle_completed_item(bundle: dict):
     row = bundle['row']
     conn = bundle['connection']
     cur = bundle['cursor']
+
+    # CrewAIEventLogger 인스턴스 생성
+    event_logger = CrewAIEventLogger()
+
+    # 이벤트 로깅을 위한 context 설정: todo_id 및 proc_inst_id 전달
+    GlobalContextManager.set_context(
+        output_type="feedback",
+        form_id="feedback",
+        todo_id=row.get("id"),
+        proc_inst_id=row.get("proc_inst_id")
+    )
 
     try:
         logger.info(f"Processing completed todolist item: {row['id']}")
@@ -146,7 +159,7 @@ async def handle_completed_item(bundle: dict):
                     # 🆕 에이전트별 피드백 생성
                     logger.info("🤖 에이전트 피드백 생성 중...")
                     try:
-                        from agent_feedback_analyzer import AgentFeedbackAnalyzer
+                        from .agent_feedback_analyzer import AgentFeedbackAnalyzer
                         
                         analyzer = AgentFeedbackAnalyzer()
                         feedback_list = await analyzer.analyze_diff_and_generate_feedback(
@@ -159,6 +172,7 @@ async def handle_completed_item(bundle: dict):
                             for feedback in feedback_list:
                                 logger.info(f"🤖 {feedback.get('agent', 'Unknown')}: {feedback.get('feedback', 'No feedback')}")
                             
+                            
                             # 피드백 결과를 feedback 필드에 저장
                             try:
                                 cur.execute(
@@ -168,6 +182,7 @@ async def handle_completed_item(bundle: dict):
                                 logger.info(f"💾 피드백 결과가 feedback 필드에 저장되었습니다: {len(feedback_list)}개")
                             except Exception as e:
                                 logger.error(f"피드백 저장 중 오류: {e}")
+                            
                         else:
                             logger.info("💡 의미 있는 변화가 아니어서 피드백이 생성되지 않았습니다. (단순 형식 변경)")
                             
@@ -219,7 +234,3 @@ async def feedback_polling_loop(poll_interval: int = 10):
         except Exception as e:
             logger.error(f"Polling loop error: {e}")
         await asyncio.sleep(poll_interval)
-
-
-if __name__ == "__main__":
-    asyncio.run(feedback_polling_loop()) 

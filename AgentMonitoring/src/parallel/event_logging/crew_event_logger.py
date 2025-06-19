@@ -437,7 +437,6 @@ class CrewAIEventLogger:
         feedback_json: {agent, role, feedback} 등
         """
         current_context = GlobalContextManager.get_current_context()
-        crew_type = current_context.get("output_type") if current_context else "unknown"
         todo_id = current_context.get("todo_id") if current_context else None
         proc_inst_id = current_context.get("proc_inst_id") if current_context else None
 
@@ -448,12 +447,12 @@ class CrewAIEventLogger:
             "todo_id": todo_id,
             "proc_inst_id": proc_inst_id,
             "event_type": event_type,
-            "crew_type": crew_type,
+            "crew_type": "feedback",
             "data": feedback_json,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self._write_to_backends(event_record)
-        print(f"📝 [{event_type}] [{crew_type}] {job_id[:8]} → Supabase: {'✅' if self.supabase_client else '❌'}")
+        print(f"📝 [{event_type}] [feedback] {job_id[:8]} → Supabase: {'✅' if self.supabase_client else '❌'}")
 
 
 # 호환성을 위한 별칭
