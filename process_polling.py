@@ -9,10 +9,12 @@ from typing import List, Optional, Any
 from code_executor import execute_python_code
 from datetime import datetime
 
-from database import fetch_process_definition, fetch_process_instance, fetch_organization_chart, fetch_ui_definition_by_activity_id, fetch_user_info, get_vector_store, fetch_workitem_with_submitted_status, fetch_workitem_by_proc_inst_and_activity
+from database import fetch_process_definition, fetch_process_instance, fetch_organization_chart, fetch_ui_definition_by_activity_id, fetch_agent_by_id, fetch_assignee_info, get_vector_store, fetch_workitem_with_submitted_status, fetch_workitem_with_agent, fetch_workitem_by_proc_inst_and_activity
 from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, upsert_todo_workitems, upsert_workitem, delete_workitem
 from database import ProcessInstance
-from process_engine import process_output
+from process_engine import process_output, check_agent_workitem, handle_workitem_with_agent
+from process_definition import ProcessDefinition
+
 import uuid
 import json
 
@@ -111,7 +113,7 @@ result should be in this JSON format:
     "nextActivities":
     [{{
         "nextActivityId": "the id of next activity id",
-        "nextUserEmail": "the email address of next activity's role",
+        "nextUserEmail": "the email address OR agent id of next activity's role",
         "result": "IN_PROGRESS | PENDING | DONE",
         "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)"
     }}],
@@ -443,7 +445,13 @@ async def handle_workitem(workitem):
     process_instance = fetch_process_instance(process_instance_id, tenant_id) if process_instance_id != "new" else None
     organization_chart = fetch_organization_chart(tenant_id)
     if workitem['user_id'] != "external_customer":
-        user_info = fetch_user_info(workitem['user_id'])
+        assignee_info = fetch_assignee_info(workitem['user_id'])
+        user_info = {
+            "name": assignee_info.get("name", workitem['user_id']),
+            "email": assignee_info.get("email", workitem['user_id']),
+            "type": assignee_info.get("type", "unknown"),
+            "info": assignee_info.get("info", {})
+        }
     else:
         user_info = {
             "name": "external_customer",
@@ -505,14 +513,26 @@ async def handle_workitem(workitem):
             "status": "DONE",
         }, tenant_id)
         try:
+            print(f"[DEBUG] process_output for workitem {workitem['id']}")
             process_output(workitem, tenant_id)
         except Exception as e:
             print(f"[ERROR] Error in process_output for workitem {workitem['id']}: {str(e)}")
 
+
 async def safe_handle_workitem(workitem):
     try:
-        print(f"[DEBUG] Starting safe_handle_workitem for workitem: {workitem['id']}")
-        await handle_workitem(workitem)
+        upsert_workitem({
+            "id": workitem['id'],
+            "log": f"'{workitem['activity_name']}' 업무를 실행합니다."
+        }, workitem['tenant_id'])
+        
+        if workitem['status'] == "SUBMITTED":
+            print(f"[DEBUG] Starting safe_handle_workitem for workitem: {workitem['id']}")
+            await handle_workitem(workitem)
+        elif workitem['agent_mode'] == "A2A" and workitem['status'] == "IN_PROGRESS":
+            print(f"[DEBUG] Starting safe_handle_workitem for agent workitem: {workitem['id']}")
+            await handle_agent_workitem(workitem)
+
     except Exception as e:
         print(f"[ERROR] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}")
         workitem['retry'] = workitem['retry'] + 1
@@ -525,16 +545,24 @@ async def safe_handle_workitem(workitem):
         upsert_workitem(workitem, workitem['tenant_id'])
 
 async def polling_workitem():
-    workitems = fetch_workitem_with_submitted_status()
-    if not workitems:
+    all_workitems = []
+    submitted_workitems = fetch_workitem_with_submitted_status()
+    if submitted_workitems:
+        all_workitems.extend(submitted_workitems)
+    agent_workitems = fetch_workitem_with_agent()
+    if agent_workitems:
+        all_workitems.extend(agent_workitems)
+
+    if len(all_workitems) == 0:
         return
 
     tasks = []
-    for workitem in workitems:
+    for workitem in all_workitems:
         task = asyncio.create_task(safe_handle_workitem(workitem))
         tasks.append(task)
     
-    await asyncio.gather(*tasks, return_exceptions=True)
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 async def start_polling():
     setting_database()
@@ -545,3 +573,53 @@ async def start_polling():
         except Exception as e:
             print(f"[Polling Loop Error] {e}")
         await asyncio.sleep(5)
+
+async def handle_agent_workitem(workitem):
+    """
+    에이전트 업무를 처리하는 함수
+    process_engine의 handle_workitem_with_agent를 사용합니다.
+    """
+    if workitem['retry'] >= 3:
+        return
+    
+    try:
+        print(f"[DEBUG] Starting agent workitem processing for: {workitem['id']}")
+        
+        # 에이전트 정보 가져오기
+        agent_id = workitem['user_id']
+        agent_info = fetch_agent_by_id(agent_id)
+        
+        if not agent_info:
+            print(f"[ERROR] Agent not found: {agent_id}")
+            upsert_workitem({
+                "id": workitem['id'],
+                "status": "DONE",
+                "description": f"Agent not found: {agent_id}"
+            }, workitem['tenant_id'])
+            return
+        
+        # 프로세스 정의와 액티비티 정보 가져오기
+        process_definition_json = fetch_process_definition(workitem['proc_def_id'], workitem['tenant_id'])
+        process_definition = ProcessDefinition(**process_definition_json)
+        activity = process_definition.find_activity_by_id(workitem['activity_id'])
+        
+        if not activity:
+            print(f"[ERROR] Activity not found: {workitem['activity_id']}")
+            return
+        
+        # handle_workitem_with_agent 호출
+        from process_engine import handle_workitem_with_agent
+        result = await handle_workitem_with_agent(workitem, activity, agent_info)
+        
+        if result is not None:
+            print(f"[DEBUG] Agent workitem completed successfully: {workitem['id']}")
+        else:
+            print(f"[ERROR] Agent workitem failed: {workitem['id']}")
+            upsert_workitem({
+                "id": workitem['id'],
+                "log": "Agent processing failed"
+            }, workitem['tenant_id'])
+        
+    except Exception as e:
+        print(f"[ERROR] Error in handle_agent_workitem for workitem {workitem['id']}: {str(e)}")
+        raise e

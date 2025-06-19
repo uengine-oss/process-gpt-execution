@@ -10,6 +10,11 @@ from a2a.client import A2AClient
 from a2a.types import (
     SendStreamingMessageRequest,
     MessageSendParams,
+    SendMessageRequest,
+    SendMessageResponse,
+    GetTaskRequest,
+    GetTaskResponse,
+    TaskQueryParams
 )
 
 client_cache: Dict[str, A2AClient] = {}
@@ -31,6 +36,25 @@ async def get_a2a_client(agent_url: str) -> A2AClient:
         )
     return client_cache[agent_url]
 
+def create_send_message_payload(
+    text: str, task_id: str | None = None, context_id: str | None = None
+) -> dict[str, Any]:
+    """Helper function to create the payload for sending a task."""
+    payload: dict[str, Any] = {
+        'message': {
+            'role': 'user',
+            'parts': [{'kind': 'text', 'text': text}],
+            'messageId': uuid4().hex,
+        },
+    }
+
+    if task_id:
+        payload['message']['taskId'] = task_id
+
+    if context_id:
+        payload['message']['contextId'] = context_id
+    return payload
+
 async def cleanup_resources():
     """Cleanup resources on shutdown."""
     for client in httpx_client_cache.values():
@@ -38,26 +62,30 @@ async def cleanup_resources():
     client_cache.clear()
     httpx_client_cache.clear()
 
-async def stream_a2a_response(text: str, agent_url: str, task_id: str = None, context_id: str = None) -> AsyncGenerator[str, None]:
+async def non_stream_a2a_response(text: str, agent_url: str, task_id: str = None, context_id: str = None) -> dict:
+    """Process A2A message and return collected response as dict."""
+    try:
+        client = await get_a2a_client(str(agent_url))
+        
+        send_payload = create_send_message_payload(text, task_id, context_id)
+        
+        request = SendMessageRequest(id=str(uuid4()), params=MessageSendParams(**send_payload))
+        send_response: SendMessageResponse = await client.send_message(request)
+        
+        response = send_response.root.model_dump_json(exclude_none=True)
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def stream_a2a_response(agent_url: str, text: str, task_id: str = None, context_id: str = None) -> AsyncGenerator[str, None]:
     """Stream A2A message response."""
     try:
         # A2A 클라이언트 가져오기
         client = await get_a2a_client(str(agent_url))
         
         # 메시지 전송 요청 생성
-        send_payload = {
-            'message': {
-                'role': 'user',
-                'parts': [{'kind': 'text', 'text': text}],
-                'messageId': uuid4().hex,
-            }
-        }
+        send_payload = create_send_message_payload(text, task_id, context_id)
         
-        if task_id:
-            send_payload['message']['taskId'] = task_id
-        if context_id:
-            send_payload['message']['contextId'] = context_id
-
         request = SendStreamingMessageRequest(id=str(uuid4()), params=MessageSendParams(**send_payload))
         
         # 스트리밍 응답 처리
@@ -97,15 +125,20 @@ async def stream_a2a_response(text: str, agent_url: str, task_id: str = None, co
         # 스트림 종료 표시
         yield "data: [DONE]\n\n"
 
-async def process_a2a_message(text: str, agent_url: str, task_id: str = None, context_id: str = None) -> StreamingResponse:
-    """Process A2A message and return streaming response."""
-    return StreamingResponse(
-        stream_a2a_response(text, agent_url, task_id, context_id),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
-    )
+async def process_a2a_message(text: str, agent_url: str, task_id: str = None, context_id: str = None, stream: bool = True) -> Any:
+    """Process A2A message and return response."""
+    if stream:
+        return StreamingResponse(
+            stream_a2a_response(text, agent_url, task_id, context_id),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+    else:
+        return await non_stream_a2a_response(text, agent_url, task_id, context_id)
+
+
 

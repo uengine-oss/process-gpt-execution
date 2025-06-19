@@ -756,18 +756,52 @@ def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
             RETURNING *;
         """
 
-
         cursor.execute(query, (limit, pod_id))
         rows = cursor.fetchall()
-
 
         connection.commit()
         cursor.close()
         connection.close()
 
-
         return rows if rows else None
 
+    except Exception as e:
+        print(f"[ERROR] DB fetch failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
+    
+
+def fetch_workitem_with_agent(limit=5) -> Optional[List[dict]]:
+    try:
+        pod_id = socket.gethostname()
+        db_config = db_config_var.get()
+
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
+
+        query = """
+            WITH locked_rows AS (
+                SELECT id FROM todolist
+                WHERE status = 'IN_PROGRESS'
+                    AND consumer IS NULL
+                    AND agent_mode = 'A2A'
+                FOR UPDATE SKIP LOCKED
+                LIMIT %s
+            )
+            UPDATE todolist
+            SET consumer = %s
+            FROM locked_rows
+            WHERE todolist.id = locked_rows.id
+            RETURNING *;
+        """
+
+        cursor.execute(query, (limit, pod_id))
+        rows = cursor.fetchall()
+
+        connection.commit()
+        cursor.close()
+        connection.close()
+
+        return rows if rows else None
 
     except Exception as e:
         print(f"[ERROR] DB fetch failed: {str(e)}")
@@ -864,6 +898,10 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
             workitem.status = activity_data['result']
             workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul')) if activity_data['result'] == 'DONE' else None
             workitem.user_id = activity_data['nextUserEmail']
+            if workitem.user_id and workitem.agent_mode != "A2A":
+                assignee_info = fetch_assignee_info(workitem.user_id)
+                if assignee_info['type'] == "a2a":
+                    workitem.agent_mode = "A2A"
         else:
             activity = process_definition.find_activity_by_id(activity_data['nextActivityId'])
             if activity:
@@ -976,6 +1014,12 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                             user_id = role_binding['endpoint'][0] if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
+                is_agent = False
+                if user_id:
+                    assignee_info = fetch_assignee_info(user_id)
+                    if assignee_info['type'] == "a2a":
+                        is_agent = True
+                
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     reference_ids=reference_ids if prev_activities else [],
@@ -991,7 +1035,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     tenant_id=tenant_id,
                     assignees=assignees if assignees else [],
                     duration=activity.duration,
-                    agent_mode="DRAFT"
+                    agent_mode= "A2A" if is_agent else "DRAFT"
                 )
                 workitem_dict = workitem.dict()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
@@ -1147,6 +1191,66 @@ def fetch_user_info(email: str) -> Dict[str, str]:
             raise HTTPException(status_code=404, detail="User not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def fetch_assignee_info(assignee_id: str) -> Dict[str, str]:
+    """
+    담당자 정보를 찾는 함수
+    담당자가 유저인지 에이전트인지 판단하고 적절한 정보를 반환합니다.
+    
+    Args:
+        assignee_id: 담당자 ID (이메일 또는 에이전트 ID)
+    
+    Returns:
+        담당자 정보 딕셔너리
+    """
+    try:
+        # 먼저 유저 정보를 찾아봅니다
+        try:
+            user_info = fetch_user_info(assignee_id)
+            return {
+                "type": "user",
+                "id": assignee_id,
+                "name": user_info.get("name", assignee_id),
+                "email": assignee_id,
+                "info": user_info
+            }
+        except HTTPException as user_error:
+            if user_error.status_code == 500 or user_error.status_code == 404:
+                # 유저를 찾을 수 없으면 에이전트 정보를 찾아봅니다
+                try:
+                    agent_info = fetch_agent_by_id(assignee_id)
+                    url = agent_info.get("url")
+                    is_a2a = url is not None and url.strip() != ""
+                    return {
+                        "type": "a2a" if is_a2a else "agent",
+                        "id": assignee_id,
+                        "name": agent_info.get("name", assignee_id),
+                        "email": assignee_id,
+                        "info": agent_info
+                    }
+                except HTTPException as agent_error:
+                    # 에이전트도 찾을 수 없으면 기본 정보를 반환
+                    return {
+                        "type": "unknown",
+                        "id": assignee_id,
+                        "name": assignee_id,
+                        "email": assignee_id,
+                        "info": {}
+                    }
+            else:
+                # 유저 조회 중 다른 오류가 발생한 경우
+                raise user_error
+    except Exception as e:
+        # 예상치 못한 오류가 발생한 경우 기본 정보를 반환
+        return {
+            "type": "error",
+            "id": assignee_id,
+            "name": assignee_id,
+            "email": assignee_id,
+            "info": {},
+            "error": str(e)
+        }
 
 
 from langchain_openai import OpenAIEmbeddings

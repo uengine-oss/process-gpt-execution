@@ -1,5 +1,18 @@
 # process-gpt-execution
 
+## Environment Setup
+
+Before running the project, you need to set up environment variables.
+
+```
+# Copy .env.example to create .env file
+cp .env.example .env
+
+# Edit .env file with your actual values
+# - OPENAI_API_KEY: Your OpenAI API key
+# - SUPABASE_URL, SUPABASE_KEY: Your Supabase configuration
+# - Other required environment variables
+```
 
 ## Install Dev Env (using uv)
 ```
