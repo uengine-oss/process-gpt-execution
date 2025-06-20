@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: polling-service-deployment
+  namespace: default
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app: polling-service
+  template:
+    metadata:
+      labels:
+        app: polling-service
+    spec:
+      containers:
+      - name: polling-service
+        image: ghcr.io/uengine-oss/process-gpt-polling-service:latest
+        ports:
+        - containerPort: 8000
+        env:
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: OPENAI_API_KEY
+              name: openai-secret
+        - name: SUPABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              key: SUPABASE_URL
+              name: my-config
+        - name: SUPABASE_KEY
+          valueFrom:
+            secretKeyRef:
+              key: SERVICE_ROLE_KEY
+              name: my-secrets
+        - name: SUPABASE_JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              key: JWT_SECRET
+              name: my-secrets
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              key: DB_NAME
+              name: my-secrets
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              key: DB_USER
+              name: my-secrets
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: DB_PASSWORD
+              name: my-secrets
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              key: DB_HOST
+              name: my-secrets
+        - name: DB_PORT
+          valueFrom:
+            secretKeyRef:
+              key: DB_PORT
+              name: my-secrets
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi

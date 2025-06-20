@@ -328,14 +328,14 @@ if __name__ == "__main__":
 
     current_dir = Path(__file__).parent
 
-    # from code_executor import execute_python_code
+    from code_executor import execute_python_code
 
     for activity in process_definition.activities:
         if activity.type == "ScriptActivity":
             print(activity)
-            # execute_python_code(activity.pythonCode, current_dir)
-            # output = execute_python_code(activity.pythonCode, current_dir)
-            # print(output)
+            execute_python_code(activity.pythonCode, current_dir)
+            output = execute_python_code(activity.pythonCode, current_dir)
+            print(output)
     # End Generation Here
 
 class UIDefinition(BaseModel):

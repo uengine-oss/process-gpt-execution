@@ -168,3 +168,5 @@ test.html
 
 .idea/
 .vscode/tasks.json
+
+uv.lock

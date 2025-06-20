@@ -3,8 +3,8 @@ import os
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
 # 환경에 따른 캐시 디렉토리 설정
-CACHE_DIR = "/data" if os.path.exists("/.dockerenv") else "."
-os.makedirs(CACHE_DIR, exist_ok=True)
+# CACHE_DIR = "/data" if os.path.exists("/.dockerenv") else "."
+# os.makedirs(CACHE_DIR, exist_ok=True)
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
@@ -21,11 +21,11 @@ from database import update_tenant_id, notification_polling_task
 from mcp_config_api import add_routes_to_app as add_mcp_routes_to_app
 from agent_chat import add_routes_to_app as add_agent_chat_routes_to_app
 
-#캐시 적용
-from langchain.cache import SQLiteCache
-from langchain.globals import set_llm_cache
+# #캐시 적용
+# from langchain.cache import SQLiteCache
+# from langchain.globals import set_llm_cache
 
-set_llm_cache(SQLiteCache(database_path=os.path.join(CACHE_DIR, ".langchain.db")))
+# set_llm_cache(SQLiteCache(database_path=os.path.join(CACHE_DIR, ".langchain.db")))
 
 
 app = FastAPI(
@@ -77,16 +77,12 @@ add_process_chat_routes_to_app(app)
 add_mcp_routes_to_app(app)
 add_agent_chat_routes_to_app(app)
 
-# polling 시작
-from process_polling import start_polling
 import asyncio
 
 @app.on_event("startup")
 async def start_background_tasks():
-    # 기존 polling 태스크 시작
-    asyncio.create_task(start_polling())
     # 알림 실시간 구독 태스크 시작
-    # asyncio.create_task(notification_polling_task())
+    asyncio.create_task(notification_polling_task())
 
 if __name__ == "__main__":
     import uvicorn
