@@ -67,7 +67,8 @@ Now, you're going to create an interactive system similar to a BPM system that h
     activity id: "{activity_id}",
     user: "{user_email}",
     submitted form values: {form_values},
-    submitted answer: "{answer}"    // If no form values have been submitted, assign the values in the form field using the submitted answers. Based on the current running activity form fields. If the readonly="true" fields are not entered, never return an error and ignore it. But if fields with readonly="false" are not entered, return the error "DATA_FIELD_NOT_EXIST"
+    submitted answer: "{answer}"    // If no form values have been submitted, assign the values in the form field using the submitted answers. Based on the current running activity form fields. If the readonly="true" fields are not entered, never return an error and ignore it. But if fields with readonly="false" are not entered, return the error "DATA_FIELD_NOT_EXIST",
+    other output: {other_output} // 폼 입력 값이 누락된 경우 이걸 참고해서 폼 입력 값을 채워줄 것.
 
 - Today is:  {today}
 
@@ -461,6 +462,14 @@ async def handle_workitem(workitem):
     ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id, tenant_id)
     form_fields = ui_definition.fields_json if ui_definition else None
     form_html = ui_definition.html if ui_definition else None
+    output = {}
+    if workitem['output'] and isinstance(workitem['output'], str):
+        output = json.loads(workitem['output'])
+    else:
+        output = workitem['output']
+    form_id = ui_definition.id if ui_definition else None
+    if form_id and output.get(form_id):
+        output = output.get(form_id)
     
     chain_input = {
         "answer": '',
@@ -478,7 +487,8 @@ async def handle_workitem(workitem):
         "organizationChart": organization_chart,
         "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
         "form_fields": form_fields,
-        "form_values": workitem['output']
+        "form_values": output,
+        "other_output": workitem['output']
     }
     
     collected_text = ""
@@ -507,21 +517,12 @@ async def handle_workitem(workitem):
                 "due_date": new_workitem_dict['due_date'].isoformat() if new_workitem_dict['due_date'] else None
             }, tenant_id)
             delete_workitem(new_workitem_dict['id'], tenant_id)
-        
+
     else:
         upsert_workitem({
             "id": workitem['id'],
             "status": "DONE",
         }, tenant_id)
-        
-        if workitem['output'] and isinstance(workitem['output'], str):
-            output = json.loads(workitem['output'])
-        else:
-            output = workitem['output']
-        form_id = ui_definition.id if ui_definition else None
-        if form_id and output.get(form_id):
-            output = output.get(form_id)
-        
         message_data = {
             "description": f"{workitem['activity_name']} 업무를 완료하였습니다.",
             "jsonData": output if output else {},

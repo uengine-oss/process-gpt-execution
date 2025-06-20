@@ -369,10 +369,10 @@ async def handle_workitem_with_agent(prev_workitem, activity, agent):
             request_text = None
             for attempt in range(3):
                 try:
-                    upsert_workitem({
-                        "id": current_workitem.id,
-                        "log": f"에이전트가 업무를 시작합니다..."
-                    }, tenant_id)
+                    message_data = {
+                        "description": f"'{agent.get('name')}'가 업무를 시작합니다...",
+                    }
+                    upsert_chat_message(proc_inst_id, message_data, True, tenant_id, False)
                     request_text = await generate_agent_request_text(prev_workitem, current_workitem, tenant_id)
                     break
                 except Exception as e:
@@ -385,6 +385,10 @@ async def handle_workitem_with_agent(prev_workitem, activity, agent):
             agent_response = None
             for attempt in range(3):
                 try:
+                    message_data = {
+                        "description": f"'{agent.get('name')}'에게 메시지를 전송 중 입니다...",
+                    }
+                    upsert_chat_message(proc_inst_id, message_data, True, tenant_id, False)
                     agent_response = await send_request_to_agent(request_text, agent_url, current_workitem, proc_inst_id)
                     break
                 except Exception as e:
@@ -397,6 +401,10 @@ async def handle_workitem_with_agent(prev_workitem, activity, agent):
             final_output = None
             for attempt in range(3):
                 try:
+                    message_data = {
+                        "description": f"'{agent.get('name')}'에게 받은 응답을 처리 중 입니다...",
+                    }
+                    upsert_chat_message(proc_inst_id, message_data, True, tenant_id, False)
                     final_output = await process_agent_response(agent_response, current_workitem)
                     break
                 except Exception as e:
@@ -404,6 +412,11 @@ async def handle_workitem_with_agent(prev_workitem, activity, agent):
                         print(f"[ERROR] Failed to process agent response after 3 attempts: {str(e)}")
                         return None
                     print(f"[WARNING] Agent response processing failed, retrying... (attempt {attempt + 1}/3)")
+            
+            message_data = {
+                "description": f"'{agent.get('name')}' 검색 결과입니다.",
+            }
+            upsert_chat_message(proc_inst_id, message_data, True, tenant_id, False)
             
             message_data = {
                 "name": f"[A2A 호출] {agent.get('name')} 검색 결과",
