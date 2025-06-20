@@ -134,7 +134,8 @@ async def send_request_to_agent(request_text, agent_url, current_workitem, proc_
                     "chat_room_id": proc_inst_id,
                     "options": {
                         "agent_url": agent_url,
-                        "task_id": current_workitem.id if current_workitem else None
+                        "task_id": current_workitem.id if current_workitem else None,
+                        "is_stream": False
                     }
                 },
                 timeout=60.0

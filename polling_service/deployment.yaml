@@ -65,6 +65,10 @@ spec:
             secretKeyRef:
               key: DB_PORT
               name: my-secrets
+        - name: EXECUTION_SERVICE_URL
+          value: http://execution-service:8000
+        - name: MEMENTO_SERVICE_URL
+          value: http://memento-service:8005
         resources:
           requests:
             cpu: 200m
