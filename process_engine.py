@@ -47,10 +47,11 @@ async def handle_submit(request: Request):
         raise HTTPException(status_code=500, detail=str(e)) from e
     
 
-async def create_process_instance(process_definition, process_instance_id, user_email):
+async def create_process_instance(process_definition, process_instance_id, user_email, project_id):
     try:
         process_definition_id = process_definition.processDefinitionId
         process_instance_data = {
+            "project_id": project_id,
             "proc_inst_id": process_instance_id,
             "proc_inst_name": process_definition.processDefinitionName,
             "proc_def_id": process_definition_id,
@@ -65,7 +66,7 @@ async def create_process_instance(process_definition, process_instance_id, user_
     
 
 async def submit_workitem(input: dict):
-
+    project_id = input.get('project_id')
     process_instance_id = input.get('process_instance_id')
     process_definition_id = input.get('process_definition_id')
     activity_id = input.get('activity_id')
@@ -98,7 +99,7 @@ async def submit_workitem(input: dict):
         workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_id, activity_id)
     else:
         process_instance_id = f"{process_definition_id.lower()}.{str(uuid.uuid4())}"
-        await create_process_instance(process_definition, process_instance_id, user_email)
+        await create_process_instance(process_definition, process_instance_id, user_email, project_id)
 
     now = datetime.now(pytz.timezone('Asia/Seoul'))
     start_date = now.isoformat()
@@ -113,6 +114,7 @@ async def submit_workitem(input: dict):
         workitem_data['start_date'] = workitem_data['start_date'].isoformat()
         workitem_data['due_date'] = workitem_data['due_date'].isoformat()
         workitem_data['retry'] = 0
+        workitem_data['project_id'] = project_id
         workitem_data['consumer'] = None
     else:
         workitem_data = {
@@ -131,7 +133,8 @@ async def submit_workitem(input: dict):
             "tool": activity.tool,
             "output": output,
             "retry": 0,
-            "consumer": None
+            "consumer": None,
+            "project_id": project_id
         }
         
     upsert_workitem(workitem_data)
