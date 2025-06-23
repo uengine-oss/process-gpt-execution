@@ -703,11 +703,14 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                             user_id = role_binding['endpoint'][0] if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
-                is_agent = False
+                agent_mode = ""
+                if activity.isDraft is not None and activity.isDraft:
+                    agent_mode = "DRAFT"
+
                 if user_id:
                     assignee_info = fetch_assignee_info(user_id)
                     if assignee_info['type'] == "a2a":
-                        is_agent = True
+                        agent_mode = "A2A"
                 
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
@@ -724,7 +727,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     tenant_id=tenant_id,
                     assignees=assignees if assignees else [],
                     duration=activity.duration,
-                    agent_mode= "A2A" if is_agent else "DRAFT"
+                    agent_mode=agent_mode
                 )
                 workitem_dict = workitem.dict()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
