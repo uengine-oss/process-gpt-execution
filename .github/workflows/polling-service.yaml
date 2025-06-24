@@ -49,4 +49,4 @@ jobs:
 
       - name: Deploy to GKE
         run: |
-          kubectl set image deployment/polling-service-deployment execution=$IMAGE_NAME
+          kubectl set image deployment/polling-service-deployment polling-service=$IMAGE_NAME
