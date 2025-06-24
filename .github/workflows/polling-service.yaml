@@ -21,7 +21,7 @@ jobs:
         run: |
           IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)
           IMAGE_NAME=ghcr.io/uengine-oss/process-gpt-polling-service:$IMAGE_TAG
-          cd polling-service
+          cd polling_service
           docker build -t $IMAGE_NAME .
           docker push $IMAGE_NAME
 
