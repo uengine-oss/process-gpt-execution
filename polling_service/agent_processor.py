@@ -7,10 +7,21 @@ import json
 import re
 import httpx
 import os
+import logging
 
 from database import fetch_todolist_by_proc_inst_id, upsert_workitem, upsert_chat_message, fetch_workitem_by_proc_inst_and_activity
 
 load_dotenv()
+
+# 로깅 설정
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # ChatOpenAI 객체 생성
 model = ChatOpenAI(model="gpt-4o", streaming=True)
@@ -90,6 +101,7 @@ EXECUTION_SERVICE_URL = os.getenv("EXECUTION_SERVICE_URL", "http://execution-ser
 
 async def generate_agent_request_text(prev_workitem, current_workitem, tenant_id):
     """Step 1: LLM에게 output과 workitem 정보를 주고 에이전트 요청 텍스트 생성"""
+    logger.info(f"Starting agent request text generation for workitem {current_workitem.id if current_workitem else 'None'}")
     try:
         worklist = fetch_todolist_by_proc_inst_id(prev_workitem["proc_inst_id"], tenant_id)
         previous_output = {}
@@ -102,6 +114,7 @@ async def generate_agent_request_text(prev_workitem, current_workitem, tenant_id
             "previous_output": previous_output,
             "workitem": current_workitem.dict() if current_workitem else {}
         }
+        logger.info(f"Calling preprocessing chain with input keys: {list(preprocessing_input.keys())}")
         response = await preprocessing_chain.ainvoke(preprocessing_input)
         
         request_text = response.content if hasattr(response, 'content') else str(response)
@@ -111,13 +124,15 @@ async def generate_agent_request_text(prev_workitem, current_workitem, tenant_id
             "log": f"에이전트에게 전송할 메시지를 생성하였습니다..."
         }, tenant_id)
         
+        logger.info(f"Successfully generated agent request text, length: {len(request_text)}")
         return request_text
     except Exception as e:
-        print(f"[ERROR] Failed to generate agent request text: {str(e)}")
+        logger.error(f"[ERROR] Failed to generate agent request text: {str(e)}")
         raise e
 
 async def send_request_to_agent(request_text, agent_url, current_workitem, proc_inst_id):
     """Step 2: 생성된 텍스트를 A2A API에 전송"""
+    logger.info(f"Starting agent request to {agent_url} for workitem {current_workitem.id if current_workitem else 'None'}")
     try:
         upsert_workitem({
             "id": current_workitem.id,
@@ -125,6 +140,7 @@ async def send_request_to_agent(request_text, agent_url, current_workitem, proc_
         }, current_workitem.tenant_id)
         
         # execution-service의 API 엔드포인트 호출
+        logger.info(f"Calling execution service at {EXECUTION_SERVICE_URL}/multi-agent/chat")
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{EXECUTION_SERVICE_URL}/multi-agent/chat",
@@ -142,9 +158,11 @@ async def send_request_to_agent(request_text, agent_url, current_workitem, proc_
             )
             
             if response.status_code != 200:
+                logger.error(f"Execution service returned status {response.status_code}: {response.text}")
                 raise HTTPException(status_code=response.status_code, detail=response.text)
             
             agent_response = response.json()
+            logger.info(f"Received response from execution service, status: {response.status_code}")
             
             # API 응답에서 실제 에이전트 응답 추출
             if isinstance(agent_response, dict) and 'response' in agent_response:
@@ -155,13 +173,15 @@ async def send_request_to_agent(request_text, agent_url, current_workitem, proc_
             "log": f"에이전트에게 응답을 받았습니다..."
         }, current_workitem.tenant_id)
         
+        logger.info(f"Successfully received agent response, length: {len(str(agent_response))}")
         return agent_response
     except Exception as e:
-        print(f"[ERROR] Failed to send request to agent: {str(e)}")
+        logger.error(f"[ERROR] Failed to send request to agent: {str(e)}")
         raise e
 
 async def process_agent_response(agent_response, current_workitem):
     """Step 3: A2A 응답을 LLM에게 전달하여 JSON 형식으로 반환"""
+    logger.info(f"Starting agent response processing for workitem {current_workitem.id if current_workitem else 'None'}")
     try:
         upsert_workitem({
             "id": current_workitem.id,
@@ -171,6 +191,7 @@ async def process_agent_response(agent_response, current_workitem):
         output_processing_input = {
             "agent_response": agent_response
         }
+        logger.info(f"Calling output processing chain with agent response length: {len(str(agent_response))}")
         final_output = await output_processing_chain.ainvoke(output_processing_input)
         
         if hasattr(final_output, 'content'):
@@ -190,8 +211,9 @@ async def process_agent_response(agent_response, current_workitem):
             try:
                 import json
                 final_output = json.loads(final_output)
+                logger.info("Successfully parsed JSON from agent response")
             except json.JSONDecodeError as e:
-                print(f"[WARNING] JSON parsing failed, treating as string: {str(e)}")
+                logger.warning(f"[WARNING] JSON parsing failed, treating as string: {str(e)}")
                 final_output = {}
         
         if isinstance(final_output, dict):
@@ -206,12 +228,14 @@ async def process_agent_response(agent_response, current_workitem):
             "log": f"Agent processing completed successfully"
         }, current_workitem.tenant_id)
         
+        logger.info(f"Successfully processed agent response, output type: {type(final_output)}")
         return final_output
     except Exception as e:
-        print(f"[ERROR] Failed to process agent response: {str(e)}")
+        logger.error(f"[ERROR] Failed to process agent response: {str(e)}")
         raise e
 
 async def handle_workitem_with_agent(prev_workitem, activity, agent):
+    logger.info(f"Starting handle_workitem_with_agent for activity {activity.id if activity else 'None'}, agent: {agent.get('name') if agent else 'None'}")
     try:
         if agent:
             proc_inst_id = prev_workitem["proc_inst_id"]
@@ -219,9 +243,11 @@ async def handle_workitem_with_agent(prev_workitem, activity, agent):
             activity_id = activity.id
             agent_url = agent.get("url")
             
+            logger.info(f"Processing workitem - proc_inst_id: {proc_inst_id}, tenant_id: {tenant_id}, activity_id: {activity_id}, agent_url: {agent_url}")
+            
             current_workitem = fetch_workitem_by_proc_inst_and_activity(proc_inst_id, activity_id, tenant_id)
             if not current_workitem:
-                print(f"[ERROR] Workitem not found for activity {activity_id}")
+                logger.error(f"[ERROR] Workitem not found for activity {activity_id}")
                 return None
             
             # Step 1: 에이전트 요청 텍스트 생성
@@ -237,9 +263,9 @@ async def handle_workitem_with_agent(prev_workitem, activity, agent):
                     break
                 except Exception as e:
                     if attempt == 2:
-                        print(f"[ERROR] Failed to generate request text after 3 attempts: {str(e)}")
+                        logger.error(f"[ERROR] Failed to generate request text after 3 attempts: {str(e)}")
                         return None
-                    print(f"[WARNING] Request text generation failed, retrying... (attempt {attempt + 1}/3)")
+                    logger.warning(f"[WARNING] Request text generation failed, retrying... (attempt {attempt + 1}/3)")
             
             # Step 2: A2A에 요청 전송
             agent_response = None
@@ -254,9 +280,9 @@ async def handle_workitem_with_agent(prev_workitem, activity, agent):
                     break
                 except Exception as e:
                     if attempt == 2:
-                        print(f"[ERROR] Failed to send request to agent after 3 attempts: {str(e)}")
+                        logger.error(f"[ERROR] Failed to send request to agent after 3 attempts: {str(e)}")
                         return None
-                    print(f"[WARNING] Agent request failed, retrying... (attempt {attempt + 1}/3)")
+                    logger.warning(f"[WARNING] Agent request failed, retrying... (attempt {attempt + 1}/3)")
             
             # Step 3: 에이전트 응답 처리
             final_output = None
@@ -271,9 +297,9 @@ async def handle_workitem_with_agent(prev_workitem, activity, agent):
                     break
                 except Exception as e:
                     if attempt == 2:
-                        print(f"[ERROR] Failed to process agent response after 3 attempts: {str(e)}")
+                        logger.error(f"[ERROR] Failed to process agent response after 3 attempts: {str(e)}")
                         return None
-                    print(f"[WARNING] Agent response processing failed, retrying... (attempt {attempt + 1}/3)")
+                    logger.warning(f"[WARNING] Agent response processing failed, retrying... (attempt {attempt + 1}/3)")
             
             message_data = {
                 "role": "system",
@@ -290,6 +316,8 @@ async def handle_workitem_with_agent(prev_workitem, activity, agent):
                 "contentType": "html" if final_output.get("html") else "text"
             }
             upsert_chat_message(proc_inst_id, message_data, tenant_id)
+            
+            logger.info(f"Successfully completed handle_workitem_with_agent for activity {activity_id}")
             return final_output
             
     except Exception as e:
@@ -300,7 +328,7 @@ async def handle_workitem_with_agent(prev_workitem, activity, agent):
                 "consumer": None,
                 "log": f"Agent processing failed for activity {activity.id}: {str(e)}"
             }, tenant_id)
-            print(f"[ERROR] Agent processing failed for activity {activity.id}: {str(e)}")
+            logger.error(f"[ERROR] Agent processing failed for activity {activity.id}: {str(e)}")
 
-        print(f"[ERROR] Agent processing failed for activity {activity.id}: {str(e)}")
+        logger.error(f"[ERROR] Agent processing failed for activity {activity.id}: {str(e)}")
         return None 

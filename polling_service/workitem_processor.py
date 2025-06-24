@@ -507,10 +507,11 @@ async def handle_workitem(workitem):
     async for chunk in model.astream(prompt.format(**chain_input)):
         token = chunk.content
         collected_text += token
-        upsert_workitem({
-            "id": workitem['id'],
-            "log": collected_text
-        }, tenant_id)
+    
+    upsert_workitem({
+        "id": workitem['id'],
+        "log": collected_text
+    }, tenant_id)
     
     parsed_output = parser.parse(collected_text)
     result = execute_next_activity(parsed_output, tenant_id)
