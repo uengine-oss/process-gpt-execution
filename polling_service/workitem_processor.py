@@ -12,6 +12,9 @@ import os
 from dotenv import load_dotenv
 from datetime import datetime
 from fastapi import HTTPException
+import threading
+import queue
+import time
 
 from database import (
     fetch_process_definition, fetch_process_instance, fetch_organization_chart, 
@@ -172,6 +175,29 @@ class ProcessResult(BaseModel):
     result: Optional[str] = None
     cannotProceedErrors: Optional[List[ProceedError]] = None
     description: str
+
+# upsert 디바운스 큐 및 쓰레드 정의 (파일 상단에 위치)
+upsert_queue = queue.Queue()
+
+def upsert_worker():
+    last_upsert_time = 0
+    last_item = None
+    DEBOUNCE_SEC = 1  # 0.5초에 한 번만 upsert
+    while True:
+        try:
+            item, tenant_id = upsert_queue.get(timeout=DEBOUNCE_SEC)
+            last_item = (item, tenant_id)
+            upsert_queue.task_done()
+        except queue.Empty:
+            pass  # 큐가 비어있으면 넘어감
+        now = time.time()
+        if last_item and (now - last_upsert_time) >= DEBOUNCE_SEC:
+            upsert_workitem(last_item[0], last_item[1])
+            last_upsert_time = now
+            last_item = None
+
+# 프로그램 시작 시 한 번만 실행
+threading.Thread(target=upsert_worker, daemon=True).start()
 
 def check_external_customer_and_send_email(activity_obj, user_email, process_instance, process_definition):
     """
@@ -507,10 +533,14 @@ async def handle_workitem(workitem):
     async for chunk in model.astream(prompt.format(**chain_input)):
         token = chunk.content
         collected_text += token
-        upsert_workitem({
-            "id": workitem['id'],
-            "log": collected_text
-        }, tenant_id)
+        # upsert_workitem({"id": workitem['id'], "log": collected_text}, tenant_id)
+        upsert_queue.put((
+            {
+                "id": workitem['id'],
+                "log": collected_text
+            },
+            tenant_id
+        ))
     
     parsed_output = parser.parse(collected_text)
     result = execute_next_activity(parsed_output, tenant_id)
