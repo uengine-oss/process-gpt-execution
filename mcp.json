@@ -1,28 +1,5 @@
 {
     "mcpServers": {
-        "playwright": {
-            "command": "npx",
-            "args": ["@playwright/mcp@latest"]
-        },
-        "perplexity": {
-            "command": "uvx",
-            "args": ["perplexity-mcp"],
-            "transport": "stdio"
-        },
-        "odoo ERP": {
-            "command": "/opt/anaconda3/bin/python3",
-            "args": [
-                "-m",
-                "odoo_mcp"
-            ],
-            "env": {
-                "ODOO_URL": "https://uengine.odoo.com",
-                "ODOO_DB": "uengine",
-                "ODOO_USERNAME": "jyjang@uengine.org",
-                "ODOO_PASSWORD": "bca96d3d9716c1dddef9c159097aca3cb2b16352"
-            },
-            "transport": "stdio"
-        },
         "ableton": {
             "command": "npx",
             "args": ["-y", "@xiaolaa2/ableton-copilot-mcp"]
@@ -34,6 +11,363 @@
         "ai-bible": {
             "command": "uvx",
             "args": ["mcp_server_ai_bible"]
+        },
+        "airbnb": {
+            "command": "npx",
+            "args": ["-y", "airbnb-mcp-server"]
+        },
+        "anki": {
+            "command": "npx",
+            "args": ["-y", "anki-mcp-server"]
+        },
+        "apple-books": {
+            "command": "uvx",
+            "args": ["apple-books-mcp"]
+        },
+        "apple-calendar": {
+            "command": "uvx",
+            "args": ["apple-calendar-mcp"]
+        },
+        "apple-contacts": {
+            "command": "uvx",
+            "args": ["apple-contacts-mcp"]
+        },
+        "apple-notes": {
+            "command": "uvx",
+            "args": ["apple-notes-mcp"]
+        },
+        "apple-reminders": {
+            "command": "uvx",
+            "args": ["apple-reminders-mcp"]
+        },
+        "applescript": {
+            "command": "npx",
+            "args": ["-y", "@peakmojo/applescript-mcp"]
+        },
+        "attestable": {
+            "command": "uvx",
+            "args": ["mcp_server_attestable"]
+        },
+        "aranet4": {
+            "command": "uvx",
+            "args": ["mcp_server_aranet4"]
+        },
+        "arduino": {
+            "command": "uvx",
+            "args": ["mcp_server_arduino"]
+        },
+        "arxiv": {
+            "command": "uvx",
+            "args": ["mcp_server_arxiv"]
+        },
+        "arxiv-latex": {
+            "command": "uvx",
+            "args": ["mcp_server_arxiv_latex"]
+        },
+        "coincap": {
+            "command": "npx",
+            "args": ["-y", "coincap-mcp"]
+        },
+        "filesystem": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed"]
+        },
+        "frankfurter": {
+            "command": "uvx",
+            "args": ["mcp_server_frankfurter"]
+        },
+        "freqtrade": {
+            "command": "uvx",
+            "args": ["mcp_server_freqtrade"]
+        },
+        "git": {
+            "command": "uvx",
+            "args": ["mcp-server-git", "--repository", "/path/to/git/repo"]
+        },
+        "gitmcp": {
+            "type": "url",
+            "url": "https://gitmcp.io/<owner>/<repo>",
+            "transport": "sse"
+        },
+        "gnuradio": {
+            "command": "uvx",
+            "args": ["mcp_server_gnuradio"]
+        },
+        "goal-story": {
+            "command": "uvx",
+            "args": ["mcp_server_goal_story"]
+        },
+        "godot": {
+            "command": "uvx",
+            "args": ["mcp_server_godot"]
+        },
+        "goodnews": {
+            "command": "uvx",
+            "args": ["mcp_server_goodnews"]
+        },
+        "hashing": {
+            "command": "uvx",
+            "args": ["mcp_server_hashing"]
+        },
+        "helm": {
+            "command": "uvx",
+            "args": ["mcp_server_helm"]
+        },
+        "huggingface-spaces": {
+            "command": "uvx",
+            "args": ["mcp_server_huggingface_spaces"]
+        },
+        "k8s": {
+            "command": "uvx",
+            "args": ["mcp_k8s_go"]
+        },
+        "korean-dict": {
+            "command": "uvx",
+            "args": ["mcp_server_korean_dictionary"]
+        },
+        "leetcode": {
+            "command": "uvx",
+            "args": ["mcp_server_leetcode"]
+        },
+        "loki": {
+            "command": "uvx",
+            "args": ["mcp_server_loki"]
+        },
+        "markitdown": {
+            "command": "uvx",
+            "args": ["mcp_server_markitdown"]
+        },
+        "memory": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-memory"]
+        },
+        "mediawiki": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-mediawiki"]
+        },
+        "mindmap": {
+            "command": "uvx",
+            "args": ["mcp_server_mindmap"]
+        },
+        "minima": {
+            "command": "uvx",
+            "args": ["mcp_local_rag"]
+        },
+        "mobile": {
+            "command": "uvx",
+            "args": ["mcp_mobile"]
+        },
+        "mongodb": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-mongodb", "mongodb://localhost:27017/mydb"]
+        },
+        "mssql": {
+            "command": "uvx",
+            "args": ["mcp-server-mssql", "mssql://localhost/mydb"]
+        },
+        "multi-model": {
+            "command": "uvx",
+            "args": ["mcp_server_multi_model_advisor"]
+        },
+        "mysql": {
+            "command": "uvx",
+            "args": ["mcp-server-mysql", "mysql://localhost/mydb"]
+        },
+        "nacos-router": {
+            "command": "uvx",
+            "args": ["mcp_server_nacos_router"]
+        },
+        "nixos": {
+            "command": "uvx",
+            "args": ["mcp_nixos"]
+        },
+        "open-library": {
+            "command": "uvx",
+            "args": ["mcp_server_open_library"]
+        },
+        "pandoc": {
+            "command": "uvx",
+            "args": ["mcp_server_pandoc"]
+        },
+        "pdf-reader": {
+            "command": "uvx",
+            "args": ["mcp_server_pdf_reader"]
+        },
+        "pif": {
+            "command": "uvx",
+            "args": ["mcp_server_pif"]
+        },
+        "playwright": {
+            "command": "npx",
+            "args": ["@playwright/mcp@latest"]
+        },
+        "postman": {
+            "command": "npx",
+            "args": ["-y", "postman-mcp-server"]
+        },
+        "postgres": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"]
+        },
+        "prometheus": {
+            "command": "uvx",
+            "args": ["mcp_server_prometheus"]
+        },
+        "pubchem": {
+            "command": "uvx",
+            "args": ["mcp_server_pubchem"]
+        },
+        "puppeteer-vision": {
+            "command": "npx",
+            "args": ["-y", "puppeteer-vision-mcp"]
+        },
+        "quickchart": {
+            "command": "npx",
+            "args": ["-y", "quickchart-mcp"]
+        },
+        "rag-local": {
+            "command": "uvx",
+            "args": ["mcp_server_rag_local"]
+        },
+        "rabbitmq": {
+            "command": "uvx",
+            "args": ["mcp_server_rabbitmq"]
+        },
+        "reaper": {
+            "command": "uvx",
+            "args": ["mcp_server_reaper"]
+        },
+        "reed-jobs": {
+            "command": "uvx",
+            "args": ["mcp_server_reed_jobs"]
+        },
+        "redis": {
+            "command": "uvx",
+            "args": ["mcp_server_redis"]
+        },
+        "rquest": {
+            "command": "uvx",
+            "args": ["mcp_server_rquest"]
+        },
+        "run-python": {
+            "command": "deno",
+            "args": [
+            "run",
+            "-N",
+            "-R=node_modules",
+            "-W=node_modules",
+            "--node-modules-dir=auto",
+            "jsr:@pydantic/mcp-run-python",
+            "stdio"
+            ]
+        },
+        "sanctions": {
+            "command": "uvx",
+            "args": ["mcp_server_sanctions"]
+        },
+        "scholarly": {
+            "command": "uvx",
+            "args": ["mcp_server_scholarly"]
+        },
+        "scrapling-fetch": {
+            "command": "uvx",
+            "args": ["mcp_server_scrapling_fetch"]
+        },
+        "searxng": {
+            "command": "uvx",
+            "args": ["mcp_server_searxng"]
+        },
+        "sec-edgar": {
+            "command": "uvx",
+            "args": ["mcp_server_sec_edgar"]
+        },
+        "siri-shortcuts": {
+            "command": "uvx",
+            "args": ["mcp_server_siri_shortcuts"]
+        },
+        "solr": {
+            "command": "uvx",
+            "args": ["mcp_server_solr"]
+        },
+        "solver": {
+            "command": "uvx",
+            "args": ["mcp_server_solver"]
+        },
+        "spring-initializr": {
+            "command": "uvx",
+            "args": ["mcp_server_spring_initializr"]
+        },
+        "terminal-controller": {
+            "command": "uvx",
+            "args": ["terminal_controller"]
+        },
+        "things3": {
+            "command": "uvx",
+            "args": ["mcp_server_things3"]
+        },
+        "think": {
+            "command": "uvx",
+            "args": ["mcp_server_think"]
+        },
+        "todos": {
+            "command": "uvx",
+            "args": ["mcp_server_todos"]
+        },
+        "touchdesigner": {
+            "command": "uvx",
+            "args": ["mcp_server_touchdesigner"]
+        },
+        "unity3d": {
+            "command": "uvx",
+            "args": ["mcp_server_unity3d"]
+        },
+        "user-feedback": {
+            "command": "uvx",
+            "args": ["mcp_server_user_feedback"]
+        },
+        "vega-lite": {
+            "command": "uvx",
+            "args": ["mcp_server_vegalite"]
+        },
+        "vibe-check": {
+            "command": "uvx",
+            "args": ["mcp_server_vibe_check"]
+        },
+        "video-still": {
+            "command": "uvx",
+            "args": ["mcp_server_video_still"]
+        },
+        "vision": {
+            "command": "uvx",
+            "args": ["mcp_server_vision"]
+        },
+        "weather": {
+            "command": "uvx",
+            "args": ["mcp_server_weather"]
+        },
+        "xcode": {
+            "command": "uvx",
+            "args": ["mcp_server_xcode"]
+        },
+        "xcodebuild": {
+            "command": "uvx",
+            "args": ["mcp_server_xcodebuild"]
+        },
+        "xmind": {
+            "command": "uvx",
+            "args": ["mcp_server_xmind"]
+        },
+        "yfinance": {
+            "command": "uvx",
+            "args": ["mcp_server_yfinance"]
+        },
+        "youtube": {
+            "command": "uvx",
+            "args": ["mcp_server_youtube"]
+        },
+        "zenml": {
+            "command": "uvx",
+            "args": ["mcp_server_zenml"]
         }
     }
 }

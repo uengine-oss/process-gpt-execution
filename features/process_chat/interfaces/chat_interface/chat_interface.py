@@ -3,8 +3,8 @@ from .clients import ClientFactory
 from .factories import LangchainMessageFactory
 from .clients.base import StreamingResponse
 
-from langchain.schema import Generation
-from langchain.globals import get_llm_cache
+# from langchain.schema import Generation
+# from langchain.globals import get_llm_cache
 import hashlib, json, asyncio
 
 def build_prompt_for_cache(vendor: str, model: str, messages: list, model_config: dict) -> str:
@@ -24,20 +24,20 @@ class ChatInterface:
         client = ClientFactory.get_client(vendor)
         lc_messages = LangchainMessageFactory.create_messages(messages)
         
-        prompt = build_prompt_for_cache(vendor, model, messages, modelConfig)
-        llm_string = build_llm_string(vendor, model)
+        # prompt = build_prompt_for_cache(vendor, model, messages, modelConfig)
+        # llm_string = build_llm_string(vendor, model)
         
-        cache = get_llm_cache()
-        cached_generations = cache.lookup(prompt, llm_string)
+        # cache = get_llm_cache()
+        # cached_generations = cache.lookup(prompt, llm_string)
         
-        if cached_generations:
-            cached_text = cached_generations[0].text
+        # if cached_generations:
+        #     cached_text = cached_generations[0].text
 
-            async def stream_cached_response(text: str):
-                yield f"data: {json.dumps({'choices': [{'delta': {'content': text}}]})}\n\n"
-                yield "data: [DONE]\n\n"
+        #     async def stream_cached_response(text: str):
+        #         yield f"data: {json.dumps({'choices': [{'delta': {'content': text}}]})}\n\n"
+        #         yield "data: [DONE]\n\n"
 
-            return StreamingResponse(stream_cached_response(cached_text), media_type="text/event-stream")
+        #     return StreamingResponse(stream_cached_response(cached_text), media_type="text/event-stream")
 
         if stream:
             response = await client.stream_response(
@@ -61,21 +61,21 @@ class ChatInterface:
                         pass
                     yield chunk
 
-                try:
-                    cache.update(prompt, llm_string, [Generation(text=result_text)])
-                except Exception as e:
-                    print(f"[cache error] {e}")
+                # try:
+                #     cache.update(prompt, llm_string, [Generation(text=result_text)])
+                # except Exception as e:
+                #     print(f"[cache error] {e}")
 
             return StreamingResponse(streaming_response(), media_type="text/event-stream")
 
         else:
             response = await client.invoke(messages=lc_messages, model=model, modelConfig=modelConfig)
-            text = response["text"]
+            # text = response["text"]
 
-            try:
-                cache.update(prompt, llm_string, [Generation(text=text)])
-            except Exception as e:
-                print(f"[cache error] {e}")
+            # try:
+            #     cache.update(prompt, llm_string, [Generation(text=text)])
+            # except Exception as e:
+            #     print(f"[cache error] {e}")
 
             return response
 

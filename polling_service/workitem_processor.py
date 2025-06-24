@@ -1,30 +1,37 @@
-from fastapi import HTTPException
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain.schema import Document
-from langserve import add_routes
-from langchain.output_parsers.json import SimpleJsonOutputParser  # JsonOutputParser 임포트
+from langchain.output_parsers.json import SimpleJsonOutputParser
 from pydantic import BaseModel
 from typing import List, Optional, Any
-from code_executor import execute_python_code
-from datetime import datetime
-
-from database import fetch_process_definition, fetch_process_instance, fetch_organization_chart, fetch_ui_definition_by_activity_id, fetch_agent_by_id, fetch_assignee_info, get_vector_store, fetch_workitem_with_submitted_status, fetch_workitem_with_agent, fetch_workitem_by_proc_inst_and_activity
-from database import upsert_process_instance, upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, upsert_todo_workitems, upsert_workitem, delete_workitem
-from database import ProcessInstance
-from process_engine import process_output, check_agent_workitem, handle_workitem_with_agent
-from process_definition import ProcessDefinition
-
-import uuid
 import json
+import re
+import uuid
+import requests
+import os
+from dotenv import load_dotenv
+from datetime import datetime
+from fastapi import HTTPException
+
+from database import (
+    fetch_process_definition, fetch_process_instance, fetch_organization_chart, 
+    fetch_ui_definition_by_activity_id, fetch_agent_by_id, fetch_assignee_info, 
+    get_vector_store, fetch_workitem_by_proc_inst_and_activity, upsert_process_instance, 
+    upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
+    upsert_todo_workitems, upsert_workitem, delete_workitem, ProcessInstance
+)
+from process_definition import ProcessDefinition
+from code_executor import execute_python_code
+from smtp_handler import generate_email_template, send_email
+from agent_processor import handle_workitem_with_agent
+
+load_dotenv()
 
 # ChatOpenAI 객체 생성
 model = ChatOpenAI(model="gpt-4o", streaming=True)
 vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096, streaming=True)
 
-
 # parser 생성
-import re
 class CustomJsonOutputParser(SimpleJsonOutputParser):
     def parse(self, text: str) -> dict:
         # Extract JSON from markdown if present
@@ -38,9 +45,8 @@ class CustomJsonOutputParser(SimpleJsonOutputParser):
             return json.loads(text)
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON: {str(e)}")
-# Replace the existing parser with our custom parser
-parser = CustomJsonOutputParser()
 
+parser = CustomJsonOutputParser()
 
 prompt = PromptTemplate.from_template(
 """
@@ -67,7 +73,8 @@ Now, you're going to create an interactive system similar to a BPM system that h
     activity id: "{activity_id}",
     user: "{user_email}",
     submitted form values: {form_values},
-    submitted answer: "{answer}"    // If no form values have been submitted, assign the values in the form field using the submitted answers. Based on the current running activity form fields. If the readonly="true" fields are not entered, never return an error and ignore it. But if fields with readonly="false" are not entered, return the error "DATA_FIELD_NOT_EXIST"
+    submitted answer: "{answer}"    // If no form values have been submitted, assign the values in the form field using the submitted answers. Based on the current running activity form fields. If the readonly="true" fields are not entered, never return an error and ignore it. But if fields with readonly="false" are not entered, return the error "DATA_FIELD_NOT_EXIST",
+    other output: {other_output} // 폼 입력 값이 누락된 경우 이걸 참고해서 폼 입력 값을 채워줄 것.
 
 - Today is:  {today}
 
@@ -129,7 +136,6 @@ result should be in this JSON format:
 }}
 """
 )
-
 
 # Pydantic model for process execution
 class Activity(BaseModel):
@@ -202,7 +208,6 @@ def check_external_customer_and_send_email(activity_obj, user_email, process_ins
                     "support_email": "help@uengine.org"
                 }
                 
-                from smtp_handler import generate_email_template, send_email
                 # 이메일 템플릿 생성
                 email_template = generate_email_template(activity_obj, external_form_url, additional_info)
                 title = f"'{activity_obj.name}' 를 진행해주세요."
@@ -381,17 +386,16 @@ def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = 
         upsert_todo_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
         
         workitems = None
-        message_json = json.dumps({"description": ""})
         upsert_completed_workitem(process_instance.dict(), process_result_json, process_definition, tenant_id)
         workitems = upsert_next_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
         _, process_instance = upsert_process_instance(process_instance, tenant_id)
-        message_json = json.dumps({"description": process_result.description})
+        message_json = json.dumps({"role": "system", "content": process_result.description})
         if process_result.cannotProceedErrors:
             reason = ""
             for error in process_result.cannotProceedErrors:
                 reason += error.reason + "\n"
-            message_json = json.dumps({"description": reason})
-        upsert_chat_message(process_instance.proc_inst_id, message_json, True, tenant_id)
+            message_json = json.dumps({"role": "system", "content": reason})
+        upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
         
         # Updating process_result_json with the latest process instance details and execution result
         process_result_json["instanceId"] = process_instance.proc_inst_id
@@ -418,19 +422,28 @@ def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = 
         
         return json.dumps(process_result_json)
     except Exception as e:
-        message_json = json.dumps({"description": str(e)})
-        upsert_chat_message(process_instance.proc_inst_id, message_json, True, tenant_id)
+        message_json = json.dumps({"role": "system", "content": str(e)})
+        upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
+MEMENTO_SERVICE_URL = os.getenv("MEMENTO_SERVICE_URL", "http://memento-service:8005")
 
-# execute_chain = (
-#     prompt | model | parser | execute_next_activity
-# )
-
-
-import asyncio
-from database import setting_database
-
+def process_output(workitem, tenant_id):
+    try:
+        if workitem["output"] is None or workitem["output"] == {}:
+            return
+        url = f"{MEMENTO_SERVICE_URL}/process/database"
+        response = requests.post(url, json={
+            "storage_type": "database",
+            "options": {
+                "proc_inst_id": workitem["proc_inst_id"],
+                "activity_id": workitem["activity_id"],
+                "tenant_id": tenant_id
+            }
+        })
+        return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 async def handle_workitem(workitem):
     if workitem['retry'] >= 3:
@@ -461,6 +474,14 @@ async def handle_workitem(workitem):
     ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id, tenant_id)
     form_fields = ui_definition.fields_json if ui_definition else None
     form_html = ui_definition.html if ui_definition else None
+    output = {}
+    if workitem['output'] and isinstance(workitem['output'], str):
+        output = json.loads(workitem['output'])
+    else:
+        output = workitem['output']
+    form_id = ui_definition.id if ui_definition else None
+    if form_id and output.get(form_id):
+        output = output.get(form_id)
     
     chain_input = {
         "answer": '',
@@ -478,7 +499,8 @@ async def handle_workitem(workitem):
         "organizationChart": organization_chart,
         "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
         "form_fields": form_fields,
-        "form_values": workitem['output']
+        "form_values": output,
+        "other_output": workitem['output']
     }
     
     collected_text = ""
@@ -507,93 +529,32 @@ async def handle_workitem(workitem):
                 "due_date": new_workitem_dict['due_date'].isoformat() if new_workitem_dict['due_date'] else None
             }, tenant_id)
             delete_workitem(new_workitem_dict['id'], tenant_id)
-        
+
     else:
         upsert_workitem({
             "id": workitem['id'],
             "status": "DONE",
         }, tenant_id)
         
-        if workitem['output'] and isinstance(workitem['output'], str):
-            output = json.loads(workitem['output'])
-        else:
-            output = workitem['output']
-        form_id = ui_definition.id if ui_definition else None
-        if form_id and output.get(form_id):
-            output = output.get(form_id)
-        
-        message_data = {
-            "description": f"{workitem['activity_name']} 업무를 완료하였습니다.",
-            "jsonData": output if output else {},
-            "html": form_html if form_html else ""
-        }
-        upsert_chat_message(workitem['proc_inst_id'], message_data, True, tenant_id, False)
+        if form_html and output:
+            message_data = {
+                "role": "system",
+                "content": f"{workitem['activity_name']} 업무가 완료되었습니다.",
+                "jsonContent": output if output else {},
+                "htmlContent": form_html if form_html else "",
+                "contentType": "html" if form_html else "text"
+            }
+            upsert_chat_message(workitem['proc_inst_id'], message_data, tenant_id)
         try:
             print(f"[DEBUG] process_output for workitem {workitem['id']}")
             process_output(workitem, tenant_id)
         except Exception as e:
             print(f"[ERROR] Error in process_output for workitem {workitem['id']}: {str(e)}")
 
-
-async def safe_handle_workitem(workitem):
-    try:
-        upsert_workitem({
-            "id": workitem['id'],
-            "log": f"'{workitem['activity_name']}' 업무를 실행합니다."
-        }, workitem['tenant_id'])
-        
-        if workitem['status'] == "SUBMITTED":
-            print(f"[DEBUG] Starting safe_handle_workitem for workitem: {workitem['id']}")
-            await handle_workitem(workitem)
-        elif workitem['agent_mode'] == "A2A" and workitem['status'] == "IN_PROGRESS":
-            print(f"[DEBUG] Starting safe_handle_workitem for agent workitem: {workitem['id']}")
-            await handle_agent_workitem(workitem)
-
-    except Exception as e:
-        print(f"[ERROR] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}")
-        workitem['retry'] = workitem['retry'] + 1
-        workitem['consumer'] = None
-        if workitem['retry'] >= 3:
-            workitem['status'] = "DONE"
-            workitem['log'] = f"[Error] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}"
-        else:
-            workitem['log'] = f"실행하는 중 오류가 발생했습니다. 다시 시도하겠습니다."
-        upsert_workitem(workitem, workitem['tenant_id'])
-
-async def polling_workitem():
-    all_workitems = []
-    submitted_workitems = fetch_workitem_with_submitted_status()
-    if submitted_workitems:
-        all_workitems.extend(submitted_workitems)
-    agent_workitems = fetch_workitem_with_agent()
-    if agent_workitems:
-        all_workitems.extend(agent_workitems)
-
-    if len(all_workitems) == 0:
-        return
-
-    tasks = []
-    for workitem in all_workitems:
-        task = asyncio.create_task(safe_handle_workitem(workitem))
-        tasks.append(task)
-    
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-async def start_polling():
-    setting_database()
-
-    while True:
-        try:
-            await polling_workitem()
-        except Exception as e:
-            print(f"[Polling Loop Error] {e}")
-        await asyncio.sleep(5)
-
 async def handle_agent_workitem(workitem):
     """
     에이전트 업무를 처리하는 함수
-    process_engine의 handle_workitem_with_agent를 사용합니다.
+    agent_processor의 handle_workitem_with_agent를 사용합니다.
     """
     if workitem['retry'] >= 3:
         return
@@ -624,7 +585,6 @@ async def handle_agent_workitem(workitem):
             return
         
         # handle_workitem_with_agent 호출
-        from process_engine import handle_workitem_with_agent
         result = await handle_workitem_with_agent(workitem, activity, agent_info)
         
         if result is not None:
@@ -638,4 +598,4 @@ async def handle_agent_workitem(workitem):
         
     except Exception as e:
         print(f"[ERROR] Error in handle_agent_workitem for workitem {workitem['id']}: {str(e)}")
-        raise e
+        raise e 
