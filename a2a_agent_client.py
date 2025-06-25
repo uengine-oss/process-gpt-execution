@@ -6,7 +6,7 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 import logging
 
-from a2a.client import A2AClient
+from a2a.client import A2AClient, A2ACardResolver
 from a2a.types import (
     SendStreamingMessageRequest,
     MessageSendParams,
@@ -43,6 +43,9 @@ async def get_a2a_client(agent_url: str) -> A2AClient:
             client = await A2AClient.get_client_from_agent_card_url(
                 httpx_client, agent_url
             )
+            agent_card = await A2ACardResolver(httpx_client, base_url=agent_url).get_agent_card()
+            setattr(client, "agent_card", agent_card)
+
             client.agent_card.url = client.agent_card.url.rstrip("/") + "/a2a"
             
             client_cache[agent_url] = client
