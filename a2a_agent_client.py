@@ -40,9 +40,12 @@ async def get_a2a_client(agent_url: str) -> A2AClient:
             
             # A2A 클라이언트 생성
             logger.info(f"Initializing A2A client from agent card URL: {agent_url}")
-            client_cache[agent_url] = await A2AClient.get_client_from_agent_card_url(
+            client = await A2AClient.get_client_from_agent_card_url(
                 httpx_client, agent_url
             )
+            client.agent_card.url = client.agent_card.url.rstrip("/") + "/a2a"
+            
+            client_cache[agent_url] = client
             logger.info(f"Successfully created A2A client for agent_url: {agent_url}")
         else:
             logger.info(f"Using cached A2A client for agent_url: {agent_url}")

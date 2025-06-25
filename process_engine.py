@@ -76,7 +76,10 @@ async def submit_workitem(input: dict):
     if activity_id is None:
         activity_id = process_definition.find_initial_activity().id
     activity = process_definition.find_activity_by_id(activity_id)
-    prev_activities = process_definition.find_prev_activities(activity.id, [])
+    if activity is not None:
+        prev_activities = process_definition.find_prev_activities(activity.id, [])
+    else:
+        prev_activities = []
 
     role_bindings = input.get('role_mappings')
     output = input.get('form_values')
