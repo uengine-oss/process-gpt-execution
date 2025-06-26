@@ -181,6 +181,20 @@
             "command": "uvx",
             "args": ["mcp_nixos"]
         },
+        "odoo ERP": {
+            "command": "/opt/anaconda3/bin/python3",
+            "args": [
+                "-m",
+                "odoo_mcp"
+            ],
+            "env": {
+                "ODOO_URL": "https://uengine.odoo.com",
+                "ODOO_DB": "uengine",
+                "ODOO_USERNAME": "jyjang@uengine.org",
+                "ODOO_PASSWORD": "bca96d3d9716c1dddef9c159097aca3cb2b16352"
+            },
+            "transport": "stdio"
+        },
         "open-library": {
             "command": "uvx",
             "args": ["mcp_server_open_library"]
@@ -192,6 +206,11 @@
         "pdf-reader": {
             "command": "uvx",
             "args": ["mcp_server_pdf_reader"]
+        },
+        "perplexity": {
+            "command": "uvx",
+            "args": ["perplexity-mcp"],
+            "transport": "stdio"
         },
         "pif": {
             "command": "uvx",
