@@ -385,11 +385,6 @@ def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = 
                         act_id for act_id in process_instance.current_activity_ids
                         if act_id != activity_obj.id
                     ]
-                    
-                    end_activity = process_definition.find_end_activity()
-                    if end_activity and activity_obj.id == end_activity.id:
-                        process_instance.status = "COMPLETED"
-                        process_instance.current_activity_ids = ['end_event']
                         
                     process_result_json["nextActivities"] = [
                         Activity(**act) for act in process_result_json.get("nextActivities", [])
@@ -530,10 +525,10 @@ async def handle_workitem(workitem):
     }
     
     collected_text = ""
+    num_of_chunk = 0
     async for chunk in model.astream(prompt.format(**chain_input)):
         token = chunk.content
         collected_text += token
-        # upsert_workitem({"id": workitem['id'], "log": collected_text}, tenant_id)
         upsert_queue.put((
             {
                 "id": workitem['id'],
@@ -541,7 +536,10 @@ async def handle_workitem(workitem):
             },
             tenant_id
         ))
-    
+        num_of_chunk += 1
+        if num_of_chunk % 10 == 0:
+            upsert_workitem({"id": workitem['id'], "log": collected_text}, tenant_id)
+
     parsed_output = parser.parse(collected_text)
     result = execute_next_activity(parsed_output, tenant_id)
     result_json = json.loads(result)

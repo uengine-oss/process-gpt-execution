@@ -306,11 +306,28 @@ def insert_process_instance(process_instance_data: dict, tenant_id: Optional[str
 
 
 def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Optional[str] = None) -> (bool, ProcessInstance):
-    if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids or 'end_event' in process_instance.current_activity_ids or process_instance.status == 'COMPLETED':
-        process_instance.current_activity_ids = []
-        status = 'COMPLETED'
+    process_definition = process_instance.process_definition
+    if process_definition is None:
+        process_definition = load_process_definition(fetch_process_definition(process_instance.get_def_id(), tenant_id))
+        process_instance.process_definition = process_definition
+
+    end_activity = process_definition.find_end_activity()
+    if end_activity:
+        end_workitem = fetch_workitem_by_proc_inst_and_activity(process_instance.proc_inst_id, end_activity.id, tenant_id)
+        if end_workitem:
+            if end_workitem.status == 'DONE':
+                status = 'COMPLETED'
+            else:
+                status = 'RUNNING'
+        else:
+            status = 'RUNNING'
     else:
-        status = 'RUNNING'
+        if process_instance.current_activity_ids and len(process_instance.current_activity_ids) != 0:
+            if end_activity and end_activity.id in process_instance.current_activity_ids:
+                status = 'COMPLETED'
+            else:
+                status = 'RUNNING'
+    
     process_instance_data = process_instance.dict(exclude={'process_definition'})  # Convert Pydantic model to dict
     process_instance_data = convert_decimal(process_instance_data)
 
@@ -335,7 +352,7 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
             'current_user_ids': process_instance.current_user_ids,
             'role_bindings': process_instance.role_bindings,
             'variables_data': process_instance.variables_data,
-            'status': status,
+            'status': status if status else process_instance.status,
             'proc_def_id': process_instance.get_def_id(),
             'proc_def_version': arcv_id,
             'tenant_id': tenant_id

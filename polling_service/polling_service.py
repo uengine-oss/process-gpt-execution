@@ -6,12 +6,6 @@ from database import (
 )
 from workitem_processor import handle_workitem, handle_agent_workitem
 
-semaphore = asyncio.Semaphore(3)
-
-async def limited_safe_handle_workitem(workitem):
-    async with semaphore:
-        await safe_handle_workitem(workitem)
-
 async def safe_handle_workitem(workitem):
     try:
         upsert_workitem({
@@ -51,7 +45,7 @@ async def polling_workitem():
 
     tasks = []
     for workitem in all_workitems:
-        task = asyncio.create_task(limited_safe_handle_workitem(workitem))
+        task = asyncio.create_task(safe_handle_workitem(workitem))
         tasks.append(task)
     
     if tasks:
@@ -65,7 +59,7 @@ async def start_polling():
             await polling_workitem()
         except Exception as e:
             print(f"[Polling Loop Error] {e}")
-        await asyncio.sleep(10)
+        await asyncio.sleep(5)
 
 def run_polling_service():
     try:
