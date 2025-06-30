@@ -4,7 +4,7 @@ from langchain_openai import ChatOpenAI
 from langchain.output_parsers.json import SimpleJsonOutputParser
 from datetime import datetime, timedelta
 
-from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, upsert_chat_message
+from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, upsert_chat_message, upsert_process_definition
 from process_definition import ProcessDefinition
 
 import uuid
@@ -87,6 +87,14 @@ async def submit_workitem(input: dict):
     user_email = None
     
     if role_bindings:
+        if process_definition_data.get('roleBindings') is None:
+            process_definition_data['roleBindings'] = role_bindings
+            definition_data = {
+                'id': process_definition_id,
+                'definition': process_definition_data
+            }
+            upsert_process_definition(definition_data)
+
         for role in role_bindings:
             endpoint = role.get('endpoint')
             if endpoint == 'external_customer':
@@ -177,24 +185,51 @@ role_binding_chain = (
     role_binding_prompt | model | parser | process_role_binding
 )
 
-async def combine_input_with_role_binding(request: Request):
+async def handle_role_binding(request: Request):
     try:
+        result = None
+        result_json = None
+        
         json_data = await request.json()
         input = json_data.get('input')
         roles = input.get('roles')
         my_email = input.get('email')
-        organizationChart = fetch_organization_chart()
         
-        if not organizationChart:
-            organizationChart = "There is no organization chart"
+        process_definition_id = input.get('proc_def_id')
         
-        chain_input = {
-            "roles": roles,
-            "organizationChart": organizationChart,
-            "myEmail": my_email
-        }
+        if process_definition_id:
+            process_definition = fetch_process_definition(process_definition_id)
+            if process_definition.get('roleBindings') is not None:
+                role_bindings = process_definition.get('roleBindings')
+                result_json = {
+                    "roleBindings": role_bindings
+                }
+                result = json.dumps(result_json)
         
-        return role_binding_chain.invoke(chain_input)
+        if result is None:
+            organizationChart = fetch_organization_chart()
+                
+            if not organizationChart:
+                organizationChart = "There is no organization chart"
+            
+            chain_input = {
+                "roles": roles,
+                "organizationChart": organizationChart,
+                "myEmail": my_email
+            }
+            
+            result = role_binding_chain.invoke(chain_input)
+
+        if process_definition_id and process_definition and result_json is not None:
+            result_json = json.loads(result)
+            process_definition['roleBindings'] = result_json.get('roleBindings')
+            definition_data = {
+                'id': process_definition_id,
+                'definition': process_definition
+            }
+            upsert_process_definition(definition_data)
+
+        return result
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -202,7 +237,7 @@ async def combine_input_with_role_binding(request: Request):
 def add_routes_to_app(app) :
     app.add_api_route("/complete", handle_submit, methods=["POST"])
     app.add_api_route("/vision-complete", handle_submit, methods=["POST"])
-    app.add_api_route("/role-binding", combine_input_with_role_binding, methods=["POST"])
+    app.add_api_route("/role-binding", handle_role_binding, methods=["POST"])
 
 
 """

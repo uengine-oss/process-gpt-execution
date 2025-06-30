@@ -53,12 +53,22 @@ async def polling_workitem():
 
 async def start_polling():
     setting_database()
+    consecutive_errors = 0
+    max_consecutive_errors = 10
 
     while True:
         try:
             await polling_workitem()
+            consecutive_errors = 0
         except Exception as e:
+            consecutive_errors += 1
             print(f"[Polling Loop Error] {e}")
+            
+            if consecutive_errors >= max_consecutive_errors:
+                print(f"[CRITICAL] Too many consecutive errors ({consecutive_errors}), restarting polling service...")
+                setting_database()
+                consecutive_errors = 0
+            
         await asyncio.sleep(5)
 
 def run_polling_service():
