@@ -534,6 +534,38 @@ def fetch_workitem_with_agent(limit=5) -> Optional[List[dict]]:
         raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
 
 
+def cleanup_stale_consumers():
+    """
+    오래된 consumer를 정리하는 함수
+    30분 이상 업데이트되지 않은 IN_PROGRESS 상태의 워크아이템의 consumer를 해제
+    """
+    try:
+        db_config = db_config_var.get()
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
+
+        query = """
+            UPDATE todolist
+            SET consumer = NULL
+            WHERE status = 'IN_PROGRESS'
+                AND consumer IS NOT NULL
+                AND start_date < NOW() - INTERVAL '30 minutes';
+        """
+
+        cursor.execute(query)
+        updated_count = cursor.rowcount
+
+        connection.commit()
+        cursor.close()
+        connection.close()
+
+        if updated_count > 0:
+            print(f"[INFO] Cleaned up {updated_count} stale consumers")
+
+    except Exception as e:
+        print(f"[ERROR] Failed to cleanup stale consumers: {str(e)}")
+
+
 def upsert_completed_workitem(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None):
     try:
         if not tenant_id:
