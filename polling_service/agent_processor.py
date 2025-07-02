@@ -237,7 +237,10 @@ async def process_agent_response(agent_response, current_workitem):
 async def handle_workitem_with_agent(prev_workitem, activity, agent):
     logger.info(f"Starting handle_workitem_with_agent for activity {activity.id if activity else 'None'}, agent: {agent.get('name') if agent else 'None'}")
     try:
-        if agent:
+        if isinstance(agent, list):
+            for agent in agent:
+                handle_workitem_with_agent(prev_workitem, activity, agent)
+        else:
             proc_inst_id = prev_workitem["proc_inst_id"]
             tenant_id = prev_workitem["tenant_id"]
             activity_id = activity.id

@@ -292,6 +292,33 @@ def fetch_process_definition(def_id, tenant_id: Optional[str] = None):
         raise HTTPException(status_code=404, detail=f"No process definition found with ID {def_id}: {e}")
 
 
+def upsert_process_definition(definition: dict, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        if not tenant_id:
+            tenant_id = subdomain_var.get()
+        
+        process_definition_id = definition.get('id')
+        definition['tenant_id'] = tenant_id
+        
+        process_definition = supabase.table('proc_def').select('*').eq('id', process_definition_id).eq('tenant_id', tenant_id).execute()
+        
+        if process_definition.data:
+            existing_data = process_definition.data[0]
+            definition['uuid'] = existing_data.get('uuid')
+            definition['bpmn'] = existing_data.get('bpmn')
+            definition['isdeleted'] = existing_data.get('isdeleted', False)
+            return supabase.table('proc_def').upsert(definition).execute()
+        else:
+            definition.pop('uuid', None)
+            return supabase.table('proc_def').insert(definition).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error upserting process definition with ID {process_definition_id}: {e}")
+
+
 def fetch_process_definition_versions(def_id, tenant_id: Optional[str] = None):
     try:
         supabase = supabase_client_var.get()
@@ -1903,6 +1930,10 @@ def fetch_agent_by_id(agent_id: str) -> Optional[dict]:
             raise Exception("Supabase client is not configured for this request")
         
         response = supabase.table("agents").select("*").eq('id', agent_id).execute()
-        return response.data[0]
+        if response.data:
+            return response.data[0]
+        else:
+            return None
+
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
