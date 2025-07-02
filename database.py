@@ -1480,6 +1480,8 @@ def invite_user(input):
 
         tenant_id = input.get('tenant_id') if input.get('tenant_id') else subdomain_var.get()
         user_id = None
+        response = None
+        redirect_url = None
 
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
@@ -1511,10 +1513,6 @@ def invite_user(input):
                 "is_admin": is_admin,
                 "tenant_id": tenant_id
             }).execute()
-        
-        print(f"Invitation sent to {email}")
-        print(f"Redirect URL: {redirect_url}")
-        print(f"Response: {response}")
         
         return {
             "success": True,
