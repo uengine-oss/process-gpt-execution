@@ -1500,7 +1500,7 @@ def invite_user(input):
      
         email = input.get("email")
         role = input.get("role")
-        if role == "superAdmin":
+        if role == "admin":
             is_admin = True
         else:
             is_admin = False
@@ -1536,7 +1536,7 @@ def invite_user(input):
                 "id": user_id,
                 "email": email,
                 "username": email.split('@')[0],
-                "role": role,
+                "role": 'user',
                 "is_admin": is_admin,
                 "tenant_id": tenant_id
             }).execute()
