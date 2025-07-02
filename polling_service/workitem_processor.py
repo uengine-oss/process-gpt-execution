@@ -23,7 +23,7 @@ from database import (
     upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
     upsert_todo_workitems, upsert_workitem, delete_workitem, ProcessInstance
 )
-from process_definition import ProcessDefinition
+from process_definition import load_process_definition
 from code_executor import execute_python_code
 from smtp_handler import generate_email_template, send_email
 from agent_processor import handle_workitem_with_agent
@@ -479,13 +479,25 @@ async def handle_workitem(workitem):
     process_instance = fetch_process_instance(process_instance_id, tenant_id) if process_instance_id != "new" else None
     organization_chart = fetch_organization_chart(tenant_id)
     if workitem['user_id'] != "external_customer":
-        assignee_info = fetch_assignee_info(workitem['user_id'])
-        user_info = {
-            "name": assignee_info.get("name", workitem['user_id']),
-            "email": assignee_info.get("email", workitem['user_id']),
-            "type": assignee_info.get("type", "unknown"),
-            "info": assignee_info.get("info", {})
-        }
+        if ',' in workitem['user_id']:
+            user_ids = workitem['user_id'].split(',')
+            user_info = []
+            for user_id in user_ids:
+                assignee_info = fetch_assignee_info(user_id)
+                user_info.append({
+                    "name": assignee_info.get("name", user_id),
+                    "email": assignee_info.get("email", user_id),
+                    "type": assignee_info.get("type", "unknown"),
+                    "info": assignee_info.get("info", {})
+                })
+        else:
+            assignee_info = fetch_assignee_info(workitem['user_id'])
+            user_info = {
+                "name": assignee_info.get("name", workitem['user_id']),
+                "email": assignee_info.get("email", workitem['user_id']),
+                "type": assignee_info.get("type", "unknown"),
+                "info": assignee_info.get("info", {})
+            }
     else:
         user_info = {
             "name": "external_customer",
@@ -515,7 +527,7 @@ async def handle_workitem(workitem):
         "process_definition_id": process_definition_id,
         "activity_id": activity_id,
         "user_info": user_info,
-        "user_email": workitem['user_id'],
+        "user_email": workitem['user_id'] if ',' not in workitem['user_id'] else ','.join(workitem['user_id'].split(',')),
         "today": today,
         "organizationChart": organization_chart,
         "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
@@ -591,8 +603,13 @@ async def handle_agent_workitem(workitem):
         print(f"[DEBUG] Starting agent workitem processing for: {workitem['id']}")
         
         # 에이전트 정보 가져오기
-        agent_id = workitem['user_id']
-        agent_info = fetch_agent_by_id(agent_id)
+        if ',' in workitem['user_id']:
+            agent_ids = workitem['user_id'].split(',')
+            agent_info = []
+            for agent_id in agent_ids:
+                agent_info.append(fetch_agent_by_id(agent_id))
+        else:
+            agent_id = workitem['user_id']
         
         if not agent_info:
             print(f"[ERROR] Agent not found: {agent_id}")
@@ -605,7 +622,7 @@ async def handle_agent_workitem(workitem):
         
         # 프로세스 정의와 액티비티 정보 가져오기
         process_definition_json = fetch_process_definition(workitem['proc_def_id'], workitem['tenant_id'])
-        process_definition = ProcessDefinition(**process_definition_json)
+        process_definition = load_process_definition(process_definition_json)
         activity = process_definition.find_activity_by_id(workitem['activity_id'])
         
         if not activity:
