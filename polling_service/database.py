@@ -1,6 +1,6 @@
 from supabase import create_client, Client
 from pydantic import BaseModel, validator
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import SupabaseVectorStore
 from process_definition import ProcessDefinition, load_process_definition, UIDefinition
@@ -22,6 +22,7 @@ import json
 db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
 subdomain_var = ContextVar('subdomain', default='localhost')
+
 
 def setting_database():
     try:
@@ -132,7 +133,7 @@ def fetch_process_definition_latest_version(def_id, tenant_id: Optional[str] = N
 
         response = supabase.table('proc_def_arcv').select('*').eq('proc_def_id', def_id.lower()).eq('tenant_id', tenant_id).order('version', desc=True).execute()
         
-        if response.data:
+        if response.data and len(response.data) > 0:
             return response.data[0]
         else:
             return None
@@ -344,12 +345,30 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
             arcv_id = process_definition_version.get('arcv_id', None)
         else:
             arcv_id = None
+        
+        current_user_ids = process_instance.current_user_ids
+        
+        # 빈 값들 필터링 및 유효성 검증
+        if current_user_ids:
+            valid_user_ids = []
+            for user_id in current_user_ids:
+                if user_id is not None and user_id != '' and user_id != 'undefined' and user_id.strip() != '':
+                    # 'external_customer'는 특별 케이스로 허용
+                    if user_id == 'external_customer':
+                        valid_user_ids.append(user_id)
+                    else:
+                        # fetch_assignee_info로 담당자 정보 확인
+                        assignee_info = fetch_assignee_info(user_id)
+                        # 'unknown'이나 'error' 타입이 아니면 유효한 담당자
+                        if assignee_info['type'] not in ['unknown', 'error']:
+                            valid_user_ids.append(user_id)
+            current_user_ids = valid_user_ids
 
         response = supabase.table('bpm_proc_inst').upsert({
             'proc_inst_id': process_instance.proc_inst_id,
             'proc_inst_name': process_instance.proc_inst_name,
             'current_activity_ids': process_instance.current_activity_ids,
-            'current_user_ids': process_instance.current_user_ids,
+            'current_user_ids': current_user_ids,
             'role_bindings': process_instance.role_bindings,
             'variables_data': process_instance.variables_data,
             'status': status if status else process_instance.status,
@@ -445,10 +464,8 @@ def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
         pod_id = socket.gethostname()
         db_config = db_config_var.get()
 
-
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor(cursor_factory=RealDictCursor)
-
 
         query = """
             WITH locked_rows AS (
@@ -553,7 +570,8 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                 if process_instance_data['role_bindings']:
                     role_bindings = process_instance_data['role_bindings']
                     for role_binding in role_bindings:
-                        if role_binding['roleName'] == activity.role:
+                        if role_binding['name'] == activity.role:
+                            user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                             
                 workitem = WorkItem(
@@ -717,12 +735,12 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     role_bindings = process_result_data['roleBindings']
                     for role_binding in role_bindings:
                         if role_binding['name'] == activity.role:
-                            user_id = role_binding['endpoint'][0] if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
+                            user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
                 agent_mode = ""
-                if activity.isDraft is not None and activity.isDraft:
-                    agent_mode = "DRAFT"
+                if activity.agentMode is not None:
+                    agent_mode = activity.agentMode
 
                 if user_id:
                     assignee_info = fetch_assignee_info(user_id)
@@ -750,7 +768,6 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
                 workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
                 workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
-
 
                 supabase = supabase_client_var.get()
                 if supabase is None:
@@ -855,7 +872,7 @@ def fetch_user_info(email: str) -> Dict[str, str]:
         
         response = supabase.table("users").select("*").eq('email', email).execute()
         
-        if response.data:
+        if response.data and len(response.data) > 0:
             return response.data[0]
         else:
             raise HTTPException(status_code=404, detail="User not found")
@@ -946,6 +963,9 @@ def fetch_agent_by_id(agent_id: str) -> Optional[dict]:
             raise Exception("Supabase client is not configured for this request")
         
         response = supabase.table("agents").select("*").eq('id', agent_id).execute()
-        return response.data[0]
+        if response.data and len(response.data) > 0:
+            return response.data[0]
+        else:
+            return None
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
