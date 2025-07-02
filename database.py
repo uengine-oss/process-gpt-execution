@@ -1499,11 +1499,7 @@ def invite_user(input):
         supabase = supabase_client_var.get()
      
         email = input.get("email")
-        role = input.get("role")
-        if role == "admin":
-            is_admin = True
-        else:
-            is_admin = False
+        is_admin = input.get("is_admin")
 
         tenant_id = input.get('tenant_id') if input.get('tenant_id') else subdomain_var.get()
         user_id = None
