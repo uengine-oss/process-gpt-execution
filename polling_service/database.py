@@ -34,17 +34,76 @@ def setting_database():
         supabase: Client = create_client(supabase_url, supabase_key)
         supabase_client_var.set(supabase)
         
+        env = os.getenv("ENV", "development")
+        if env == "production":
+            ssl_mode = "require"
+        else:
+            ssl_mode = "prefer"
+        
         db_config = {
             "dbname": os.getenv("DB_NAME"),
             "user": os.getenv("DB_USER"),
             "password": os.getenv("DB_PASSWORD"),
             "host": os.getenv("DB_HOST"),
-            "port": os.getenv("DB_PORT")
+            "port": os.getenv("DB_PORT"),
+            "sslmode": ssl_mode,
+            "connect_timeout": 10,
+            "application_name": "polling_service"
         }
+        
+        print(f"[INFO] Database SSL mode: {ssl_mode} (ENV: {env})")
         db_config_var.set(db_config)
         
     except Exception as e:
         print(f"Database configuration error: {e}")
+
+
+def get_db_connection_with_retry(max_retries=3, retry_delay=1):
+    """
+    재시도 로직이 포함된 데이터베이스 연결 함수
+    """
+    db_config = db_config_var.get()
+    
+    for attempt in range(max_retries):
+        try:
+            connection = psycopg2.connect(**db_config)
+            # 연결 상태 확인
+            cursor = connection.cursor()
+            cursor.execute("SELECT 1")
+            cursor.close()
+            return connection
+        except psycopg2.OperationalError as e:
+            error_msg = str(e)
+            if "SSL connection has been closed unexpectedly" in error_msg:
+                print(f"[WARNING] SSL connection failed (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(retry_delay)
+                    continue
+            elif "server does not support SSL" in error_msg:
+                print(f"[WARNING] Server does not support SSL, trying without SSL...")
+                # SSL을 비활성화하고 재시도
+                db_config_without_ssl = db_config.copy()
+                db_config_without_ssl["sslmode"] = "disable"
+                try:
+                    connection = psycopg2.connect(**db_config_without_ssl)
+                    cursor = connection.cursor()
+                    cursor.execute("SELECT 1")
+                    cursor.close()
+                    print("[INFO] Successfully connected without SSL")
+                    return connection
+                except Exception as ssl_error:
+                    print(f"[ERROR] Failed to connect even without SSL: {ssl_error}")
+            raise e
+        except Exception as e:
+            print(f"[ERROR] Database connection failed (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(retry_delay)
+                continue
+            raise e
+    
+    raise Exception(f"Failed to connect to database after {max_retries} attempts")
 
 
 def execute_sql(sql_query):
@@ -460,11 +519,12 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
 
 
 def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
+    connection = None
     try:
         pod_id = socket.gethostname()
-        db_config = db_config_var.get()
-
-        connection = psycopg2.connect(**db_config)
+        
+        # 재시도 로직이 포함된 연결 사용
+        connection = get_db_connection_with_retry()
         cursor = connection.cursor(cursor_factory=RealDictCursor)
 
         query = """
@@ -493,15 +553,22 @@ def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
 
     except Exception as e:
         print(f"[ERROR] DB fetch failed: {str(e)}")
+        if connection:
+            try:
+                connection.rollback()
+                connection.close()
+            except:
+                pass
         raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
-    
+
 
 def fetch_workitem_with_agent(limit=5) -> Optional[List[dict]]:
+    connection = None
     try:
         pod_id = socket.gethostname()
-        db_config = db_config_var.get()
-
-        connection = psycopg2.connect(**db_config)
+        
+        # 재시도 로직이 포함된 연결 사용
+        connection = get_db_connection_with_retry()
         cursor = connection.cursor(cursor_factory=RealDictCursor)
 
         query = """
@@ -531,7 +598,52 @@ def fetch_workitem_with_agent(limit=5) -> Optional[List[dict]]:
 
     except Exception as e:
         print(f"[ERROR] DB fetch failed: {str(e)}")
+        if connection:
+            try:
+                connection.rollback()
+                connection.close()
+            except:
+                pass
         raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
+
+
+def cleanup_stale_consumers():
+    """
+    오래된 consumer를 정리하는 함수
+    30분 이상 업데이트되지 않은 IN_PROGRESS 상태의 워크아이템의 consumer를 해제
+    """
+    connection = None
+    try:
+        # 재시도 로직이 포함된 연결 사용
+        connection = get_db_connection_with_retry()
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
+
+        query = """
+            UPDATE todolist
+            SET consumer = NULL
+            WHERE status = 'SUBMITTED'
+                AND consumer IS NOT NULL
+                AND updated_at < NOW() - INTERVAL '30 minutes';
+        """
+
+        cursor.execute(query)
+        updated_count = cursor.rowcount
+
+        connection.commit()
+        cursor.close()
+        connection.close()
+
+        if updated_count > 0:
+            print(f"[INFO] Cleaned up {updated_count} stale consumers")
+
+    except Exception as e:
+        print(f"[ERROR] Failed to cleanup stale consumers: {str(e)}")
+        if connection:
+            try:
+                connection.rollback()
+                connection.close()
+            except:
+                pass
 
 
 def upsert_completed_workitem(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None):

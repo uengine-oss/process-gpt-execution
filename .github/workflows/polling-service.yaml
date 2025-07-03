@@ -47,6 +47,14 @@ jobs:
             --region ${{ secrets.GCP_REGION }} \
             --project ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Deploy to GKE
+      - name: Check current deployment status
+        run: |
+          kubectl get deployment polling-service-deployment -o jsonpath='{.status.readyReplicas}' || echo "0"
+
+      - name: Deploy to GKE with graceful rollout
         run: |
           kubectl set image deployment/polling-service-deployment polling-service=$IMAGE_NAME
+          
+          kubectl rollout status deployment/polling-service-deployment --timeout=600s
+          
+          kubectl get pods -l app=polling-service
