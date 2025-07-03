@@ -621,7 +621,7 @@ def cleanup_stale_consumers():
         query = """
             UPDATE todolist
             SET consumer = NULL
-            WHERE status = 'IN_PROGRESS'
+            WHERE status = 'SUBMITTED'
                 AND consumer IS NOT NULL
                 AND start_date < NOW() - INTERVAL '30 minutes';
         """
