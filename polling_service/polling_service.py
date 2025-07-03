@@ -53,30 +53,37 @@ async def safe_handle_workitem(workitem):
             running_tasks.remove(asyncio.current_task())
 
 async def polling_workitem():
-    all_workitems = []
-    submitted_workitems = fetch_workitem_with_submitted_status()
-    if submitted_workitems:
-        all_workitems.extend(submitted_workitems)
-    agent_workitems = fetch_workitem_with_agent()
-    if agent_workitems:
-        all_workitems.extend(agent_workitems)
+    try:
+        all_workitems = []
+        submitted_workitems = fetch_workitem_with_submitted_status()
+        if submitted_workitems:
+            all_workitems.extend(submitted_workitems)
+        agent_workitems = fetch_workitem_with_agent()
+        if agent_workitems:
+            all_workitems.extend(agent_workitems)
 
-    if len(all_workitems) == 0:
-        return
+        if len(all_workitems) == 0:
+            return
 
-    tasks = []
-    for workitem in all_workitems:
-        # shutdown 이벤트가 설정되었으면 새 태스크를 시작하지 않음
-        if shutdown_event.is_set():
-            print("[INFO] Shutdown in progress, skipping new workitems")
-            break
-            
-        task = asyncio.create_task(safe_handle_workitem(workitem))
-        running_tasks.add(task)
-        tasks.append(task)
-    
-    if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+        tasks = []
+        for workitem in all_workitems:
+            # shutdown 이벤트가 설정되었으면 새 태스크를 시작하지 않음
+            if shutdown_event.is_set():
+                print("[INFO] Shutdown in progress, skipping new workitems")
+                break
+                
+            task = asyncio.create_task(safe_handle_workitem(workitem))
+            running_tasks.add(task)
+            tasks.append(task)
+        
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+    except Exception as e:
+        print(f"[ERROR] Polling workitem failed: {str(e)}")
+        # 데이터베이스 연결 오류인 경우 잠시 대기
+        if "SSL connection has been closed unexpectedly" in str(e) or "DB fetch failed" in str(e):
+            print("[INFO] Database connection error, waiting before retry...")
+            await asyncio.sleep(10)
 
 async def cleanup_task():
     """주기적으로 오래된 consumer를 정리하는 태스크"""
@@ -86,7 +93,6 @@ async def cleanup_task():
         except Exception as e:
             print(f"[ERROR] Cleanup task error: {e}")
         
-        # 5분마다 정리 작업 실행
         await asyncio.sleep(300)
 
 async def start_polling():
@@ -101,7 +107,6 @@ async def start_polling():
         except Exception as e:
             print(f"[Polling Loop Error] {e}")
         
-        # shutdown 이벤트가 설정되었으면 루프 종료
         if shutdown_event.is_set():
             break
             

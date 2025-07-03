@@ -93,6 +93,8 @@ spec:
           value: http://execution-service:8000
         - name: MEMENTO_SERVICE_URL
           value: http://memento-service:8005
+        - name: ENV
+          value: production
         resources:
           requests:
             cpu: 200m
