@@ -1,6 +1,5 @@
 import asyncio
 import signal
-import sys
 from typing import Set
 
 from database import (
@@ -15,10 +14,14 @@ shutdown_event = asyncio.Event()
 
 async def safe_handle_workitem(workitem):
     try:
-        upsert_workitem({
-            "id": workitem['id'],
-            "log": f"'{workitem['activity_name']}' 업무를 실행합니다."
-        }, workitem['tenant_id'])
+        # 워크아이템 처리 시작 로그
+        try:
+            upsert_workitem({
+                "id": workitem['id'],
+                "log": f"'{workitem['activity_name']}' 업무를 실행합니다."
+            }, workitem['tenant_id'])
+        except Exception as log_error:
+            print(f"[WARNING] Failed to update workitem log: {log_error}")
         
         if workitem['status'] == "SUBMITTED":
             print(f"[DEBUG] Starting safe_handle_workitem for workitem: {workitem['id']}")
@@ -26,17 +29,22 @@ async def safe_handle_workitem(workitem):
         elif workitem['agent_mode'] == "A2A" and workitem['status'] == "IN_PROGRESS":
             print(f"[DEBUG] Starting safe_handle_workitem for agent workitem: {workitem['id']}")
             await handle_agent_workitem(workitem)
+        else:
+            print(f"[WARNING] Unknown workitem status: {workitem['status']} for workitem: {workitem['id']}")
 
     except Exception as e:
         print(f"[ERROR] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}")
-        workitem['retry'] = workitem['retry'] + 1
-        workitem['consumer'] = None
-        if workitem['retry'] >= 3:
-            workitem['status'] = "DONE"
-            workitem['log'] = f"[Error] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}"
-        else:
-            workitem['log'] = f"실행하는 중 오류가 발생했습니다. 다시 시도하겠습니다."
-        upsert_workitem(workitem, workitem['tenant_id'])
+        try:
+            workitem['retry'] = workitem.get('retry', 0) + 1
+            workitem['consumer'] = None
+            if workitem['retry'] >= 3:
+                workitem['status'] = "DONE"
+                workitem['log'] = f"[Error] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}"
+            else:
+                workitem['log'] = f"실행하는 중 오류가 발생했습니다. 다시 시도하겠습니다. (시도 {workitem['retry']}/3)"
+            upsert_workitem(workitem, workitem['tenant_id'])
+        except Exception as update_error:
+            print(f"[ERROR] Failed to update workitem error status: {update_error}")
     finally:
         # 워크아이템 처리 완료 시 consumer 해제
         try:
@@ -55,16 +63,29 @@ async def safe_handle_workitem(workitem):
 async def polling_workitem():
     try:
         all_workitems = []
-        submitted_workitems = fetch_workitem_with_submitted_status()
-        if submitted_workitems:
-            all_workitems.extend(submitted_workitems)
-        agent_workitems = fetch_workitem_with_agent()
-        if agent_workitems:
-            all_workitems.extend(agent_workitems)
+        
+        # SUBMITTED 상태 워크아이템 조회
+        try:
+            submitted_workitems = fetch_workitem_with_submitted_status()
+            if submitted_workitems:
+                all_workitems.extend(submitted_workitems)
+                print(f"[DEBUG] Found {len(submitted_workitems)} submitted workitems")
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch submitted workitems: {str(e)}")
+        
+        # A2A 에이전트 워크아이템 조회
+        try:
+            agent_workitems = fetch_workitem_with_agent()
+            if agent_workitems:
+                all_workitems.extend(agent_workitems)
+                print(f"[DEBUG] Found {len(agent_workitems)} agent workitems")
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch agent workitems: {str(e)}")
 
         if len(all_workitems) == 0:
             return
 
+        print(f"[INFO] Processing {len(all_workitems)} workitems")
         tasks = []
         for workitem in all_workitems:
             # shutdown 이벤트가 설정되었으면 새 태스크를 시작하지 않음
@@ -77,35 +98,59 @@ async def polling_workitem():
             tasks.append(task)
         
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            # 결과 확인 및 로깅
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    print(f"[ERROR] Task {i} failed: {result}")
+                else:
+                    print(f"[DEBUG] Task {i} completed successfully")
     except Exception as e:
         print(f"[ERROR] Polling workitem failed: {str(e)}")
-        # 데이터베이스 연결 오류인 경우 잠시 대기
-        if "SSL connection has been closed unexpectedly" in str(e) or "DB fetch failed" in str(e):
+        # Supabase 연결 오류인 경우 잠시 대기
+        if "Supabase client is not configured" in str(e) or "DB fetch failed" in str(e) or "network" in str(e).lower():
             print("[INFO] Database connection error, waiting before retry...")
             await asyncio.sleep(10)
+        else:
+            # 다른 오류의 경우 짧은 대기 후 재시도
+            print("[INFO] Other error occurred, waiting before retry...")
+            await asyncio.sleep(5)
 
 async def cleanup_task():
     """주기적으로 오래된 consumer를 정리하는 태스크"""
     while not shutdown_event.is_set():
         try:
             cleanup_stale_consumers()
+            print("[DEBUG] Cleanup task completed successfully")
         except Exception as e:
             print(f"[ERROR] Cleanup task error: {e}")
+            # 오류 발생 시 짧은 대기 후 재시도
+            await asyncio.sleep(60)
+            continue
         
+        # 정상적인 경우 5분 대기
         await asyncio.sleep(300)
 
 async def start_polling():
-    setting_database()
+    try:
+        setting_database()
+        print("[INFO] Database configuration completed")
+    except Exception as e:
+        print(f"[ERROR] Failed to configure database: {e}")
+        return
 
     # cleanup 태스크 시작
     cleanup_task_obj = asyncio.create_task(cleanup_task())
+    print("[INFO] Cleanup task started")
 
     while not shutdown_event.is_set():
         try:
             await polling_workitem()
         except Exception as e:
             print(f"[Polling Loop Error] {e}")
+            # 오류 발생 시 짧은 대기
+            await asyncio.sleep(5)
+            continue
         
         if shutdown_event.is_set():
             break
@@ -113,11 +158,14 @@ async def start_polling():
         await asyncio.sleep(5)
     
     # cleanup 태스크 취소
+    print("[INFO] Cancelling cleanup task...")
     cleanup_task_obj.cancel()
     try:
         await cleanup_task_obj
     except asyncio.CancelledError:
-        pass
+        print("[INFO] Cleanup task cancelled successfully")
+    except Exception as e:
+        print(f"[ERROR] Error cancelling cleanup task: {e}")
 
 async def graceful_shutdown():
     """Graceful shutdown을 위한 함수"""

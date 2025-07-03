@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Optional, Set
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import SupabaseVectorStore
 from process_definition import ProcessDefinition, load_process_definition, UIDefinition
-from psycopg2.extras import RealDictCursor
 from fastapi import HTTPException
 from decimal import Decimal
 from datetime import datetime, timedelta
@@ -12,14 +11,12 @@ from contextvars import ContextVar
 from dotenv import load_dotenv
 
 import pytz
-import psycopg2
 import socket
 import os
 import uuid
 import json
 
 
-db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
 subdomain_var = ContextVar('subdomain', default='localhost')
 
@@ -34,81 +31,15 @@ def setting_database():
         supabase: Client = create_client(supabase_url, supabase_key)
         supabase_client_var.set(supabase)
         
-        env = os.getenv("ENV", "development")
-        if env == "production":
-            ssl_mode = "require"
-        else:
-            ssl_mode = "prefer"
-        
-        db_config = {
-            "dbname": os.getenv("DB_NAME"),
-            "user": os.getenv("DB_USER"),
-            "password": os.getenv("DB_PASSWORD"),
-            "host": os.getenv("DB_HOST"),
-            "port": os.getenv("DB_PORT"),
-            "sslmode": ssl_mode,
-            "connect_timeout": 10,
-            "application_name": "polling_service"
-        }
-        
-        print(f"[INFO] Database SSL mode: {ssl_mode} (ENV: {env})")
-        db_config_var.set(db_config)
+        print(f"[INFO] Supabase client configured successfully")
         
     except Exception as e:
         print(f"Database configuration error: {e}")
 
 
-def get_db_connection_with_retry(max_retries=3, retry_delay=1):
-    """
-    재시도 로직이 포함된 데이터베이스 연결 함수
-    """
-    db_config = db_config_var.get()
-    
-    for attempt in range(max_retries):
-        try:
-            connection = psycopg2.connect(**db_config)
-            # 연결 상태 확인
-            cursor = connection.cursor()
-            cursor.execute("SELECT 1")
-            cursor.close()
-            return connection
-        except psycopg2.OperationalError as e:
-            error_msg = str(e)
-            if "SSL connection has been closed unexpectedly" in error_msg:
-                print(f"[WARNING] SSL connection failed (attempt {attempt + 1}/{max_retries}): {e}")
-                if attempt < max_retries - 1:
-                    import time
-                    time.sleep(retry_delay)
-                    continue
-            elif "server does not support SSL" in error_msg:
-                print(f"[WARNING] Server does not support SSL, trying without SSL...")
-                # SSL을 비활성화하고 재시도
-                db_config_without_ssl = db_config.copy()
-                db_config_without_ssl["sslmode"] = "disable"
-                try:
-                    connection = psycopg2.connect(**db_config_without_ssl)
-                    cursor = connection.cursor()
-                    cursor.execute("SELECT 1")
-                    cursor.close()
-                    print("[INFO] Successfully connected without SSL")
-                    return connection
-                except Exception as ssl_error:
-                    print(f"[ERROR] Failed to connect even without SSL: {ssl_error}")
-            raise e
-        except Exception as e:
-            print(f"[ERROR] Database connection failed (attempt {attempt + 1}/{max_retries}): {e}")
-            if attempt < max_retries - 1:
-                import time
-                time.sleep(retry_delay)
-                continue
-            raise e
-    
-    raise Exception(f"Failed to connect to database after {max_retries} attempts")
-
-
 def execute_sql(sql_query):
     """
-    Connects to a PostgreSQL database and executes the given SQL query.
+    Executes SQL query using Supabase Client API.
     
     Args:
         sql_query (str): The SQL query to execute.
@@ -118,31 +49,20 @@ def execute_sql(sql_query):
     """
     
     try:
-        db_config = db_config_var.get()
-        # Establish a connection to the database
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
         
-        # Execute the SQL query
-        cursor.execute(sql_query)
+        # Supabase Client API를 사용하여 SQL 실행
+        response = supabase.rpc('exec_sql', {'query': sql_query}).execute()
         
-        # If the query was a SELECT statement, fetch the results
-        if sql_query.strip().upper().startswith("SELECT"):
-            result = cursor.fetchall()
+        if response.data:
+            return response.data
         else:
-            # Commit the transaction if the query modified the database
-            connection.commit()
-            result = "Table Created"
-        
-        return result
+            return "Query executed successfully"
     
     except Exception as e:
         return(f"An error occurred while executing the SQL query: {e}")
-    
-    finally:
-        # Close the cursor and connection to clean up
-        if connection:
-            connection.close()
 
 
 def fetch_process_definition(def_id, tenant_id: Optional[str] = None):
@@ -519,131 +439,134 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
 
 
 def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
-    connection = None
     try:
         pod_id = socket.gethostname()
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
         
-        # 재시도 로직이 포함된 연결 사용
-        connection = get_db_connection_with_retry()
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-        query = """
-            WITH locked_rows AS (
-                SELECT id FROM todolist
-                WHERE status = 'SUBMITTED'
-                    AND consumer IS NULL
-                FOR UPDATE SKIP LOCKED
-                LIMIT %s
-            )
-            UPDATE todolist
-            SET consumer = %s
-            FROM locked_rows
-            WHERE todolist.id = locked_rows.id
-            RETURNING *;
-        """
-
-        cursor.execute(query, (limit, pod_id))
-        rows = cursor.fetchall()
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-        return rows if rows else None
+        # Supabase Client API를 사용하여 워크아이템 조회 및 업데이트
+        # 먼저 SUBMITTED 상태이고 consumer가 NULL인 워크아이템들을 조회
+        response = supabase.table('todolist').select('*').eq('status', 'SUBMITTED').is_('consumer', 'null').limit(limit).execute()
+        
+        if not response.data:
+            return None
+        
+        # 조회된 워크아이템들의 consumer를 현재 pod_id로 업데이트
+        # 동시성 제어를 위해 조건부 업데이트 사용
+        updated_workitems = []
+        
+        # 배치 업데이트를 위한 워크아이템 ID 목록
+        workitem_ids = [item['id'] for item in response.data]
+        
+        if workitem_ids:
+            try:
+                # 배치 업데이트 시도
+                current_time = datetime.now().isoformat()
+                batch_update_response = supabase.table('todolist').update({
+                    'consumer': pod_id,
+                    'updated_at': current_time
+                }).in_('id', workitem_ids).eq('status', 'SUBMITTED').is_('consumer', 'null').execute()
+                
+                if batch_update_response.data:
+                    updated_workitems = batch_update_response.data
+                    print(f"[DEBUG] Successfully claimed {len(updated_workitems)} workitems for pod {pod_id}")
+                else:
+                    print(f"[DEBUG] No workitems were claimed in batch update")
+                    
+            except Exception as batch_error:
+                print(f"[WARNING] Batch update failed, falling back to individual updates: {batch_error}")
+                
+                # 배치 업데이트가 실패하면 개별 업데이트로 폴백
+                for workitem in response.data:
+                    try:
+                        update_response = supabase.table('todolist').update({
+                            'consumer': pod_id,
+                            'updated_at': datetime.now().isoformat()
+                        }).eq('id', workitem['id']).eq('status', 'SUBMITTED').is_('consumer', 'null').execute()
+                        
+                        if update_response.data:
+                            updated_workitems.append(update_response.data[0])
+                            print(f"[DEBUG] Successfully claimed workitem {workitem['id']} for pod {pod_id}")
+                        else:
+                            print(f"[DEBUG] Workitem {workitem['id']} was already claimed by another pod")
+                    except Exception as e:
+                        print(f"[WARNING] Failed to update workitem {workitem['id']}: {e}")
+                        continue
+        
+        return updated_workitems if updated_workitems else None
 
     except Exception as e:
         print(f"[ERROR] DB fetch failed: {str(e)}")
-        if connection:
-            try:
-                connection.rollback()
-                connection.close()
-            except:
-                pass
         raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
 
 
 def fetch_workitem_with_agent(limit=5) -> Optional[List[dict]]:
-    connection = None
     try:
         pod_id = socket.gethostname()
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
         
-        # 재시도 로직이 포함된 연결 사용
-        connection = get_db_connection_with_retry()
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-        query = """
-            WITH locked_rows AS (
-                SELECT id FROM todolist
-                WHERE status = 'IN_PROGRESS'
-                    AND consumer IS NULL
-                    AND agent_mode = 'A2A'
-                FOR UPDATE SKIP LOCKED
-                LIMIT %s
-            )
-            UPDATE todolist
-            SET consumer = %s
-            FROM locked_rows
-            WHERE todolist.id = locked_rows.id
-            RETURNING *;
-        """
-
-        cursor.execute(query, (limit, pod_id))
-        rows = cursor.fetchall()
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-        return rows if rows else None
+        # Supabase Client API를 사용하여 에이전트 워크아이템 조회 및 업데이트
+        response = supabase.table('todolist').select('*').eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').is_('consumer', 'null').limit(limit).execute()
+        
+        if not response.data:
+            return None
+        
+        # 조회된 워크아이템들의 consumer를 현재 pod_id로 업데이트
+        # 동시성 제어를 위해 조건부 업데이트 사용
+        updated_workitems = []
+        for workitem in response.data:
+            try:
+                # 조건부 업데이트: consumer가 여전히 NULL인 경우에만 업데이트
+                update_response = supabase.table('todolist').update({
+                    'consumer': pod_id,
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', workitem['id']).eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').is_('consumer', 'null').execute()
+                
+                if update_response.data:
+                    updated_workitems.append(update_response.data[0])
+                    print(f"[DEBUG] Successfully claimed agent workitem {workitem['id']} for pod {pod_id}")
+                else:
+                    print(f"[DEBUG] Agent workitem {workitem['id']} was already claimed by another pod")
+            except Exception as e:
+                print(f"[WARNING] Failed to update agent workitem {workitem['id']}: {e}")
+                continue
+        
+        return updated_workitems if updated_workitems else None
 
     except Exception as e:
         print(f"[ERROR] DB fetch failed: {str(e)}")
-        if connection:
-            try:
-                connection.rollback()
-                connection.close()
-            except:
-                pass
         raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
 
 
 def cleanup_stale_consumers():
     """
     오래된 consumer를 정리하는 함수
-    30분 이상 업데이트되지 않은 IN_PROGRESS 상태의 워크아이템의 consumer를 해제
+    30분 이상 업데이트되지 않은 SUBMITTED 상태의 워크아이템의 consumer를 해제
     """
-    connection = None
     try:
-        # 재시도 로직이 포함된 연결 사용
-        connection = get_db_connection_with_retry()
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-        query = """
-            UPDATE todolist
-            SET consumer = NULL
-            WHERE status = 'SUBMITTED'
-                AND consumer IS NOT NULL
-                AND updated_at < NOW() - INTERVAL '30 minutes';
-        """
-
-        cursor.execute(query)
-        updated_count = cursor.rowcount
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-        if updated_count > 0:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        # 30분 전 시간 계산
+        thirty_minutes_ago = (datetime.now() - timedelta(minutes=30)).isoformat()
+        
+        # 오래된 consumer를 NULL로 업데이트
+        response = supabase.table('todolist').update({
+            'consumer': None
+        }).eq('status', 'SUBMITTED').not_.is_('consumer', 'null').lt('updated_at', thirty_minutes_ago).execute()
+        
+        if response.data:
+            updated_count = len(response.data)
             print(f"[INFO] Cleaned up {updated_count} stale consumers")
+        else:
+            print("[INFO] No stale consumers found")
 
     except Exception as e:
         print(f"[ERROR] Failed to cleanup stale consumers: {str(e)}")
-        if connection:
-            try:
-                connection.rollback()
-                connection.close()
-            except:
-                pass
 
 
 def upsert_completed_workitem(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None):
