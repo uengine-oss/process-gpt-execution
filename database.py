@@ -1499,14 +1499,12 @@ def invite_user(input):
         supabase = supabase_client_var.get()
      
         email = input.get("email")
-        role = input.get("role")
-        if role == "superAdmin":
-            is_admin = True
-        else:
-            is_admin = False
+        is_admin = input.get("is_admin")
 
         tenant_id = input.get('tenant_id') if input.get('tenant_id') else subdomain_var.get()
         user_id = None
+        response = None
+        redirect_url = None
 
         if supabase is None:
             raise Exception("Supabase client is not configured for this request")
@@ -1534,14 +1532,10 @@ def invite_user(input):
                 "id": user_id,
                 "email": email,
                 "username": email.split('@')[0],
-                "role": role,
+                "role": 'user',
                 "is_admin": is_admin,
                 "tenant_id": tenant_id
             }).execute()
-        
-        print(f"Invitation sent to {email}")
-        print(f"Redirect URL: {redirect_url}")
-        print(f"Response: {response}")
         
         return {
             "success": True,
