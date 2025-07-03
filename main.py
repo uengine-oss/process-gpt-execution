@@ -82,7 +82,8 @@ import asyncio
 @app.on_event("startup")
 async def start_background_tasks():
     # 알림 실시간 구독 태스크 시작
-    asyncio.create_task(notification_polling_task())
+    # asyncio.create_task(notification_polling_task())
+    pass
 
 if __name__ == "__main__":
     import uvicorn
