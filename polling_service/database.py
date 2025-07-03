@@ -623,7 +623,7 @@ def cleanup_stale_consumers():
             SET consumer = NULL
             WHERE status = 'SUBMITTED'
                 AND consumer IS NOT NULL
-                AND start_date < NOW() - INTERVAL '30 minutes';
+                AND updated_at < NOW() - INTERVAL '30 minutes';
         """
 
         cursor.execute(query)
