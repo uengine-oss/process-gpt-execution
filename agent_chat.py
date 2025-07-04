@@ -52,6 +52,7 @@ async def chat_message(message: ChatMessage):
         
         elif message.type == "mem0":
             agent_id = message.options.get("agent_id") if message.options else None
+            is_learning_mode = message.options.get("is_learning_mode") if message.options else False
             
             if not agent_id:
                 raise HTTPException(status_code=400, detail="agent_id is required for Mem0 agent")
@@ -59,7 +60,8 @@ async def chat_message(message: ChatMessage):
             response = await process_mem0_message(
                 text=message.text,
                 agent_id=agent_id,
-                chat_room_id=chat_room_id
+                chat_room_id=chat_room_id,
+                is_learning_mode=is_learning_mode
             )
             return JSONResponse(content=response)
         else:

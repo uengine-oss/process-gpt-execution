@@ -18,7 +18,7 @@ import time
 
 from database import (
     fetch_process_definition, fetch_process_instance, fetch_organization_chart, 
-    fetch_ui_definition_by_activity_id, fetch_agent_by_id, fetch_assignee_info, 
+    fetch_ui_definition_by_activity_id, fetch_user_info, fetch_assignee_info, 
     get_vector_store, fetch_workitem_by_proc_inst_and_activity, upsert_process_instance, 
     upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
     upsert_todo_workitems, upsert_workitem, delete_workitem, ProcessInstance
@@ -607,7 +607,7 @@ async def handle_agent_workitem(workitem):
             agent_ids = workitem['user_id'].split(',')
             agent_info = []
             for agent_id in agent_ids:
-                agent_info.append(fetch_agent_by_id(agent_id))
+                agent_info.append(fetch_user_info(agent_id))
         else:
             agent_id = workitem['user_id']
         

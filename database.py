@@ -835,143 +835,6 @@ def fetch_workitem_with_agent(limit=5) -> Optional[List[dict]]:
         raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
 
 
-# todolist 업데이트
-def upsert_completed_workitem(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None):
-    try:
-        if not tenant_id:
-            tenant_id = subdomain_var.get()
-
-
-        if not process_result_data['completedActivities']:
-            return
-        
-        for completed_activity in process_result_data['completedActivities']:
-            workitem = fetch_workitem_by_proc_inst_and_activity(
-                process_instance_data['proc_inst_id'],
-                completed_activity['completedActivityId'],
-                tenant_id
-            )
-            
-            if workitem:
-                workitem.status = completed_activity['result']
-                workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul'))
-                workitem.user_id = completed_activity['completedUserEmail']
-                if workitem.assignees and len(workitem.assignees) > 0:
-                    for assignee in workitem.assignees:
-                        if assignee.get('endpoint') and assignee.get('endpoint') == workitem.user_id:
-                            assignee = {
-                                'roleName': assignee.get('name'),
-                                'userId': assignee.get('endpoint')
-                            }
-                            break
-            else:
-                activity = process_definition.find_activity_by_id(completed_activity['completedActivityId'])
-                start_date = datetime.now(pytz.timezone('Asia/Seoul'))
-                due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
-                assignees = []
-                if process_instance_data['role_bindings']:
-                    role_bindings = process_instance_data['role_bindings']
-                    for role_binding in role_bindings:
-                        if role_binding['roleName'] == activity.role:
-                            assignees.append(role_binding)
-                            
-                workitem = WorkItem(
-                    id=f"{str(uuid.uuid4())}",
-                    proc_inst_id=process_instance_data['proc_inst_id'],
-                    proc_def_id=process_result_data['processDefinitionId'].lower(),
-                    activity_id=completed_activity['completedActivityId'],
-                    activity_name=activity.name,
-                    user_id=completed_activity['completedUserEmail'],
-                    status=completed_activity['result'],
-                    tool=activity.tool,
-                    start_date=start_date,
-                    end_date=datetime.now(pytz.timezone('Asia/Seoul')) if completed_activity['result'] == 'DONE' else None,
-                    due_date=due_date,
-                    tenant_id=tenant_id,
-                    assignees=assignees,
-                    duration=activity.duration
-                )
-            
-            workitem_dict = workitem.dict()
-            workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
-            workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
-            workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
-
-
-            supabase = supabase_client_var.get()
-            if supabase is None:
-                raise Exception("Supabase client is not configured for this request")
-            supabase.table('todolist').upsert(workitem_dict).execute()
-    except Exception as e:
-        print(f"[ERROR] upsert_completed_workitem: {str(e)}")
-        raise HTTPException(status_code=404, detail=str(e)) from e
-
-
-
-
-def upsert_next_workitems(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None) -> List[WorkItem]:
-    workitems = []
-    if not tenant_id:
-        tenant_id = subdomain_var.get()
-
-
-    for activity_data in process_result_data['nextActivities']:
-        if activity_data['nextActivityId'] in ["END_PROCESS", "endEvent", "end_event"]:
-            continue
-        
-        workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity_data['nextActivityId'], tenant_id)
-        
-        if workitem:
-            workitem.status = activity_data['result']
-            workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul')) if activity_data['result'] == 'DONE' else None
-            workitem.user_id = activity_data['nextUserEmail']
-            if workitem.user_id and workitem.agent_mode != "A2A":
-                assignee_info = fetch_assignee_info(workitem.user_id)
-                if assignee_info['type'] == "a2a":
-                    workitem.agent_mode = "A2A"
-        else:
-            activity = process_definition.find_activity_by_id(activity_data['nextActivityId'])
-            if activity:
-                prev_activities = process_definition.find_prev_activities(activity.id, [])
-                start_date = datetime.now(pytz.timezone('Asia/Seoul'))
-                if prev_activities:
-                    for prev_activity in prev_activities:
-                        start_date = start_date + timedelta(days=prev_activity.duration)
-                due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
-                workitem = WorkItem(
-                    id=str(uuid.uuid4()),
-                    proc_inst_id=process_instance_data['proc_inst_id'],
-                    proc_def_id=process_result_data['processDefinitionId'].lower(),
-                    activity_id=activity.id,
-                    activity_name=activity.name,
-                    user_id=activity_data['nextUserEmail'],
-                    status=activity_data['result'],
-                    start_date=start_date,
-                    due_date=due_date,
-                    tool=activity.tool,
-                    tenant_id=tenant_id
-                )
-        
-        try:
-            if workitem:
-                workitem_dict = workitem.dict()
-                workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
-                workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
-                workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
-
-
-                supabase = supabase_client_var.get()
-                if supabase is None:
-                    raise Exception("Supabase client is not configured for this request")
-                supabase.table('todolist').upsert(workitem_dict).execute()
-                workitems.append(workitem)
-        except Exception as e:
-            print(f"[ERROR] upsert_next_workitems: {str(e)}")
-            raise HTTPException(status_code=404, detail=str(e)) from e
-
-
-    return workitems
-
 
 def fetch_prev_task_ids(process_definition, current_activity_id: str, proc_inst_id: str) -> List[str]:
     """
@@ -1041,11 +904,14 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                             user_id = role_binding['endpoint'][0] if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
-                is_agent = False
-                if user_id:
+                agent_mode = None
+                if activity.agentMode is not None:
+                    if activity.agentMode != "none" and activity.agentMode != "None":
+                        agent_mode = activity.agentMode.upper()
+                elif activity.agentMode is None and user_id:
                     assignee_info = fetch_assignee_info(user_id)
                     if assignee_info['type'] == "a2a":
-                        is_agent = True
+                        agent_mode = "A2A"
                 
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
@@ -1062,7 +928,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     tenant_id=tenant_id,
                     assignees=assignees if assignees else [],
                     duration=activity.duration,
-                    agent_mode= "A2A" if is_agent else "DRAFT"
+                    agent_mode=agent_mode
                 )
                 workitem_dict = workitem.dict()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
@@ -1249,44 +1115,32 @@ def fetch_assignee_info(assignee_id: str) -> Dict[str, str]:
         담당자 정보 딕셔너리
     """
     try:
-        # 먼저 유저 정보를 찾아봅니다
         try:
             user_info = fetch_user_info(assignee_id)
+            type = "user"
+            if user_info.get("is_agent") == True:
+                type = "agent"
+                if user_info.get("url") is not None and user_info.get("url").strip() != "":
+                    type = "a2a"
             return {
-                "type": "user",
+                "type": type,
                 "id": assignee_id,
-                "name": user_info.get("name", assignee_id),
+                "name": user_info.get("username", assignee_id),
                 "email": assignee_id,
                 "info": user_info
             }
         except HTTPException as user_error:
             if user_error.status_code == 500 or user_error.status_code == 404:
-                # 유저를 찾을 수 없으면 에이전트 정보를 찾아봅니다
-                try:
-                    agent_info = fetch_agent_by_id(assignee_id)
-                    url = agent_info.get("url")
-                    is_a2a = url is not None and url.strip() != ""
-                    return {
-                        "type": "a2a" if is_a2a else "agent",
-                        "id": assignee_id,
-                        "name": agent_info.get("name", assignee_id),
-                        "email": assignee_id,
-                        "info": agent_info
-                    }
-                except HTTPException as agent_error:
-                    # 에이전트도 찾을 수 없으면 기본 정보를 반환
-                    return {
-                        "type": "unknown",
-                        "id": assignee_id,
-                        "name": assignee_id,
-                        "email": assignee_id,
-                        "info": {}
-                    }
+                return {
+                    "type": "unknown",
+                    "id": assignee_id,
+                    "name": assignee_id,
+                    "email": assignee_id,
+                    "info": {}
+                }
             else:
-                # 유저 조회 중 다른 오류가 발생한 경우
                 raise user_error
     except Exception as e:
-        # 예상치 못한 오류가 발생한 경우 기본 정보를 반환
         return {
             "type": "error",
             "id": assignee_id,
@@ -1918,18 +1772,3 @@ async def notification_polling_task():
             await asyncio.sleep(15)  # 오류 발생 시에도 15초 후 재시도
 
 
-
-def fetch_agent_by_id(agent_id: str) -> Optional[dict]:
-    try:
-        supabase = supabase_client_var.get()
-        if supabase is None:
-            raise Exception("Supabase client is not configured for this request")
-        
-        response = supabase.table("agents").select("*").eq('id', agent_id).execute()
-        if response.data:
-            return response.data[0]
-        else:
-            return None
-
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e

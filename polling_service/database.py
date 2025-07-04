@@ -336,9 +336,7 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
                     if user_id == 'external_customer':
                         valid_user_ids.append(user_id)
                     else:
-                        # fetch_assignee_info로 담당자 정보 확인
                         assignee_info = fetch_assignee_info(user_id)
-                        # 'unknown'이나 'error' 타입이 아니면 유효한 담당자
                         if assignee_info['type'] not in ['unknown', 'error']:
                             valid_user_ids.append(user_id)
             current_user_ids = valid_user_ids
@@ -438,7 +436,7 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
-def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
+def fetch_workitem_with_submitted_status(limit=10) -> Optional[List[dict]]:
     try:
         pod_id = socket.gethostname()
         supabase = supabase_client_var.get()
@@ -493,7 +491,7 @@ def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
                     except Exception as e:
                         print(f"[WARNING] Failed to update workitem {workitem['id']}: {e}")
                         continue
-        
+
         return updated_workitems if updated_workitems else None
 
     except Exception as e:
@@ -608,14 +606,17 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                         if role_binding['name'] == activity.role:
                             user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
-                            
+                
+                if completed_activity['completedUserEmail'] != user_id:
+                    user_id = completed_activity['completedUserEmail']
+
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=completed_activity['completedActivityId'],
                     activity_name=activity.name,
-                    user_id=completed_activity['completedUserEmail'],
+                    user_id=user_id,
                     status=completed_activity['result'],
                     tool=activity.tool,
                     start_date=start_date,
@@ -656,7 +657,8 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
         if workitem:
             workitem.status = activity_data['result']
             workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul')) if activity_data['result'] == 'DONE' else None
-            workitem.user_id = activity_data['nextUserEmail']
+            if workitem.user_id == '' or workitem.user_id == None:
+                workitem.user_id = activity_data['nextUserEmail']
             if workitem.user_id and workitem.agent_mode != "A2A":
                 assignee_info = fetch_assignee_info(workitem.user_id)
                 if assignee_info['type'] == "a2a":
@@ -773,15 +775,15 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                             user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
-                agent_mode = ""
+                agent_mode = None
                 if activity.agentMode is not None:
-                    agent_mode = activity.agentMode
-
-                if user_id:
+                    if activity.agentMode != "none" and activity.agentMode != "None":
+                        agent_mode = activity.agentMode.upper()
+                elif activity.agentMode is None and user_id:
                     assignee_info = fetch_assignee_info(user_id)
                     if assignee_info['type'] == "a2a":
                         agent_mode = "A2A"
-                
+
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     reference_ids=reference_ids if prev_activities else [],
@@ -927,44 +929,32 @@ def fetch_assignee_info(assignee_id: str) -> Dict[str, str]:
         담당자 정보 딕셔너리
     """
     try:
-        # 먼저 유저 정보를 찾아봅니다
         try:
             user_info = fetch_user_info(assignee_id)
+            type = "user"
+            if user_info.get("is_agent") == True:
+                type = "agent"
+                if user_info.get("url") is not None and user_info.get("url").strip() != "":
+                    type = "a2a"
             return {
-                "type": "user",
+                "type": type,
                 "id": assignee_id,
-                "name": user_info.get("name", assignee_id),
+                "name": user_info.get("username", assignee_id),
                 "email": assignee_id,
                 "info": user_info
             }
         except HTTPException as user_error:
             if user_error.status_code == 500 or user_error.status_code == 404:
-                # 유저를 찾을 수 없으면 에이전트 정보를 찾아봅니다
-                try:
-                    agent_info = fetch_agent_by_id(assignee_id)
-                    url = agent_info.get("url")
-                    is_a2a = url is not None and url.strip() != ""
-                    return {
-                        "type": "a2a" if is_a2a else "agent",
-                        "id": assignee_id,
-                        "name": agent_info.get("name", assignee_id),
-                        "email": assignee_id,
-                        "info": agent_info
-                    }
-                except HTTPException as agent_error:
-                    # 에이전트도 찾을 수 없으면 기본 정보를 반환
-                    return {
-                        "type": "unknown",
-                        "id": assignee_id,
-                        "name": assignee_id,
-                        "email": assignee_id,
-                        "info": {}
-                    }
+                return {
+                    "type": "unknown",
+                    "id": assignee_id,
+                    "name": assignee_id,
+                    "email": assignee_id,
+                    "info": {}
+                }
             else:
-                # 유저 조회 중 다른 오류가 발생한 경우
                 raise user_error
     except Exception as e:
-        # 예상치 못한 오류가 발생한 경우 기본 정보를 반환
         return {
             "type": "error",
             "id": assignee_id,
@@ -973,7 +963,6 @@ def fetch_assignee_info(assignee_id: str) -> Dict[str, str]:
             "info": {},
             "error": str(e)
         }
-
 
 
 def get_vector_store():
@@ -990,17 +979,3 @@ def get_vector_store():
         query_name="match_documents",
     )
 
-
-def fetch_agent_by_id(agent_id: str) -> Optional[dict]:
-    try:
-        supabase = supabase_client_var.get()
-        if supabase is None:
-            raise Exception("Supabase client is not configured for this request")
-        
-        response = supabase.table("agents").select("*").eq('id', agent_id).execute()
-        if response.data and len(response.data) > 0:
-            return response.data[0]
-        else:
-            return None
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
