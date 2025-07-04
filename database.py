@@ -1395,7 +1395,7 @@ def invite_user(input):
             "success": True,
             "message": f"Invitation sent to {email}",
             "redirect_url": redirect_url,
-            "response": response
+            "user_id": user_id
         }
         
     except Exception as e:
