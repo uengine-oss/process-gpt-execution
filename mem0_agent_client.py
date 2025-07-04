@@ -175,25 +175,33 @@ def search_memories(agent_id: str, query: str) -> List[Dict]:
     results = memory.search(query, user_id=agent_id)
     return results["results"][:5]
 
-def store_in_memory(agent_id: str, info: Dict):
+def store_in_memory(agent_id: str, content: str):
     """유의미한 정보를 mem0에 저장합니다."""
     memory.add(
-        info["content"],
+        content,
         user_id=agent_id,
         metadata={
-            "type": info["category"],
-            "confidence": info["confidence"],
-            "timestamp": info["timestamp"]
+            "type": "information",
+            "timestamp": datetime.now().isoformat()
         }
     )
 
-async def process_mem0_message(text: str, agent_id: str, chat_room_id: str = None):
+async def process_mem0_message(text: str, agent_id: str, chat_room_id: str = None, is_learning_mode: bool = False):
     """Mem0 에이전트를 통해 메시지를 처리합니다."""
     try:
-        intent, info = await analyze_intent(text, chat_room_id)
-        
-        if intent == "query":
-            search_term = info["content"] if info else text
+        if is_learning_mode:
+            intent = "information"
+            store_in_memory(agent_id, text)
+            return {
+                "task_id": str(datetime.now().timestamp()),
+                "response": {
+                    "type": intent,
+                    "content": text
+                }
+            }
+        else:
+            intent = "query"
+            search_term = text
             search_results = search_memories(agent_id, search_term)
             
             response = await generate_response(text, search_results)
@@ -204,25 +212,7 @@ async def process_mem0_message(text: str, agent_id: str, chat_room_id: str = Non
                 "task_id": str(datetime.now().timestamp()),
                 "response": response
             }
-                
-        elif intent == "information" and info:
-            store_in_memory(agent_id, info)
-            return {
-                "task_id": str(datetime.now().timestamp()),
-                "response": {
-                    "type": intent,
-                    "content": info["content"]
-                }
-            }
-        else:
-            return {
-                "task_id": str(datetime.now().timestamp()),
-                "response": {
-                    "type": intent,
-                    "content": info["content"]
-                }
-            }
-            
+
     except Exception as e:
         print(f"메시지 처리 중 오류 발생: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
