@@ -81,7 +81,7 @@ Now, you're going to create an interactive system similar to a BPM system that h
 
 - Today is:  {today}
 
-- Process Instance Name Pattern: "{instance_name_pattern}"  // If there is no process instance name pattern, the key_value format of parameterValue, along with the process definition name, is the default for the instance name pattern. e.g. 휴가신청_이름_홍길동_사유_개인일정_시작일_20240701
+- Process Instance Name Pattern: "{instance_name_pattern}"  // If there is no process instance name pattern, the key_value format of parameterValue, along with the process definition name, is the default for the instance name pattern. Instance name must be limited to 20 characters or less. e.g. 휴가신청_이름_홍길동_사유_개인일정_시작일_20240701
 
 Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
 The data changes and role binding changes should be derived from the user submitted data or attached image OCR.
