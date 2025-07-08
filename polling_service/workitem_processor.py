@@ -9,6 +9,7 @@ import re
 import uuid
 import requests
 import os
+import asyncio
 from dotenv import load_dotenv
 from datetime import datetime
 from fastapi import HTTPException
@@ -37,17 +38,100 @@ vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096, strea
 # parser 생성
 class CustomJsonOutputParser(SimpleJsonOutputParser):
     def parse(self, text: str) -> dict:
-        # Extract JSON from markdown if present
-        match = re.search(r'```json\n(.*?)\n```', text, re.DOTALL)
-        if match:
-            text = match.group(1)
-        else:
-            raise ValueError("No JSON content found within backticks.")
+        # Multiple parsing strategies to handle various response formats
         
+        # Strategy 1: Extract JSON from markdown code blocks
+        json_patterns = [
+            r'```json\n(.*?)\n```',  # Standard markdown JSON
+            r'```\n(.*?)\n```',      # Generic code block
+            r'```(.*?)```',           # Code block without newlines
+        ]
+        
+        for pattern in json_patterns:
+            match = re.search(pattern, text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(1).strip())
+                except json.JSONDecodeError:
+                    continue
+        
+        # Strategy 2: Try to find JSON object directly in the text
+        # Look for content that starts with { and ends with }
+        json_start = text.find('{')
+        json_end = text.rfind('}')
+        
+        if json_start != -1 and json_end != -1 and json_end > json_start:
+            json_content = text[json_start:json_end + 1]
+            try:
+                return json.loads(json_content)
+            except json.JSONDecodeError:
+                pass
+        
+        # Strategy 3: Clean up common LLM artifacts and try again
+        cleaned_text = text.strip()
+        # Remove common prefixes
+        prefixes_to_remove = [
+            "Here is the JSON output based on the provided information and process definition:",
+            "Here is the JSON response:",
+            "The result is:",
+            "JSON output:",
+            "Response:",
+        ]
+        
+        for prefix in prefixes_to_remove:
+            if cleaned_text.startswith(prefix):
+                cleaned_text = cleaned_text[len(prefix):].strip()
+        
+        # Try parsing the cleaned text
         try:
-            return json.loads(text)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON: {str(e)}")
+            return json.loads(cleaned_text)
+        except json.JSONDecodeError:
+            pass
+        
+        # Strategy 4: Try to extract and fix common JSON formatting issues
+        # Remove any text before the first { and after the last }
+        first_brace = cleaned_text.find('{')
+        last_brace = cleaned_text.rfind('}')
+        
+        if first_brace != -1 and last_brace != -1:
+            json_content = cleaned_text[first_brace:last_brace + 1]
+            try:
+                return json.loads(json_content)
+            except json.JSONDecodeError as e:
+                # Try to fix common issues
+                fixed_content = self._fix_common_json_issues(json_content)
+                try:
+                    return json.loads(fixed_content)
+                except json.JSONDecodeError:
+                    pass
+        
+        raise ValueError(f"Could not parse JSON from text: {text[:200]}...")
+    
+    def _fix_common_json_issues(self, json_content: str) -> str:
+        """Fix common JSON formatting issues from LLM responses"""
+        # Remove trailing commas before closing brackets/braces
+        json_content = re.sub(r',(\s*[}\]])', r'\1', json_content)
+        
+        # Fix unquoted property names
+        json_content = re.sub(r'(\s*)(\w+)(\s*):', r'\1"\2"\3:', json_content)
+        
+        # Fix single quotes to double quotes
+        json_content = json_content.replace("'", '"')
+        
+        # Fix boolean values
+        json_content = re.sub(r':\s*true\s*([,}])', r': true\1', json_content)
+        json_content = re.sub(r':\s*false\s*([,}])', r': false\1', json_content)
+        
+        # Fix missing quotes around string values
+        json_content = re.sub(r':\s*([^"][^,}\]]*[^"\s,}\]])', r': "\1"', json_content)
+        
+        # Fix newlines and special characters in strings
+        json_content = json_content.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+        
+        # Fix unescaped quotes within strings
+        json_content = re.sub(r'([^\\])"([^"]*?)([^\\])"', r'\1"\2\\"\3"', json_content)
+        
+        return json_content
 
 parser = CustomJsonOutputParser()
 
@@ -84,15 +168,23 @@ Now, you're going to create an interactive system similar to a BPM system that h
 - Process Instance Name Pattern: "{instance_name_pattern}"  // If there is no process instance name pattern, the key_value format of parameterValue, along with the process definition name, is the default for the instance name pattern. Instance name must be limited to 20 characters or less. e.g. 휴가신청_이름_홍길동_사유_개인일정_시작일_20240701
 
 Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
-The data changes and role binding changes should be derived from the user submitted data or attached image OCR.
+The data changes should be derived from the user submitted data or attached image OCR.
 By referencing the sequences of the process definition, the next activity step needs to be identified. The target ID of the sequence connected to the current completed activity ID is the ID of the next activity.
-At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if a process variable is declared as boolean, it should be true/false.
+At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if the process variable is declared as boolean, it should be true/false.
 Information about completed activities must be returned.
 If the person responsible for the next activity is an external customer, the nextUserEmail included in nextActivities must be returned customer email. Customer emails must be found in submitted form values or process instance data. Never write customer emails at will or return non-external ones. Instances will be broken.
 If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
 startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
 If the user-submitted data is insufficient, refer to the process data to extract the value.
 When an image is input, the process activity is completed based on the analyzed contents by analyzing the image.
+
+CRITICAL INSTRUCTIONS:
+1. Return ONLY the JSON response wrapped in ```json and ``` markers
+2. Do not include any explanation, comments, or additional text before or after the JSON
+3. Ensure all JSON keys and string values are properly quoted with double quotes
+4. Do not include trailing commas in arrays or objects
+5. Use proper JSON escaping for special characters in strings
+6. The response must be valid JSON that can be parsed without errors
 
 result should be in this JSON format:
 {{
@@ -103,23 +195,15 @@ result should be in this JSON format:
     [{{
         "key": "process data key", // Replace with _ if there is a space, Process Definition 에서 없는 데이터는 추가하지 않음. 프로세스 정의 데이터에 이메일이나 이름 같은 변수가 존재하지만 값이 누락된 경우 역할 바인딩에서 적절한 값을 알아서 지정하여 필드 매핑해줄 것.
         "name": "process data name",
-        "value": <value for changed data>  // Refer to the data type of this process variable. For example, if the type of the process variable is Date, calculate and assign today's date. If the type of variable is a form, assign the JSON format.
+        "value": <value for changed data>  // Refer to the data type of this process variable. For example, if the type of the process variable is Date, calculate and assign today's date. If the type of variable is a form, assign the JSON format. 
     }}],
-
     "roleBindings": {role_bindings},
-    "roleBindingChanges":
-    [{{
-        "roleName": "name of role",
-        "userId": "email address for the role"
-    }}],
-    
     "completedActivities":
     [{{
         "completedActivityId": "the id of completed activity id",
         "completedUserEmail": "the email address of completed activity's role",
         "result": "DONE"
     }}],
-    
     "nextActivities":
     [{{
         "nextActivityId": "the id of next activity id",
@@ -127,16 +211,16 @@ result should be in this JSON format:
         "result": "IN_PROGRESS | PENDING | DONE",
         "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)"
     }}],
-
     "cannotProceedErrors":   // return errors if cannot proceed to next activity 
     [{{
         "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST"
         "reason": "explanation for the error in Korean"
     }}],
-    
     "description": "description of the completed activities and the next activities and what the user who will perform the task should do in Korean"
 
 }}
+
+Remember: Return ONLY the JSON wrapped in ```json and ``` markers, nothing else.
 """
 )
 
@@ -151,9 +235,7 @@ class CompletedActivity(BaseModel):
     completedUserEmail: Optional[str] = None
     result: Optional[str] = None
 
-class RoleBindingChange(BaseModel):
-    roleName: str
-    userId: Any
+
 
 class FieldMapping(BaseModel):
     key: str
@@ -168,7 +250,6 @@ class ProcessResult(BaseModel):
     instanceId: str
     instanceName: str
     fieldMappings: Optional[List[FieldMapping]] = None
-    roleBindingChanges: Optional[List[RoleBindingChange]] = None
     nextActivities: Optional[List[Activity]] = None
     completedActivities: Optional[List[CompletedActivity]] = None
     processDefinitionId: str
@@ -260,7 +341,7 @@ def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = 
             process_instance = ProcessInstance(
                 proc_inst_id=instance_id,
                 proc_inst_name=f"{process_result.instanceName}",
-                role_bindings=[rb.model_dump() for rb in (process_result.roleBindingChanges or [])],
+                role_bindings=[],
                 current_activity_ids=[],
                 current_user_ids=[],
                 variables_data=[],
@@ -281,7 +362,7 @@ def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = 
                 process_instance = ProcessInstance(
                     proc_inst_id=process_result.instanceId,
                     proc_inst_name=f"{process_result.instanceName}",
-                    role_bindings=[rb.model_dump() for rb in (process_result.roleBindingChanges or [])],
+                    role_bindings=[],
                     current_activity_ids=[],
                     current_user_ids=[],
                     variables_data=[],
@@ -618,7 +699,62 @@ async def handle_workitem(workitem):
             if num_of_chunk % 10 == 0:
                 upsert_workitem({"id": workitem['id'], "log": collected_text}, tenant_id)
 
-        parsed_output = parser.parse(collected_text)
+        # Enhanced JSON parsing with retry mechanism
+        parsed_output = None
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                parsed_output = parser.parse(collected_text)
+                break
+            except Exception as parse_error:
+                retry_count += 1
+                print(f"[WARNING] JSON parsing attempt {retry_count} failed for workitem {workitem['id']}: {str(parse_error)}")
+                
+                if retry_count >= max_retries:
+                    # Log the problematic response for debugging
+                    print(f"[ERROR] All JSON parsing attempts failed. Raw response: {collected_text[:500]}...")
+                    
+                    # Create a fallback response to prevent complete failure
+                    fallback_response = {
+                        "instanceId": process_instance_id,
+                        "instanceName": f"Error_Instance_{workitem['id']}",
+                        "processDefinitionId": process_definition_id,
+                        "fieldMappings": [],
+                        "roleBindings": workitem['assignees'],
+
+                        "completedActivities": [],
+                        "nextActivities": [],
+                        "cannotProceedErrors": [{
+                            "type": "SYSTEM_ERROR",
+                            "reason": f"JSON 파싱 실패: {str(parse_error)}"
+                        }],
+                        "description": "JSON 파싱 오류로 인해 프로세스 진행이 중단되었습니다."
+                    }
+                    
+                    # Update workitem with error status
+                    upsert_workitem({
+                        "id": workitem['id'],
+                        "status": "ERROR",
+                        "log": f"JSON parsing failed after {max_retries} attempts: {str(parse_error)}"
+                    }, tenant_id)
+                    
+                    # Send error message to chat
+                    error_message = json.dumps({
+                        "role": "system", 
+                        "content": f"JSON 파싱 오류가 발생했습니다: {str(parse_error)}"
+                    })
+                    upsert_chat_message(process_instance_id, error_message, tenant_id)
+                    
+                    raise parse_error
+                
+                # Wait a bit before retrying
+                await asyncio.sleep(0.5)
+        
+        if parsed_output is None:
+            raise Exception("Failed to parse JSON response after all retry attempts")
+        
         result = execute_next_activity(parsed_output, tenant_id)
         result_json = json.loads(result)
     except Exception as e:
