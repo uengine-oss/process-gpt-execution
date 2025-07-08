@@ -21,6 +21,15 @@ from database import update_tenant_id, notification_polling_task
 from mcp_config_api import add_routes_to_app as add_mcp_routes_to_app
 from agent_chat import add_routes_to_app as add_agent_chat_routes_to_app
 
+from dotenv import load_dotenv
+
+if os.getenv("ENV") != "production":
+    load_dotenv()
+
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
+os.environ["LANGCHAIN_TAGS"] = "service:main"
+
 # #캐시 적용
 # from langchain.cache import SQLiteCache
 # from langchain.globals import set_llm_cache

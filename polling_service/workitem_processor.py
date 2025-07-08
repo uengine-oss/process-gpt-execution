@@ -172,6 +172,7 @@ The data changes should be derived from the user submitted data or attached imag
 By referencing the sequences of the process definition, the next activity step needs to be identified. The target ID of the sequence connected to the current completed activity ID is the ID of the next activity.
 At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if the process variable is declared as boolean, it should be true/false.
 Information about completed activities must be returned.
+When determining nextUserEmail for nextActivities, ALWAYS use the "endpoint" value from roleBindings instead of "default" value. If endpoint is a list, use the first element. If endpoint is different from default, prioritize endpoint value.
 If the person responsible for the next activity is an external customer, the nextUserEmail included in nextActivities must be returned customer email. Customer emails must be found in submitted form values or process instance data. Never write customer emails at will or return non-external ones. Instances will be broken.
 If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
 startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
@@ -280,6 +281,20 @@ def upsert_worker():
 # 프로그램 시작 시 한 번만 실행
 threading.Thread(target=upsert_worker, daemon=True).start()
 
+def initialize_role_bindings(process_result_json: dict) -> list:
+    """Initialize role_bindings from process_result_json"""
+    existing_role_bindings = process_result_json.get("roleBindings", [])
+    initial_role_bindings = []
+    if existing_role_bindings:
+        for rb in existing_role_bindings:
+            role_binding = {
+                "name": rb.get("name"),
+                "endpoint": rb.get("endpoint"),
+                "resolutionRule": rb.get("resolutionRule")
+            }
+            initial_role_bindings.append(role_binding)
+    return initial_role_bindings
+
 def check_external_customer_and_send_email(activity_obj, user_email, process_instance, process_definition):
     """
     Check that the next activity's role is assigned to external customer.
@@ -327,200 +342,216 @@ def check_external_customer_and_send_email(activity_obj, user_email, process_ins
         print(f"Failed to send notification to external customer: {str(e)}")
         return False
 
-def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = None) -> str:
-    try:
-        process_result = ProcessResult(**process_result_json)
-        process_instance = None
-        status = ""
-        if not fetch_process_instance(process_result.instanceId, tenant_id):
-            if process_result.instanceId == "new" or '.' not in process_result.instanceId:
-                instance_id = f"{process_result.processDefinitionId.lower()}.{str(uuid.uuid4())}"
-                status = "RUNNING"
-            else:
-                instance_id = process_result.instanceId
-            process_instance = ProcessInstance(
-                proc_inst_id=instance_id,
+def _create_or_get_process_instance(process_result: ProcessResult, process_result_json: dict, tenant_id: Optional[str] = None) -> ProcessInstance:
+    """Create new process instance or get existing one"""
+    if not fetch_process_instance(process_result.instanceId, tenant_id):
+        if process_result.instanceId == "new" or '.' not in process_result.instanceId:
+            instance_id = f"{process_result.processDefinitionId.lower()}.{str(uuid.uuid4())}"
+            status = "RUNNING"
+        else:
+            instance_id = process_result.instanceId
+        return ProcessInstance(
+            proc_inst_id=instance_id,
+            proc_inst_name=f"{process_result.instanceName}",
+            role_bindings=initialize_role_bindings(process_result_json),
+            current_activity_ids=[],
+            current_user_ids=[],
+            variables_data=[],
+            status=status,
+            tenant_id=tenant_id
+        )
+    else:
+        process_instance = fetch_process_instance(process_result.instanceId, tenant_id)
+        if process_instance.status == "NEW":
+            return ProcessInstance(
+                proc_inst_id=process_result.instanceId,
                 proc_inst_name=f"{process_result.instanceName}",
-                role_bindings=[],
+                role_bindings=initialize_role_bindings(process_result_json),
                 current_activity_ids=[],
                 current_user_ids=[],
                 variables_data=[],
-                status=status,
+                status="RUNNING",
                 tenant_id=tenant_id
             )
-            
-            existing_role_bindings = process_result_json.get("roleBindings", [])
-            if existing_role_bindings:
-                formatted_role_bindings = [{"roleName": rb.get("name"), "userId": rb.get("endpoint")} for rb in existing_role_bindings]
-                if process_instance.role_bindings:
-                    process_instance.role_bindings.extend(formatted_role_bindings)
-                else:
-                    process_instance.role_bindings = formatted_role_bindings
+        return process_instance
+
+def _update_process_variables(process_instance: ProcessInstance, field_mappings: List[FieldMapping]):
+    """Update process instance variables from field mappings"""
+    if not field_mappings:
+        return
+    
+    for data_change in field_mappings:
+        form_entry = next((item for item in process_instance.variables_data 
+                          if isinstance(item["value"], dict) and data_change.key in item["value"]), None)
+        
+        if form_entry:
+            form_entry["value"][data_change.key] = data_change.value
         else:
-            process_instance = fetch_process_instance(process_result.instanceId, tenant_id)
-            if process_instance.status == "NEW":
-                process_instance = ProcessInstance(
-                    proc_inst_id=process_result.instanceId,
-                    proc_inst_name=f"{process_result.instanceName}",
-                    role_bindings=[],
-                    current_activity_ids=[],
-                    current_user_ids=[],
-                    variables_data=[],
-                    status="RUNNING",
-                    tenant_id=tenant_id
+            variable = {
+                "key": data_change.key,
+                "name": data_change.name,
+                "value": data_change.value
+            }
+            existing_variable = next((item for item in process_instance.variables_data 
+                                    if item["key"] == data_change.key), None)
+            if existing_variable:
+                existing_variable.update(variable)
+            else:
+                process_instance.variables_data.append(variable)
+
+def _process_next_activities(process_instance: ProcessInstance, process_result: ProcessResult, 
+                           process_result_json: dict, process_definition) -> set:
+    """Process next activities and return set of user emails"""
+    all_user_emails = set()
+    
+    if not process_result.nextActivities:
+        process_instance.current_activity_ids = []
+        return all_user_emails
+    
+    for activity in process_result.nextActivities:
+        if activity.nextActivityId in ["endEvent", "END_PROCESS", "end_event"]:
+            process_instance.status = "COMPLETED"
+            process_instance.current_activity_ids = []
+            break
+            
+        if process_definition.find_gateway_by_id(activity.nextActivityId):
+            next_activities = process_definition.find_next_activities(activity.nextActivityId)
+            if next_activities:
+                process_instance.current_activity_ids = [act.id for act in next_activities]
+                process_instance.status = "RUNNING"
+                process_result_json["nextActivities"] = []
+                next_activity_dicts = [
+                    Activity(
+                        nextActivityId=act.id,
+                        nextUserEmail=activity.nextUserEmail,
+                        result="IN_PROGRESS"
+                    ).model_dump() for act in next_activities
+                ]
+                process_result_json["nextActivities"].extend(next_activity_dicts)
+            else:
+                process_instance.current_activity_ids = []
+                process_result_json["nextActivities"] = []
+                break
+                
+        elif activity.result == "IN_PROGRESS" and activity.nextActivityId not in process_instance.current_activity_ids:
+            process_instance.current_activity_ids = [activity.nextActivityId]
+            process_instance.status = "RUNNING"
+        else:
+            process_instance.current_activity_ids.append(activity.nextActivityId)
+        
+        # Check external customer and send email
+        activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
+        check_external_customer_and_send_email(activity_obj, activity.nextUserEmail, process_instance, process_definition)
+        
+        all_user_emails.add(activity.nextUserEmail)
+    
+    return all_user_emails
+
+def _execute_script_tasks(process_instance: ProcessInstance, process_result: ProcessResult, 
+                         process_result_json: dict, process_definition):
+    """Execute script tasks in next activities"""
+    for activity in process_result.nextActivities:
+        activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
+        if activity_obj and activity_obj.type == "scriptTask":
+            env_vars = {}
+            for variable in process_instance.variables_data:
+                if variable["value"] is None:
+                    continue
+                if isinstance(variable["value"], list):
+                    variable["value"] = ', '.join(map(str, variable["value"]))
+                if isinstance(variable["value"], dict):
+                    variable["value"] = json.dumps(variable["value"])
+                env_vars[variable["key"]] = variable["value"]
+            
+            result = execute_python_code(activity_obj.pythonCode, env_vars=env_vars)
+            
+            if result.returncode != 0:
+                # Script task execution error
+                process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
+                process_result_json["result"] = result.stderr
+            else:
+                process_result_json["result"] = result.stdout
+                # Script task execution success
+                process_instance.current_activity_ids = [
+                    act_id for act_id in process_instance.current_activity_ids
+                    if act_id != activity_obj.id
+                ]
+                    
+                process_result_json["nextActivities"] = [
+                    Activity(**act) for act in process_result_json.get("nextActivities", [])
+                    if act.get("nextActivityId") != activity_obj.id
+                ]
+                completed_activity = CompletedActivity(
+                    completedActivityId=activity_obj.id,
+                    completedUserEmail=activity.nextUserEmail,
+                    result="DONE"
                 )
-           
+                completed_activity_dict = completed_activity.dict()
+                process_result_json["completedActivities"].append(completed_activity_dict)
+        else:
+            result = f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found."
+            process_result_json["result"] = result
+
+def _persist_process_data(process_instance: ProcessInstance, process_result: ProcessResult, 
+                         process_result_json: dict, process_definition, tenant_id: Optional[str] = None):
+    """Persist process data to database and vector store"""
+    # Upsert workitems
+    upsert_todo_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
+    upsert_completed_workitem(process_instance.dict(), process_result_json, process_definition, tenant_id)
+    workitems = upsert_next_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
+    
+    # Upsert process instance
+    _, process_instance = upsert_process_instance(process_instance, tenant_id)
+    
+    # Send chat message
+    message_json = json.dumps({"role": "system", "content": process_result.description})
+    if process_result.cannotProceedErrors:
+        reason = "\n".join(error.reason for error in process_result.cannotProceedErrors)
+        message_json = json.dumps({"role": "system", "content": reason})
+    upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
+    
+    # Update process_result_json
+    process_result_json["instanceId"] = process_instance.proc_inst_id
+    process_result_json["instanceName"] = process_instance.proc_inst_name
+    process_result_json["workitemIds"] = [workitem.id for workitem in workitems] if workitems else []
+    
+    # Add to vector store
+    content_str = json.dumps(process_instance.dict(exclude={'process_definition'}), ensure_ascii=False, indent=2)
+    metadata = {
+        "tenant_id": process_instance.tenant_id,
+        "type": "process_instance"
+    }
+    vector_store = get_vector_store()
+    vector_store.add_documents([Document(page_content=content_str, metadata=metadata)])
+
+def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = None) -> str:
+    try:
+        process_result = ProcessResult(**process_result_json)
+        
+        # Create or get process instance
+        process_instance = _create_or_get_process_instance(process_result, process_result_json, tenant_id)
         process_definition = process_instance.process_definition
         
-        if process_result.fieldMappings:
-            for data_change in process_result.fieldMappings:
-                form_entry = next((item for item in process_instance.variables_data if isinstance(item["value"], dict) and data_change.key in item["value"]), None)
-                
-                if form_entry:
-                    form_entry["value"][data_change.key] = data_change.value
-                else:
-                    variable = {
-                        "key": data_change.key,
-                        "name": data_change.name,
-                        "value": data_change.value
-                    }
-                    existing_variable = next((item for item in process_instance.variables_data if item["key"] == data_change.key), None)
-                    if existing_variable:
-                        existing_variable.update(variable)
-                    else:
-                        process_instance.variables_data.append(variable)
-
-
-        all_user_emails = set()
-        if process_result.nextActivities:
-            for activity in process_result.nextActivities:
-                if activity.nextActivityId == "endEvent" or activity.nextActivityId == "END_PROCESS" or activity.nextActivityId == "end_event":
-                    process_instance.status = "COMPLETED"
-                    process_instance.current_activity_ids = []
-                    break
-                if process_definition.find_gateway_by_id(activity.nextActivityId):
-                    next_activities = process_definition.find_next_activities(activity.nextActivityId)
-                    if next_activities:
-                        process_instance.current_activity_ids = [act.id for act in next_activities]
-                        process_instance.status = "RUNNING"
-                        process_result_json["nextActivities"] = []
-                        next_activity_dicts = [
-                            Activity(
-                                nextActivityId=act.id,
-                                nextUserEmail=activity.nextUserEmail,
-                                result="IN_PROGRESS"
-                            ).model_dump() for act in next_activities
-                        ]
-                        process_result_json["nextActivities"].extend(next_activity_dicts)
-                    else:
-                        process_instance.current_activity_ids = []
-                        process_result_json["nextActivities"] = []
-                        break
-                        
-                elif activity.result == "IN_PROGRESS" and activity.nextActivityId not in process_instance.current_activity_ids:
-                    process_instance.current_activity_ids = [activity.nextActivityId]
-                    process_instance.status = "RUNNING"
-                else:
-                    process_instance.current_activity_ids.append(activity.nextActivityId)
-                    activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
-                
-                # check if the next activity is assigned to external customer and send an email
-                activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
-                check_external_customer_and_send_email(activity_obj, activity.nextUserEmail, process_instance, process_definition)
-                
-            all_user_emails.update(activity.nextUserEmail for activity in process_result.nextActivities)
-        if len(process_result.nextActivities) == 0:
-            process_instance.current_activity_ids = []
+        # Update process variables
+        _update_process_variables(process_instance, process_result.fieldMappings)
+        
+        # Process next activities
+        all_user_emails = _process_next_activities(process_instance, process_result, process_result_json, process_definition)
+        
+        # Add completed activities user emails
         for activity in process_result.completedActivities:
             all_user_emails.add(activity.completedUserEmail)
         
+        # Update current user IDs
         current_user_ids_set = set(process_instance.current_user_ids)
         updated_user_emails = current_user_ids_set.union(all_user_emails)
-        
         process_instance.current_user_ids = list(updated_user_emails)
         
-        result = None
-
-        for activity in process_result.nextActivities:
-            activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
-            if activity_obj and activity_obj.type == "scriptTask":
-                env_vars = {}
-                for variable in process_instance.variables_data:
-                    if variable["value"] is None:
-                        continue
-                    if isinstance(variable["value"], list):
-                        variable["value"] = ', '.join(map(str, variable["value"]))
-                    if isinstance(variable["value"], dict):
-                        variable["value"] = json.dumps(variable["value"])
-                    env_vars[variable["key"]] = variable["value"]
-                result = execute_python_code(activity_obj.pythonCode, env_vars=env_vars)
-                
-                if result.returncode != 0:
-                    # script task 의 python code 실행 에러
-                    process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
-                    process_result_json["result"] = result.stderr
-                else:
-                    process_result_json["result"] = result.stdout
-                    # script task 의 python code 실행 성공
-                    process_instance.current_activity_ids = [
-                        act_id for act_id in process_instance.current_activity_ids
-                        if act_id != activity_obj.id
-                    ]
-                        
-                    process_result_json["nextActivities"] = [
-                        Activity(**act) for act in process_result_json.get("nextActivities", [])
-                        if act.get("nextActivityId") != activity_obj.id
-                    ]
-                    completed_activity = CompletedActivity(
-                        completedActivityId=activity_obj.id,
-                        completedUserEmail=activity.nextUserEmail,
-                        result="DONE"
-                    )
-                    completed_activity_dict = completed_activity.dict()
-                    process_result_json["completedActivities"].append(completed_activity_dict)
-                    
-                # process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
-            else:
-                result = (f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found.")
-                process_result_json["result"] = result
-                
-                
-        upsert_todo_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
+        # Execute script tasks
+        _execute_script_tasks(process_instance, process_result, process_result_json, process_definition)
         
-        workitems = None
-        upsert_completed_workitem(process_instance.dict(), process_result_json, process_definition, tenant_id)
-        workitems = upsert_next_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
-        _, process_instance = upsert_process_instance(process_instance, tenant_id)
-        message_json = json.dumps({"role": "system", "content": process_result.description})
-        if process_result.cannotProceedErrors:
-            reason = ""
-            for error in process_result.cannotProceedErrors:
-                reason += error.reason + "\n"
-            message_json = json.dumps({"role": "system", "content": reason})
-        upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
-        
-        # Updating process_result_json with the latest process instance details and execution result
-        process_result_json["instanceId"] = process_instance.proc_inst_id
-        process_result_json["instanceName"] = process_instance.proc_inst_name
-        # Ensure workitem is not None before accessing its id
-        if workitems:
-            process_result_json["workitemIds"] = [workitem.id for workitem in workitems]
-        else:
-            process_result_json["workitemIds"] = []
-        
-        content_str = json.dumps(process_instance.dict(exclude={'process_definition'}), ensure_ascii=False, indent=2)
-        metadata = {
-            "tenant_id": process_instance.tenant_id,
-            "type": "process_instance"
-        }
-
-        vector_store = get_vector_store()
-        vector_store.add_documents([
-            Document(
-                page_content=content_str,
-                metadata=metadata
-            )
-        ])
+        # Persist data
+        _persist_process_data(process_instance, process_result, process_result_json, process_definition, tenant_id)
         
         return json.dumps(process_result_json)
     except Exception as e:
