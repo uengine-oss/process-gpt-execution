@@ -351,7 +351,8 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
             'status': status if status else process_instance.status,
             'proc_def_id': process_instance.get_def_id(),
             'proc_def_version': arcv_id,
-            'tenant_id': tenant_id
+            'tenant_id': tenant_id,
+            'end_date': datetime.now(pytz.timezone('Asia/Seoul')).isoformat() if status == 'COMPLETED' else None
         }).execute()
 
         success = bool(response.data)
@@ -659,10 +660,9 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
             workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul')) if activity_data['result'] == 'DONE' else None
             if workitem.user_id == '' or workitem.user_id == None:
                 workitem.user_id = activity_data['nextUserEmail']
-            if workitem.user_id and workitem.agent_mode != "A2A":
-                assignee_info = fetch_assignee_info(workitem.user_id)
-                if assignee_info['type'] == "a2a":
-                    workitem.agent_mode = "A2A"
+            if workitem.agent_mode == None:
+                workitem.agent_mode = determine_agent_mode(workitem.user_id, workitem.agent_mode)
+            print(f"[DEBUG] workitem.agent_mode: {workitem.agent_mode}")
         else:
             activity = process_definition.find_activity_by_id(activity_data['nextActivityId'])
             if activity:
@@ -672,6 +672,7 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     for prev_activity in prev_activities:
                         start_date = start_date + timedelta(days=prev_activity.duration)
                 due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
+                agent_mode = determine_agent_mode(activity_data['nextUserEmail'], activity.agentMode)
                 workitem = WorkItem(
                     id=str(uuid.uuid4()),
                     proc_inst_id=process_instance_data['proc_inst_id'],
@@ -683,7 +684,8 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     start_date=start_date,
                     due_date=due_date,
                     tool=activity.tool,
-                    tenant_id=tenant_id
+                    tenant_id=tenant_id,
+                    agent_mode=agent_mode
                 )
         
         try:
@@ -775,14 +777,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                             user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
-                agent_mode = None
-                if activity.agentMode is not None:
-                    if activity.agentMode != "none" and activity.agentMode != "None":
-                        agent_mode = activity.agentMode.upper()
-                elif activity.agentMode is None and user_id:
-                    assignee_info = fetch_assignee_info(user_id)
-                    if assignee_info['type'] == "a2a":
-                        agent_mode = "A2A"
+                agent_mode = determine_agent_mode(user_id, activity.agentMode)
 
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
@@ -912,7 +907,11 @@ def fetch_user_info(email: str) -> Dict[str, str]:
         if response.data and len(response.data) > 0:
             return response.data[0]
         else:
-            raise HTTPException(status_code=404, detail="User not found")
+            response = supabase.table("users").select("*").eq('id', email).execute()
+            if response.data and len(response.data) > 0:
+                return response.data[0]
+            else:
+                raise HTTPException(status_code=404, detail="User not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -963,6 +962,68 @@ def fetch_assignee_info(assignee_id: str) -> Dict[str, str]:
             "info": {},
             "error": str(e)
         }
+
+
+def determine_agent_mode(user_id: str, activity_agent_mode: Optional[str] = None) -> Optional[str]:
+    """
+    사용자 ID와 액티비티의 에이전트 모드를 기반으로 적절한 에이전트 모드를 결정합니다.
+    
+    Args:
+        user_id: 사용자 ID (쉼표로 구분된 여러 ID 가능)
+        activity_agent_mode: 액티비티에서 설정된 에이전트 모드
+    
+    Returns:
+        결정된 에이전트 모드 (None, "A2A", "DRAFT", "COMPLETE")
+    """
+    # 액티비티에서 명시적으로 에이전트 모드가 설정된 경우
+    if activity_agent_mode is not None:
+        if activity_agent_mode.lower() not in ["none", "null"]:
+            return activity_agent_mode.upper()
+    
+    # user_id가 없으면 None 반환
+    if not user_id:
+        return None
+    
+    # 여러 사용자 ID가 있는 경우
+    if ',' in user_id:
+        user_ids = user_id.split(',')
+        has_user = False
+        has_agent = False
+        has_a2a = False
+        
+        for user_id in user_ids:
+            assignee_info = fetch_assignee_info(user_id)
+            if assignee_info['type'] == "user":
+                has_user = True
+            elif assignee_info['type'] == "agent":
+                has_agent = True
+            elif assignee_info['type'] == "a2a":
+                has_a2a = True
+        
+        # A2A가 하나라도 있으면 A2A
+        if has_a2a:
+            return "A2A"
+        # 사용자+에이전트 조합이면 DRAFT
+        elif has_user and has_agent:
+            return "DRAFT"
+        # 에이전트만 있으면 COMPLETE
+        elif has_agent and not has_user:
+            return "COMPLETE"
+        # 사용자만 있으면 None
+        elif has_user and not has_agent:
+            return None
+    
+    # 단일 사용자 ID인 경우
+    else:
+        assignee_info = fetch_assignee_info(user_id)
+        if assignee_info['type'] == "a2a":
+            return "A2A"
+        elif assignee_info['type'] == "agent":
+            return "COMPLETE"
+        elif assignee_info['type'] == "user":
+            return None
+    
+    return None
 
 
 def get_vector_store():

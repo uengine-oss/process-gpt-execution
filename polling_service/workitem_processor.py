@@ -3,7 +3,7 @@ from langchain_openai import ChatOpenAI
 from langchain.schema import Document
 from langchain.output_parsers.json import SimpleJsonOutputParser
 from pydantic import BaseModel
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Tuple
 import json
 import re
 import uuid
@@ -466,9 +466,74 @@ def process_output(workitem, tenant_id):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
+def get_workitem_position(workitem: dict) -> Tuple[bool, bool]:
+    """
+    워크아이템이 프로세스 정의에서 첫 번째 또는 마지막 워크아이템인지 판별
+    startEvent와 연결된 액티비티가 첫 번째, endEvent와 연결된 액티비티가 마지막
+    
+    Returns:
+        Tuple[bool, bool]: (is_first, is_last)
+    """
+    proc_inst_id = workitem.get('proc_inst_id')
+    proc_def_id = workitem.get('proc_def_id')
+    activity_id = workitem.get('activity_id')
+    tenant_id = workitem.get('tenant_id')
+    
+    if not proc_inst_id or proc_inst_id == "new" or not proc_def_id or not activity_id:
+        return False, False
+    
+    try:
+        # 프로세스 정의 조회
+        process_definition_json = fetch_process_definition(proc_def_id, tenant_id)
+        process_definition = load_process_definition(process_definition_json)
+        
+        # 첫 번째 액티비티 확인 (startEvent와 연결된 액티비티)
+        is_first = process_definition.is_starting_activity(activity_id)
+        
+        # 마지막 액티비티 확인 (endEvent와 연결된 액티비티)
+        end_activity = process_definition.find_end_activity()
+        is_last = end_activity and end_activity.id == activity_id
+        
+        return is_first, is_last
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to determine workitem position for {workitem.get('id')}: {str(e)}")
+        return False, False
+
+def update_instance_status_on_error(workitem: dict, is_first: bool, is_last: bool):
+    """
+    예외 발생 시 인스턴스 상태를 업데이트
+    """
+    proc_inst_id = workitem.get('proc_inst_id')
+    if not proc_inst_id or proc_inst_id == "new":
+        return
+    
+    try:
+        if is_first:
+            process_instance = fetch_process_instance(proc_inst_id, workitem.get('tenant_id'))
+            if process_instance:
+                process_instance.status = "RUNNING"
+                upsert_process_instance(process_instance, workitem.get('tenant_id'))
+                print(f"[INFO] Updated instance {proc_inst_id} status to RUNNING due to first workitem failure")
+        
+        elif is_last:
+            process_instance = fetch_process_instance(proc_inst_id, workitem.get('tenant_id'))
+            if process_instance:
+                process_instance.status = "COMPLETED"
+                upsert_process_instance(process_instance, workitem.get('tenant_id'))
+                print(f"[INFO] Updated instance {proc_inst_id} status to COMPLETED due to last workitem failure")
+                
+    except Exception as e:
+        print(f"[ERROR] Failed to update instance status for {proc_inst_id}: {str(e)}")
+
 async def handle_workitem(workitem):
     if workitem['retry'] >= 3:
         return
+    
+    # 워크아이템 위치 판별
+    is_first, is_last = get_workitem_position(workitem)
     
     activity_id = workitem['activity_id']
     process_definition_id = workitem['proc_def_id']
@@ -516,45 +581,51 @@ async def handle_workitem(workitem):
     if form_id and output.get(form_id):
         output = output.get(form_id)
     
-    chain_input = {
-        "answer": '',
-        "instance_id": process_instance_id,
-        "instance_variables_data": process_instance.variables_data if process_instance and process_instance.status == "RUNNING" else '',
-        "role_bindings": workitem['assignees'],
-        "current_activity_ids": activity_id,
-        "current_user_ids": workitem['user_id'],
-        "processDefinitionJson": process_definition_json,
-        "process_definition_id": process_definition_id,
-        "activity_id": activity_id,
-        "user_info": user_info,
-        "user_email": workitem['user_id'] if ',' not in workitem['user_id'] else ','.join(workitem['user_id'].split(',')),
-        "today": today,
-        "organizationChart": organization_chart,
-        "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
-        "form_fields": form_fields,
-        "form_values": output,
-        "other_output": workitem['output']
-    }
-    
-    collected_text = ""
-    num_of_chunk = 0
-    async for chunk in model.astream(prompt.format(**chain_input)):
-        token = chunk.content
-        collected_text += token
-        upsert_queue.put((
-            {
-                "id": workitem['id'],
-                "log": collected_text
-            },
-            tenant_id
-        ))
-        num_of_chunk += 1
-        if num_of_chunk % 10 == 0:
-            upsert_workitem({"id": workitem['id'], "log": collected_text}, tenant_id)
+    try:
+        chain_input = {
+            "answer": '',
+            "instance_id": process_instance_id,
+            "instance_variables_data": process_instance.variables_data if process_instance and process_instance.status == "RUNNING" else '',
+            "role_bindings": workitem['assignees'],
+            "current_activity_ids": activity_id,
+            "current_user_ids": workitem['user_id'],
+            "processDefinitionJson": process_definition_json,
+            "process_definition_id": process_definition_id,
+            "activity_id": activity_id,
+            "user_info": user_info,
+            "user_email": workitem['user_id'] if ',' not in workitem['user_id'] else ','.join(workitem['user_id'].split(',')),
+            "today": today,
+            "organizationChart": organization_chart,
+            "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
+            "form_fields": form_fields,
+            "form_values": output,
+            "other_output": workitem['output']
+        }
+        
+        collected_text = ""
+        num_of_chunk = 0
+        async for chunk in model.astream(prompt.format(**chain_input)):
+            token = chunk.content
+            collected_text += token
+            upsert_queue.put((
+                {
+                    "id": workitem['id'],
+                    "log": collected_text
+                },
+                tenant_id
+            ))
+            num_of_chunk += 1
+            if num_of_chunk % 10 == 0:
+                upsert_workitem({"id": workitem['id'], "log": collected_text}, tenant_id)
 
-    parsed_output = parser.parse(collected_text)
-    result = execute_next_activity(parsed_output, tenant_id)
-    result_json = json.loads(result)
+        parsed_output = parser.parse(collected_text)
+        result = execute_next_activity(parsed_output, tenant_id)
+        result_json = json.loads(result)
+    except Exception as e:
+        print(f"[ERROR] Error in handle_workitem for workitem {workitem['id']}: {str(e)}")
+        # 예외 발생 시 인스턴스 상태 업데이트
+        update_instance_status_on_error(workitem, is_first, is_last)
+        raise e
     
     if result_json.get("instanceId") != "new" and workitem['proc_inst_id'] == "new":
         instance_id = result_json.get("instanceId")
@@ -598,6 +669,9 @@ async def handle_agent_workitem(workitem):
     """
     if workitem['retry'] >= 3:
         return
+    
+    # 워크아이템 위치 판별
+    is_first, is_last = get_workitem_position(workitem)
     
     try:
         print(f"[DEBUG] Starting agent workitem processing for: {workitem['id']}")
@@ -643,4 +717,6 @@ async def handle_agent_workitem(workitem):
         
     except Exception as e:
         print(f"[ERROR] Error in handle_agent_workitem for workitem {workitem['id']}: {str(e)}")
+        # 예외 발생 시 인스턴스 상태 업데이트
+        update_instance_status_on_error(workitem, is_first, is_last)
         raise e 

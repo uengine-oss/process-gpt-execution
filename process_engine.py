@@ -47,7 +47,7 @@ async def handle_submit(request: Request):
         raise HTTPException(status_code=500, detail=str(e)) from e
     
 
-async def create_process_instance(process_definition, process_instance_id, user_email, is_initiate=False):
+async def create_process_instance(process_definition, process_instance_id, user_email, is_initiate=False, role_bindings=[]):
     try:
         process_definition_id = process_definition.processDefinitionId
         process_instance_data = {
@@ -55,7 +55,9 @@ async def create_process_instance(process_definition, process_instance_id, user_
             "proc_inst_name": process_definition.processDefinitionName,
             "proc_def_id": process_definition_id,
             "current_user_ids": [user_email],
-            "status": "RUNNING" if is_initiate else "NEW"
+            "status": "RUNNING" if is_initiate else "NEW",
+            "role_bindings": role_bindings,
+            "start_date": datetime.now(pytz.timezone('Asia/Seoul')).isoformat()
         }
         insert_process_instance(process_instance_data)
     except Exception as e:
@@ -106,7 +108,7 @@ async def submit_workitem(input: dict):
         workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_id, activity_id)
     else:
         process_instance_id = f"{process_definition_id.lower()}.{str(uuid.uuid4())}"
-        await create_process_instance(process_definition, process_instance_id, user_email, False)
+        await create_process_instance(process_definition, process_instance_id, user_email, False, role_bindings)
 
     now = datetime.now(pytz.timezone('Asia/Seoul'))
     start_date = now.isoformat()
@@ -272,7 +274,7 @@ async def initiate_workitem(input: dict):
             raise HTTPException(status_code=400, detail="No default user email found")
         
     process_instance_id = f"{process_definition_id.lower()}.{str(uuid.uuid4())}"
-    await create_process_instance(process_definition, process_instance_id, user_email, True)
+    await create_process_instance(process_definition, process_instance_id, user_email, True, [])
 
     now = datetime.now(pytz.timezone('Asia/Seoul'))
     start_date = now.isoformat()
