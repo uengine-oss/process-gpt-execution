@@ -345,9 +345,9 @@ def check_external_customer_and_send_email(activity_obj, user_email, process_ins
 def _create_or_get_process_instance(process_result: ProcessResult, process_result_json: dict, tenant_id: Optional[str] = None) -> ProcessInstance:
     """Create new process instance or get existing one"""
     if not fetch_process_instance(process_result.instanceId, tenant_id):
+        status = "RUNNING"
         if process_result.instanceId == "new" or '.' not in process_result.instanceId:
             instance_id = f"{process_result.processDefinitionId.lower()}.{str(uuid.uuid4())}"
-            status = "RUNNING"
         else:
             instance_id = process_result.instanceId
         return ProcessInstance(
