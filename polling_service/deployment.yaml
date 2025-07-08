@@ -76,6 +76,16 @@ spec:
           value: http://memento-service:8005
         - name: ENV
           value: production
+        - name: LANGSMITH_API_KEY
+          valueFrom:
+            secretKeyRef:
+              key: LANGSMITH_API_KEY
+              name: langsmith-secret
+        - name: LANGSMITH_PROJECT
+          valueFrom:
+            secretKeyRef:
+              key: LANGSMITH_PROJECT
+              name: langsmith-secret
         resources:
           requests:
             cpu: 100m

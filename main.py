@@ -26,9 +26,8 @@ from dotenv import load_dotenv
 if os.getenv("ENV") != "production":
     load_dotenv()
 
-os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
-os.environ["LANGCHAIN_TAGS"] = "service:main"
+os.environ["LANGSMITH_TRACING"] = "true"
+os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
 
 # #캐시 적용
 # from langchain.cache import SQLiteCache
