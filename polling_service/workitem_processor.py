@@ -398,7 +398,6 @@ def _process_next_activities(process_instance: ProcessInstance, process_result: 
     
     for activity in process_result.nextActivities:
         if activity.nextActivityId in ["endEvent", "END_PROCESS", "end_event"]:
-            process_instance.status = "COMPLETED"
             process_instance.current_activity_ids = []
             break
             
@@ -406,7 +405,6 @@ def _process_next_activities(process_instance: ProcessInstance, process_result: 
             next_activities = process_definition.find_next_activities(activity.nextActivityId)
             if next_activities:
                 process_instance.current_activity_ids = [act.id for act in next_activities]
-                process_instance.status = "RUNNING"
                 process_result_json["nextActivities"] = []
                 next_activity_dicts = [
                     Activity(
@@ -423,7 +421,6 @@ def _process_next_activities(process_instance: ProcessInstance, process_result: 
                 
         elif activity.result == "IN_PROGRESS" and activity.nextActivityId not in process_instance.current_activity_ids:
             process_instance.current_activity_ids = [activity.nextActivityId]
-            process_instance.status = "RUNNING"
         else:
             process_instance.current_activity_ids.append(activity.nextActivityId)
         
