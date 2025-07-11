@@ -1,16 +1,29 @@
 from database import insert_usage
+from fastapi import HTTPException
 
+def is_service_available(tenant_id: str) -> bool:
+    try:
+        # 서비스가 사용 가능한지 확인하는 로직을 여기에 추가
+        return True
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"제한 확인 중 오류: {str(e)}") from e
+    
 def Usage(raw_data):
-    cleaned_data = {
-        "service_id": raw_data.get("serviceId", raw_data.get("service_id", "")).strip(),
-        "tenant_id": raw_data.get("tenantId", raw_data.get("tenant_id", "")).strip(),
-        "recorded_at": raw_data.get("recordedAt", raw_data.get("recorded_at", "")).strip(),
-        "quantity": raw_data.get("quantity", "").strip(),
-        "model": raw_data.get("model", "").strip(),
-        "user_id": raw_data.get("userId", raw_data.get("user_id", "")).strip(),
-        "metadata": raw_data.get("metadata", {})
-    }
-    insert_usage(cleaned_data)
+    try:
+        if not is_service_available(raw_data.get("tenantId", raw_data.get("tenant_id", "")).strip()):
+            raise HTTPException(status_code=403, detail="서비스가 현재 사용 불가능합니다.")
+        
+        insert_usage({
+            "service_id": raw_data.get("serviceId", raw_data.get("service_id", "")).strip(),
+            "tenant_id": raw_data.get("tenantId", raw_data.get("tenant_id", "")).strip(),
+            "recorded_at": raw_data.get("recordedAt", raw_data.get("recorded_at", "")).strip(),
+            "quantity": raw_data.get("quantity", 0),
+            "model": raw_data.get("model", "").strip(),
+            "user_id": raw_data.get("userId", raw_data.get("user_id", "")).strip(),
+            "metadata": raw_data.get("metadata", {})
+        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 """
 DB DDL
@@ -42,10 +55,16 @@ CREATE INDEX idx_usage_tenant_service_date
 """
 
 """
-from Usage import Usage
-Usage(raw_data)
+from Usage import Usage, is_service_available
 
-사용 예시:
+# 서비스 사용 가능 여부 확인 예시
+tenant_id = "example_tenant_id"
+if is_service_available(tenant_id):
+    print("서비스를 사용할 수 있습니다.")
+else:
+    print("서비스를 사용할 수 없습니다.")
+
+# 사용 예시
 raw_data = { 
     "tenantId": "테넌트 ID", #필수
     "recordedAt": "2023-10-01T12:00:00+09:00", #필수
@@ -59,4 +78,5 @@ raw_data = {
         "used_for_name": "AI 생성 처리 채팅"
     }
 }
+Usage(raw_data)
 """
