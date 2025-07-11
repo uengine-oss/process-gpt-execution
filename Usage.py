@@ -13,9 +13,37 @@ def Usage(raw_data):
     insert_usage(cleaned_data)
 
 """
-from Usage import Usage
+DB DDL
 
-    Usage(raw_data)
+CREATE TABLE public.service (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,      -- 서비스 ID
+    name TEXT NOT NULL,                                 -- 서비스명
+    description TEXT,                                   -- 서비스 설명
+    unit TEXT NOT NULL,                                 -- 서비스의 단위 ('tokens', 'requests', ...)
+    category TEXT NOT NULL,                             -- 서비스 분류 ('llm', 'compute', ...)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),  -- 서비스 생성날짜
+    tenant_id TEXT REFERENCES tenants(id)               -- 테넌트
+);
+
+CREATE TABLE public.usage (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,            -- 사용량 ID
+    service_id UUID REFERENCES service(id),                   -- (필수)서비스ID
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),           -- (필수)테넌트
+    recorded_at TIMESTAMP WITH TIME ZONE NOT NULL,            -- (필수)실제 사용 시점
+    quantity DECIMAL(12,4) NOT NULL,                          -- (필수)사용 양(토큰, 호출수..)  
+    model TEXT,                                               -- 사용모델(GPT-4, .. )
+    user_id TEXT,                                             -- 사용자  
+    metadata JSONB,                                           -- 추가 정보 저장
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()         -- 생성일(자동 생성)
+);
+
+CREATE INDEX idx_usage_tenant_service_date
+   ON public.usage (tenant_id, service_id, recorded_at);
+"""
+
+"""
+from Usage import Usage
+Usage(raw_data)
 
 사용 예시:
 raw_data = { 
@@ -32,25 +60,3 @@ raw_data = {
     }
 }
 """
-
-# DB DDL
-# CREATE TABLE public.usage (
-#     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,            -- 사용량 ID
-#     service_id UUID REFERENCES service(id) ON DELETE CASCADE, -- (필수)서비스ID
-#     tenant_id TEXT NOT NULL REFERENCES tenants(id),           -- (필수)테넌트
-#     recorded_at TIMESTAMP WITH TIME ZONE NOT NULL,            -- (필수)실제 사용 시점 (사용한 시작 시점)
-#     quantity DECIMAL(12,4) NOT NULL,                          -- (필수)사용 양(토큰, 호출수..)  
-#     model TEXT,                                               -- 사용모델(GPT-4, .. )
-#     user_id TEXT,                                             -- 사용자  
-#     metadata JSONB,                                           -- 추가 정보 저장
-#     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()         -- 생성일(자동 생성)
-# );
-# CREATE INDEX idx_usage_tenant_service_date
-#   ON public.usage (tenant_id, service_id, recorded_at);
-
-# metadata(추가 정보 저장)
-#  {
-#      "used_for": "chat", // agent, tool,
-#      "used_for_id": "1234567890",
-#      "used_for_name": "AI 생성 처리 채팅"
-#  }
