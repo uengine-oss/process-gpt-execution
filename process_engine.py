@@ -150,7 +150,7 @@ async def submit_workitem(input: dict):
             "tool": activity.tool,
             "output": output,
             "retry": 0,
-            "consumer": None
+            "consumer": None,
         }
         
     upsert_workitem(workitem_data)

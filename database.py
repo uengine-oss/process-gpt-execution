@@ -121,7 +121,28 @@ def load_sql_from_file(file_path):
 #         if connection:
 #             connection.close()
 
-
+def insert_usage(usage_data: dict):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        if not usage_data:
+            raise Exception("Usage data is not provided")
+        
+        if not usage_data.get('quantity'):
+            raise Exception("Quantity is not provided")
+        
+        if not usage_data.get('model'):
+            raise Exception("Model is not provided")
+            
+        if not usage_data.get('tenant_id'):
+            usage_data['tenant_id'] = subdomain_var.get()
+        
+        return supabase.table('usage').insert(usage_data).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error upserting process definition with ID {process_definition_id}: {e}")
+    
 
 
 def db_client_signin(user_info: dict):
