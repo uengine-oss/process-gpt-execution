@@ -54,7 +54,7 @@ prompt = PromptTemplate.from_template(
         proc_inst_id text primary key,
         proc_inst_name text,
         current_activity_ids text array,
-        current_user_ids text array,
+        participants text array,
         role_bindings jsonb
         
         -- fields for the process variables defined in this process definition    

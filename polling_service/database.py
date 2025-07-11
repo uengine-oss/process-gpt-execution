@@ -148,7 +148,7 @@ class ProcessInstance(BaseModel):
     proc_inst_name: Optional[str] = None
     role_bindings: Optional[List[Dict[str, Any]]] = []
     current_activity_ids: Optional[List[str]] = []
-    current_user_ids: Optional[List[str]] = []
+    participants: Optional[List[str]] = []
     variables_data: Optional[List[Dict[str, Any]]] = []
     process_definition: ProcessDefinition = None  # Add a reference to ProcessDefinition
     status: str = None
@@ -325,12 +325,12 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
         else:
             arcv_id = None
         
-        current_user_ids = process_instance.current_user_ids
+        participants = process_instance.participants
         
         # 빈 값들 필터링 및 유효성 검증
-        if current_user_ids:
+        if participants:
             valid_user_ids = []
-            for user_id in current_user_ids:
+            for user_id in participants:
                 if user_id is not None and user_id != '' and user_id != 'undefined' and user_id.strip() != '':
                     # 'external_customer'는 특별 케이스로 허용
                     if user_id == 'external_customer':
@@ -339,13 +339,13 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
                         assignee_info = fetch_assignee_info(user_id)
                         if assignee_info['type'] not in ['unknown', 'error']:
                             valid_user_ids.append(user_id)
-            current_user_ids = valid_user_ids
+            participants = valid_user_ids
 
         response = supabase.table('bpm_proc_inst').upsert({
             'proc_inst_id': process_instance.proc_inst_id,
             'proc_inst_name': process_instance.proc_inst_name,
             'current_activity_ids': process_instance.current_activity_ids,
-            'current_user_ids': current_user_ids,
+            'participants': participants,
             'role_bindings': process_instance.role_bindings,
             'variables_data': process_instance.variables_data,
             'status': status if status else process_instance.status,
@@ -568,12 +568,12 @@ def cleanup_stale_consumers():
         print(f"[ERROR] Failed to cleanup stale consumers: {str(e)}")
 
 
-def upsert_completed_workitem(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None):
+def upsert_completed_workitem(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None) -> List[WorkItem]:
     try:
         if not tenant_id:
             tenant_id = subdomain_var.get()
 
-
+        workitems = []
         if not process_result_data['completedActivities']:
             return
         
@@ -638,6 +638,9 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
             if supabase is None:
                 raise Exception("Supabase client is not configured for this request")
             supabase.table('todolist').upsert(workitem_dict).execute()
+            workitems.append(workitem)
+
+        return workitems
     except Exception as e:
         print(f"[ERROR] upsert_completed_workitem: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -1039,4 +1042,33 @@ def get_vector_store():
         table_name="documents",
         query_name="match_documents",
     )
+
+
+def fetch_tenant_mcp_config(tenant_id: str) -> Optional[Dict[str, Any]]:
+    """
+    테넌트의 MCP 설정을 조회합니다.
+    
+    Args:
+        tenant_id (str): 테넌트 ID
+        
+    Returns:
+        Optional[Dict[str, Any]]: MCP 설정 정보 또는 None
+    """
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table('tenants').select('mcp').eq('id', tenant_id).execute()
+        
+        if response.data and len(response.data) > 0:
+            mcp_config = response.data[0].get('mcp', {})
+            return mcp_config if mcp_config else None
+        else:
+            print(f"[WARNING] No tenant found with ID: {tenant_id}")
+            return None
+            
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch tenant MCP config: {str(e)}")
+        return None
 

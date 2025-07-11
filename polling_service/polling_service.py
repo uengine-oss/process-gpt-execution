@@ -4,9 +4,10 @@ from typing import Set
 
 from database import (
     setting_database, fetch_workitem_with_submitted_status, 
-    fetch_workitem_with_agent, upsert_workitem, cleanup_stale_consumers
+    fetch_workitem_with_agent, upsert_workitem, cleanup_stale_consumers,
+    fetch_process_definition
 )
-from workitem_processor import handle_workitem, handle_agent_workitem
+from workitem_processor import handle_workitem, handle_agent_workitem, handle_service_workitem
 
 # 전역 변수로 현재 실행 중인 태스크들을 추적
 running_tasks: Set[asyncio.Task] = set()
@@ -25,7 +26,19 @@ async def safe_handle_workitem(workitem):
         
         if workitem['status'] == "SUBMITTED":
             print(f"[DEBUG] Starting safe_handle_workitem for workitem: {workitem['id']}")
-            await handle_workitem(workitem)
+            process_definition = fetch_process_definition(workitem['proc_def_id'], workitem['tenant_id'])
+            activities = process_definition.get('activities', [])
+            
+            task_type = 'userTask'
+            for activity in activities:
+                if activity.get('id') == workitem['activity_id']:
+                    task_type = activity.get('type')
+                    break
+            
+            if task_type == 'userTask' or task_type == 'scriptTask':
+                await handle_workitem(workitem)
+            elif task_type == 'serviceTask':
+                await handle_service_workitem(workitem)
         elif workitem['agent_mode'] == "A2A" and workitem['status'] == "IN_PROGRESS":
             print(f"[DEBUG] Starting safe_handle_workitem for agent workitem: {workitem['id']}")
             await handle_agent_workitem(workitem)
