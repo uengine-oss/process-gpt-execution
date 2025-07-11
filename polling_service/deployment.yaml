@@ -4,8 +4,13 @@ metadata:
   name: polling-service-deployment
   namespace: default
 spec:
-  replicas: 1
+  replicas: 3
   revisionHistoryLimit: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # 새로운 파드가 준비될 때까지 기존 파드를 유지
   selector:
     matchLabels:
       app: polling-service
@@ -14,11 +19,30 @@ spec:
       labels:
         app: polling-service
     spec:
+      terminationGracePeriodSeconds: 300  # 5분 grace period
       containers:
       - name: polling-service
         image: ghcr.io/uengine-oss/process-gpt-polling-service:latest
         ports:
         - containerPort: 8000
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "echo 'Graceful shutdown initiated'; sleep 10"]
+        readinessProbe:
+          exec:
+            command: ["python", "-c", "import requests; import os; url=os.getenv('SUPABASE_URL'); exit(0 if url else 1)"]
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          exec:
+            command: ["python", "-c", "import psutil; import os; pid=1; exit(0 if psutil.pid_exists(pid) else 1)"]
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 3
         env:
         - name: OPENAI_API_KEY
           valueFrom:
@@ -40,32 +64,32 @@ spec:
             secretKeyRef:
               key: JWT_SECRET
               name: my-secrets
-        - name: DB_NAME
+        # PostgreSQL 직접 연결 환경 변수 제거 (Supabase Client API 사용)
+        # - name: DB_NAME
+        # - name: DB_USER  
+        # - name: DB_PASSWORD
+        # - name: DB_HOST
+        # - name: DB_PORT
+        - name: EXECUTION_SERVICE_URL
+          value: http://execution-service:8000
+        - name: MEMENTO_SERVICE_URL
+          value: http://memento-service:8005
+        - name: ENV
+          value: production
+        - name: LANGSMITH_API_KEY
           valueFrom:
             secretKeyRef:
-              key: DB_NAME
-              name: my-secrets
-        - name: DB_USER
+              key: LANGSMITH_API_KEY
+              name: langsmith-secret
+        - name: LANGSMITH_PROJECT
           valueFrom:
             secretKeyRef:
-              key: DB_USER
-              name: my-secrets
-        - name: DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              key: DB_PASSWORD
-              name: my-secrets
-        - name: DB_HOST
-          valueFrom:
-            secretKeyRef:
-              key: DB_HOST
-              name: my-secrets
-        - name: DB_PORT
-          valueFrom:
-            secretKeyRef:
-              key: DB_PORT
-              name: my-secrets
+              key: LANGSMITH_PROJECT
+              name: langsmith-secret
         resources:
           requests:
-            cpu: 200m
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
             memory: 512Mi

@@ -32,27 +32,21 @@ intent_analysis_prompt = PromptTemplate.from_template(
 
 응답 형식:
 {{
-    "intent": "query" 또는 "information" 또는 "other",
-    "content": "질문의 경우 검색어, 정보의 경우 저장할 내용, 일상적인 대화는 요청에 대한 답변 내용을 제공"
+    "intent": "query" 또는 "information". 의도를 알 수 없는 경우 기본적으로 "information",
+    "content": "질문의 경우 검색할 내용을 제공, 정보의 경우 저장할 내용을 제공."
 }}
 
 예시:
-- 입력: "지방에 있는 매출에 설립일 1년 이내 여자 대표이사가 운영하는 회사이다. 이 회사의 법인세 감면율을?"
+- 입력: "지방에 있는 매출에 설립일 1년 이내 여자 대표이사가 운영하는 회사이다. 이 회사의 법인세 감면율은?"
 {{
     "intent": "query",
-    "content": "지방에 있는 매출에 설립일 1년 이내 여자 대표이사가 운영하는 회사이다. 이 회사의 법인세 감면율을?"
+    "content": "지방에 있는 매출에 설립일 1년 이내 여자 대표이사가 운영하는 회사이다. 이 회사의 법인세 감면율은?"
 }}
 
 - 입력: "기본 법인세율: 20%"
 {{
     "intent": "information",
     "content": "기본 법인세율은 20% 입니다."
-}}
-
-- 입력: "안녕?"
-{{
-    "intent": "other",
-    "content": "안녕하세요"
 }}
 
 사용자 입력: {message}
@@ -181,25 +175,33 @@ def search_memories(agent_id: str, query: str) -> List[Dict]:
     results = memory.search(query, user_id=agent_id)
     return results["results"][:5]
 
-def store_in_memory(agent_id: str, info: Dict):
+def store_in_memory(agent_id: str, content: str):
     """유의미한 정보를 mem0에 저장합니다."""
     memory.add(
-        info["content"],
+        content,
         user_id=agent_id,
         metadata={
-            "type": info["category"],
-            "confidence": info["confidence"],
-            "timestamp": info["timestamp"]
+            "type": "information",
+            "timestamp": datetime.now().isoformat()
         }
     )
 
-async def process_mem0_message(text: str, agent_id: str, chat_room_id: str = None):
+async def process_mem0_message(text: str, agent_id: str, chat_room_id: str = None, is_learning_mode: bool = False):
     """Mem0 에이전트를 통해 메시지를 처리합니다."""
     try:
-        intent, info = await analyze_intent(text, chat_room_id)
-        
-        if intent == "query":
-            search_term = info["content"] if info else text
+        if is_learning_mode:
+            intent = "information"
+            store_in_memory(agent_id, text)
+            return {
+                "task_id": str(datetime.now().timestamp()),
+                "response": {
+                    "type": intent,
+                    "content": text
+                }
+            }
+        else:
+            intent = "query"
+            search_term = text
             search_results = search_memories(agent_id, search_term)
             
             response = await generate_response(text, search_results)
@@ -210,25 +212,7 @@ async def process_mem0_message(text: str, agent_id: str, chat_room_id: str = Non
                 "task_id": str(datetime.now().timestamp()),
                 "response": response
             }
-                
-        elif intent == "information" and info:
-            store_in_memory(agent_id, info)
-            return {
-                "task_id": str(datetime.now().timestamp()),
-                "response": {
-                    "type": intent,
-                    "content": info["content"]
-                }
-            }
-        else:
-            return {
-                "task_id": str(datetime.now().timestamp()),
-                "response": {
-                    "type": intent,
-                    "content": info["content"]
-                }
-            }
-            
+
     except Exception as e:
         print(f"메시지 처리 중 오류 발생: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

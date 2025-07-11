@@ -40,6 +40,7 @@ class ProcessActivity(BaseModel):
     properties: Optional[str] = None
     duration: Optional[int] = None
     srcTrg: Optional[str] = None
+    agentMode: Optional[str] = None
     
     def __hash__(self):
         return hash(self.id)  # 또는 다른 고유한 속성을 사용

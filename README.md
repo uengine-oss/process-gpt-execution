@@ -29,6 +29,23 @@ source .venv/bin/activate
 uv run main.py
 ```
 
+## Polling Service  (using uv)
+
+The polling service handles workitem polling and processing. See `polling_service/README.md` for detailed setup and deployment instructions.
+
+```
+cd polling_service
+uv venv .venv
+uv pip install -r requirements.txt
+
+# Mac/Linux
+source .venv/bin/activate
+# Windows
+.venv\Scripts\activate
+
+uv run main.py
+```
+
 ## Supabase 접속
 ```
 http://localhost:54323

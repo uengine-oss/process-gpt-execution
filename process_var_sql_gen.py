@@ -3,7 +3,7 @@ from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 from langserve import add_routes
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
-from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, upsert_chat_message, fetch_todolist_by_user_id, fetch_process_instance_list, subdomain_var, fetch_ui_definition, get_vector_store, fetch_all_ui_definition
+from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, upsert_chat_message, fetch_todolist_by_user_id, fetch_process_instance_list, subdomain_var, fetch_ui_definition, get_vector_store, fetch_all_ui_definition, fetch_organization_chart
 from process_engine import submit_workitem
 import re
 import json
@@ -203,6 +203,9 @@ def combine_input_with_process_table_schema(input, path):
         # 폼 정의 목록 가져오기
         form_def_list = fetch_all_ui_definition()
         form_def_str = json.dumps(form_def_list, ensure_ascii=False, default=default)
+
+        organization_chart = fetch_organization_chart()
+        organization_chart_str = json.dumps(organization_chart, ensure_ascii=False, default=default)
         
         # 테이블 생성 체인 설정
         table_chain = (
@@ -219,7 +222,8 @@ def combine_input_with_process_table_schema(input, path):
             "proc_def_list": proc_def_str,
             "proc_inst_list": proc_inst_str,
             "todo_list": todo_list_str,
-            "form_def_list": form_def_str
+            "form_def_list": form_def_str,
+            "organization_chart": organization_chart_str
         }
         
         return table_chain.invoke(input_data)
@@ -436,15 +440,37 @@ draw_table_prompt = PromptTemplate.from_template(
         
         Form definitions:
         {form_def_list}
+
+        Organization chart:
+        {organization_chart}
         
-        Instructions:
-        1. If the query is asking for process definitions, create a table with columns: ID, Name, Description
-        2. If the query is asking for todo list, create a table with columns: ID, Activity Name, Process Instance, Status
-        3. If the query is asking for form definitions, create a table with columns: ID, Process Definition, Activity
-        4. If the query is asking for process instances, create a table with columns: ID, Name, Status, Current Activities
-        5. Make sure the table is responsive and well-formatted
-        6. Include all relevant data based on the query
-        7. Only return the HTML table code, no explanations
+        Guidelines:
+        1. Analyze the user query carefully and create a table that matches exactly what the user is asking for.
+
+        - If requesting process definition information (process definition, process list):
+        Create a table with ID, Name, and Description columns using the process definition data.
+
+        - If requesting process instance information (process instance, ongoing process):
+        Create a table with ID, Name, and Status columns using the process instance data.
+
+        - If requesting to-do list information (to-do list, to-dos):
+        Create a table with Task, Process, and Status columns using the to-do list data.
+
+        - If requesting form definition information (form definition, form):
+        Create a table with Form ID, Name, and Description columns using the form definition data.
+
+        - If requesting organization chart information (organization chart, organization structure, employee information):
+        Using the org chart data, create a table with columns for org chart information, such as the team (department) that the team belongs to, who is on that team, and the names of the team members.Using the org chart data, create a table with columns for org chart information, such as the team (department) that the team belongs to, who is on that team, and the names of the team members. You should create the table that best suits your user's question.
+
+        - For other queries, understand the user’s intent and use the most relevant data source.
+
+        2. IMPORTANT: Use only data relevant to the user's specific query. Do not use the process definition as a default.
+        3. Make sure the table is responsive and formatted correctly.
+        4. Include all relevant data from the data source.
+        5. Return only the HTML table code and do not provide a description.
+        6. The table must have appropriate Korean column headers that match the data being displayed.
+
+        All of the above guidelines must be followed.
     """
 )
 

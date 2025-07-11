@@ -32,6 +32,7 @@ async def chat_message(message: ChatMessage):
         if message.type == "a2a":
             agent_url = message.options.get("agent_url") if message.options else None
             task_id = message.options.get("task_id") if message.options else None
+            is_stream = message.options.get("is_stream") if message.options else True
             
             if not agent_url:
                 raise HTTPException(status_code=400, detail="agent_url is required for A2A agent")
@@ -41,7 +42,7 @@ async def chat_message(message: ChatMessage):
                 agent_url=agent_url,
                 task_id=task_id,
                 context_id=chat_room_id,
-                stream=True
+                stream=is_stream
             )
             
             if isinstance(response, StreamingResponse):
@@ -51,6 +52,7 @@ async def chat_message(message: ChatMessage):
         
         elif message.type == "mem0":
             agent_id = message.options.get("agent_id") if message.options else None
+            is_learning_mode = message.options.get("is_learning_mode") if message.options else False
             
             if not agent_id:
                 raise HTTPException(status_code=400, detail="agent_id is required for Mem0 agent")
@@ -58,7 +60,8 @@ async def chat_message(message: ChatMessage):
             response = await process_mem0_message(
                 text=message.text,
                 agent_id=agent_id,
-                chat_room_id=chat_room_id
+                chat_room_id=chat_room_id,
+                is_learning_mode=is_learning_mode
             )
             return JSONResponse(content=response)
         else:

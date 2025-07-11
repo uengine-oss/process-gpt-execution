@@ -1,10 +1,9 @@
 from supabase import create_client, Client
 from pydantic import BaseModel, validator
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import SupabaseVectorStore
 from process_definition import ProcessDefinition, load_process_definition, UIDefinition
-from psycopg2.extras import RealDictCursor
 from fastapi import HTTPException
 from decimal import Decimal
 from datetime import datetime, timedelta
@@ -12,16 +11,15 @@ from contextvars import ContextVar
 from dotenv import load_dotenv
 
 import pytz
-import psycopg2
 import socket
 import os
 import uuid
 import json
 
 
-db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
 subdomain_var = ContextVar('subdomain', default='localhost')
+
 
 def setting_database():
     try:
@@ -33,14 +31,7 @@ def setting_database():
         supabase: Client = create_client(supabase_url, supabase_key)
         supabase_client_var.set(supabase)
         
-        db_config = {
-            "dbname": os.getenv("DB_NAME"),
-            "user": os.getenv("DB_USER"),
-            "password": os.getenv("DB_PASSWORD"),
-            "host": os.getenv("DB_HOST"),
-            "port": os.getenv("DB_PORT")
-        }
-        db_config_var.set(db_config)
+        print(f"[INFO] Supabase client configured successfully")
         
     except Exception as e:
         print(f"Database configuration error: {e}")
@@ -48,7 +39,7 @@ def setting_database():
 
 def execute_sql(sql_query):
     """
-    Connects to a PostgreSQL database and executes the given SQL query.
+    Executes SQL query using Supabase Client API.
     
     Args:
         sql_query (str): The SQL query to execute.
@@ -58,31 +49,20 @@ def execute_sql(sql_query):
     """
     
     try:
-        db_config = db_config_var.get()
-        # Establish a connection to the database
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
         
-        # Execute the SQL query
-        cursor.execute(sql_query)
+        # Supabase Client API를 사용하여 SQL 실행
+        response = supabase.rpc('exec_sql', {'query': sql_query}).execute()
         
-        # If the query was a SELECT statement, fetch the results
-        if sql_query.strip().upper().startswith("SELECT"):
-            result = cursor.fetchall()
+        if response.data:
+            return response.data
         else:
-            # Commit the transaction if the query modified the database
-            connection.commit()
-            result = "Table Created"
-        
-        return result
+            return "Query executed successfully"
     
     except Exception as e:
         return(f"An error occurred while executing the SQL query: {e}")
-    
-    finally:
-        # Close the cursor and connection to clean up
-        if connection:
-            connection.close()
 
 
 def fetch_process_definition(def_id, tenant_id: Optional[str] = None):
@@ -132,7 +112,7 @@ def fetch_process_definition_latest_version(def_id, tenant_id: Optional[str] = N
 
         response = supabase.table('proc_def_arcv').select('*').eq('proc_def_id', def_id.lower()).eq('tenant_id', tenant_id).order('version', desc=True).execute()
         
-        if response.data:
+        if response.data and len(response.data) > 0:
             return response.data[0]
         else:
             return None
@@ -306,11 +286,28 @@ def insert_process_instance(process_instance_data: dict, tenant_id: Optional[str
 
 
 def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Optional[str] = None) -> (bool, ProcessInstance):
-    if 'END_PROCESS' in process_instance.current_activity_ids or 'endEvent' in process_instance.current_activity_ids or 'end_event' in process_instance.current_activity_ids or process_instance.status == 'COMPLETED':
-        process_instance.current_activity_ids = []
-        status = 'COMPLETED'
+    process_definition = process_instance.process_definition
+    if process_definition is None:
+        process_definition = load_process_definition(fetch_process_definition(process_instance.get_def_id(), tenant_id))
+        process_instance.process_definition = process_definition
+
+    end_activity = process_definition.find_end_activity()
+    if end_activity:
+        end_workitem = fetch_workitem_by_proc_inst_and_activity(process_instance.proc_inst_id, end_activity.id, tenant_id)
+        if end_workitem:
+            if end_workitem.status == 'DONE':
+                status = 'COMPLETED'
+            else:
+                status = 'RUNNING'
+        else:
+            status = 'RUNNING'
     else:
-        status = 'RUNNING'
+        if process_instance.current_activity_ids and len(process_instance.current_activity_ids) != 0:
+            if end_activity and end_activity.id in process_instance.current_activity_ids:
+                status = 'COMPLETED'
+            else:
+                status = 'RUNNING'
+    
     process_instance_data = process_instance.dict(exclude={'process_definition'})  # Convert Pydantic model to dict
     process_instance_data = convert_decimal(process_instance_data)
 
@@ -327,18 +324,35 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
             arcv_id = process_definition_version.get('arcv_id', None)
         else:
             arcv_id = None
+        
+        current_user_ids = process_instance.current_user_ids
+        
+        # 빈 값들 필터링 및 유효성 검증
+        if current_user_ids:
+            valid_user_ids = []
+            for user_id in current_user_ids:
+                if user_id is not None and user_id != '' and user_id != 'undefined' and user_id.strip() != '':
+                    # 'external_customer'는 특별 케이스로 허용
+                    if user_id == 'external_customer':
+                        valid_user_ids.append(user_id)
+                    else:
+                        assignee_info = fetch_assignee_info(user_id)
+                        if assignee_info['type'] not in ['unknown', 'error']:
+                            valid_user_ids.append(user_id)
+            current_user_ids = valid_user_ids
 
         response = supabase.table('bpm_proc_inst').upsert({
             'proc_inst_id': process_instance.proc_inst_id,
             'proc_inst_name': process_instance.proc_inst_name,
             'current_activity_ids': process_instance.current_activity_ids,
-            'current_user_ids': process_instance.current_user_ids,
+            'current_user_ids': current_user_ids,
             'role_bindings': process_instance.role_bindings,
             'variables_data': process_instance.variables_data,
-            'status': status,
+            'status': status if status else process_instance.status,
             'proc_def_id': process_instance.get_def_id(),
             'proc_def_version': arcv_id,
-            'tenant_id': tenant_id
+            'tenant_id': tenant_id,
+            'end_date': datetime.now(pytz.timezone('Asia/Seoul')).isoformat() if status == 'COMPLETED' else None
         }).execute()
 
         success = bool(response.data)
@@ -423,81 +437,135 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
-def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
+def fetch_workitem_with_submitted_status(limit=10) -> Optional[List[dict]]:
     try:
         pod_id = socket.gethostname()
-        db_config = db_config_var.get()
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        # Supabase Client API를 사용하여 워크아이템 조회 및 업데이트
+        # 먼저 SUBMITTED 상태이고 consumer가 NULL인 워크아이템들을 조회
+        response = supabase.table('todolist').select('*').eq('status', 'SUBMITTED').is_('consumer', 'null').limit(limit).execute()
+        
+        if not response.data:
+            return None
+        
+        # 조회된 워크아이템들의 consumer를 현재 pod_id로 업데이트
+        # 동시성 제어를 위해 조건부 업데이트 사용
+        updated_workitems = []
+        
+        # 배치 업데이트를 위한 워크아이템 ID 목록
+        workitem_ids = [item['id'] for item in response.data]
+        
+        if workitem_ids:
+            try:
+                # 배치 업데이트 시도
+                current_time = datetime.now().isoformat()
+                batch_update_response = supabase.table('todolist').update({
+                    'consumer': pod_id,
+                    'updated_at': current_time
+                }).in_('id', workitem_ids).eq('status', 'SUBMITTED').is_('consumer', 'null').execute()
+                
+                if batch_update_response.data:
+                    updated_workitems = batch_update_response.data
+                    print(f"[DEBUG] Successfully claimed {len(updated_workitems)} workitems for pod {pod_id}")
+                else:
+                    print(f"[DEBUG] No workitems were claimed in batch update")
+                    
+            except Exception as batch_error:
+                print(f"[WARNING] Batch update failed, falling back to individual updates: {batch_error}")
+                
+                # 배치 업데이트가 실패하면 개별 업데이트로 폴백
+                for workitem in response.data:
+                    try:
+                        update_response = supabase.table('todolist').update({
+                            'consumer': pod_id,
+                            'updated_at': datetime.now().isoformat()
+                        }).eq('id', workitem['id']).eq('status', 'SUBMITTED').is_('consumer', 'null').execute()
+                        
+                        if update_response.data:
+                            updated_workitems.append(update_response.data[0])
+                            print(f"[DEBUG] Successfully claimed workitem {workitem['id']} for pod {pod_id}")
+                        else:
+                            print(f"[DEBUG] Workitem {workitem['id']} was already claimed by another pod")
+                    except Exception as e:
+                        print(f"[WARNING] Failed to update workitem {workitem['id']}: {e}")
+                        continue
 
-
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-
-        query = """
-            WITH locked_rows AS (
-                SELECT id FROM todolist
-                WHERE status = 'SUBMITTED'
-                    AND consumer IS NULL
-                FOR UPDATE SKIP LOCKED
-                LIMIT %s
-            )
-            UPDATE todolist
-            SET consumer = %s
-            FROM locked_rows
-            WHERE todolist.id = locked_rows.id
-            RETURNING *;
-        """
-
-        cursor.execute(query, (limit, pod_id))
-        rows = cursor.fetchall()
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-        return rows if rows else None
+        return updated_workitems if updated_workitems else None
 
     except Exception as e:
         print(f"[ERROR] DB fetch failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
-    
+
 
 def fetch_workitem_with_agent(limit=5) -> Optional[List[dict]]:
     try:
         pod_id = socket.gethostname()
-        db_config = db_config_var.get()
-
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-        query = """
-            WITH locked_rows AS (
-                SELECT id FROM todolist
-                WHERE status = 'IN_PROGRESS'
-                    AND consumer IS NULL
-                    AND agent_mode = 'A2A'
-                FOR UPDATE SKIP LOCKED
-                LIMIT %s
-            )
-            UPDATE todolist
-            SET consumer = %s
-            FROM locked_rows
-            WHERE todolist.id = locked_rows.id
-            RETURNING *;
-        """
-
-        cursor.execute(query, (limit, pod_id))
-        rows = cursor.fetchall()
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-        return rows if rows else None
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        # Supabase Client API를 사용하여 에이전트 워크아이템 조회 및 업데이트
+        response = supabase.table('todolist').select('*').eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').is_('consumer', 'null').limit(limit).execute()
+        
+        if not response.data:
+            return None
+        
+        # 조회된 워크아이템들의 consumer를 현재 pod_id로 업데이트
+        # 동시성 제어를 위해 조건부 업데이트 사용
+        updated_workitems = []
+        for workitem in response.data:
+            try:
+                # 조건부 업데이트: consumer가 여전히 NULL인 경우에만 업데이트
+                update_response = supabase.table('todolist').update({
+                    'consumer': pod_id,
+                    'updated_at': datetime.now().isoformat()
+                }).eq('id', workitem['id']).eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').is_('consumer', 'null').execute()
+                
+                if update_response.data:
+                    updated_workitems.append(update_response.data[0])
+                    print(f"[DEBUG] Successfully claimed agent workitem {workitem['id']} for pod {pod_id}")
+                else:
+                    print(f"[DEBUG] Agent workitem {workitem['id']} was already claimed by another pod")
+            except Exception as e:
+                print(f"[WARNING] Failed to update agent workitem {workitem['id']}: {e}")
+                continue
+        
+        return updated_workitems if updated_workitems else None
 
     except Exception as e:
         print(f"[ERROR] DB fetch failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
+
+
+def cleanup_stale_consumers():
+    """
+    오래된 consumer를 정리하는 함수
+    30분 이상 업데이트되지 않은 SUBMITTED 상태의 워크아이템의 consumer를 해제
+    """
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        # 30분 전 시간 계산
+        thirty_minutes_ago = (datetime.now() - timedelta(minutes=30)).isoformat()
+        
+        # 오래된 consumer를 NULL로 업데이트
+        response = supabase.table('todolist').update({
+            'consumer': None
+        }).eq('status', 'SUBMITTED').not_.is_('consumer', 'null').lt('updated_at', thirty_minutes_ago).execute()
+        
+        if response.data:
+            updated_count = len(response.data)
+            print(f"[INFO] Cleaned up {updated_count} stale consumers")
+        else:
+            print("[INFO] No stale consumers found")
+
+    except Exception as e:
+        print(f"[ERROR] Failed to cleanup stale consumers: {str(e)}")
 
 
 def upsert_completed_workitem(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None):
@@ -536,16 +604,20 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                 if process_instance_data['role_bindings']:
                     role_bindings = process_instance_data['role_bindings']
                     for role_binding in role_bindings:
-                        if role_binding['roleName'] == activity.role:
+                        if role_binding['name'] == activity.role:
+                            user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
-                            
+                
+                if completed_activity['completedUserEmail'] != user_id:
+                    user_id = completed_activity['completedUserEmail']
+
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=completed_activity['completedActivityId'],
                     activity_name=activity.name,
-                    user_id=completed_activity['completedUserEmail'],
+                    user_id=user_id,
                     status=completed_activity['result'],
                     tool=activity.tool,
                     start_date=start_date,
@@ -586,11 +658,11 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
         if workitem:
             workitem.status = activity_data['result']
             workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul')) if activity_data['result'] == 'DONE' else None
-            workitem.user_id = activity_data['nextUserEmail']
-            if workitem.user_id and workitem.agent_mode != "A2A":
-                assignee_info = fetch_assignee_info(workitem.user_id)
-                if assignee_info['type'] == "a2a":
-                    workitem.agent_mode = "A2A"
+            if workitem.user_id == '' or workitem.user_id == None:
+                workitem.user_id = activity_data['nextUserEmail']
+            if workitem.agent_mode == None:
+                workitem.agent_mode = determine_agent_mode(workitem.user_id, workitem.agent_mode)
+            print(f"[DEBUG] workitem.agent_mode: {workitem.agent_mode}")
         else:
             activity = process_definition.find_activity_by_id(activity_data['nextActivityId'])
             if activity:
@@ -600,6 +672,7 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     for prev_activity in prev_activities:
                         start_date = start_date + timedelta(days=prev_activity.duration)
                 due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
+                agent_mode = determine_agent_mode(activity_data['nextUserEmail'], activity.agentMode)
                 workitem = WorkItem(
                     id=str(uuid.uuid4()),
                     proc_inst_id=process_instance_data['proc_inst_id'],
@@ -611,7 +684,8 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     start_date=start_date,
                     due_date=due_date,
                     tool=activity.tool,
-                    tenant_id=tenant_id
+                    tenant_id=tenant_id,
+                    agent_mode=agent_mode
                 )
         
         try:
@@ -700,15 +774,11 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     role_bindings = process_result_data['roleBindings']
                     for role_binding in role_bindings:
                         if role_binding['name'] == activity.role:
-                            user_id = role_binding['endpoint'][0] if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
+                            user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
-                is_agent = False
-                if user_id:
-                    assignee_info = fetch_assignee_info(user_id)
-                    if assignee_info['type'] == "a2a":
-                        is_agent = True
-                
+                agent_mode = determine_agent_mode(user_id, activity.agentMode)
+
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     reference_ids=reference_ids if prev_activities else [],
@@ -724,13 +794,12 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     tenant_id=tenant_id,
                     assignees=assignees if assignees else [],
                     duration=activity.duration,
-                    agent_mode= "A2A" if is_agent else "DRAFT"
+                    agent_mode=agent_mode
                 )
                 workitem_dict = workitem.dict()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
                 workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
                 workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
-
 
                 supabase = supabase_client_var.get()
                 if supabase is None:
@@ -835,10 +904,14 @@ def fetch_user_info(email: str) -> Dict[str, str]:
         
         response = supabase.table("users").select("*").eq('email', email).execute()
         
-        if response.data:
+        if response.data and len(response.data) > 0:
             return response.data[0]
         else:
-            raise HTTPException(status_code=404, detail="User not found")
+            response = supabase.table("users").select("*").eq('id', email).execute()
+            if response.data and len(response.data) > 0:
+                return response.data[0]
+            else:
+                raise HTTPException(status_code=404, detail="User not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -855,44 +928,32 @@ def fetch_assignee_info(assignee_id: str) -> Dict[str, str]:
         담당자 정보 딕셔너리
     """
     try:
-        # 먼저 유저 정보를 찾아봅니다
         try:
             user_info = fetch_user_info(assignee_id)
+            type = "user"
+            if user_info.get("is_agent") == True:
+                type = "agent"
+                if user_info.get("url") is not None and user_info.get("url").strip() != "":
+                    type = "a2a"
             return {
-                "type": "user",
+                "type": type,
                 "id": assignee_id,
-                "name": user_info.get("name", assignee_id),
+                "name": user_info.get("username", assignee_id),
                 "email": assignee_id,
                 "info": user_info
             }
         except HTTPException as user_error:
             if user_error.status_code == 500 or user_error.status_code == 404:
-                # 유저를 찾을 수 없으면 에이전트 정보를 찾아봅니다
-                try:
-                    agent_info = fetch_agent_by_id(assignee_id)
-                    url = agent_info.get("url")
-                    is_a2a = url is not None and url.strip() != ""
-                    return {
-                        "type": "a2a" if is_a2a else "agent",
-                        "id": assignee_id,
-                        "name": agent_info.get("name", assignee_id),
-                        "email": assignee_id,
-                        "info": agent_info
-                    }
-                except HTTPException as agent_error:
-                    # 에이전트도 찾을 수 없으면 기본 정보를 반환
-                    return {
-                        "type": "unknown",
-                        "id": assignee_id,
-                        "name": assignee_id,
-                        "email": assignee_id,
-                        "info": {}
-                    }
+                return {
+                    "type": "unknown",
+                    "id": assignee_id,
+                    "name": assignee_id,
+                    "email": assignee_id,
+                    "info": {}
+                }
             else:
-                # 유저 조회 중 다른 오류가 발생한 경우
                 raise user_error
     except Exception as e:
-        # 예상치 못한 오류가 발생한 경우 기본 정보를 반환
         return {
             "type": "error",
             "id": assignee_id,
@@ -902,6 +963,67 @@ def fetch_assignee_info(assignee_id: str) -> Dict[str, str]:
             "error": str(e)
         }
 
+
+def determine_agent_mode(user_id: str, activity_agent_mode: Optional[str] = None) -> Optional[str]:
+    """
+    사용자 ID와 액티비티의 에이전트 모드를 기반으로 적절한 에이전트 모드를 결정합니다.
+    
+    Args:
+        user_id: 사용자 ID (쉼표로 구분된 여러 ID 가능)
+        activity_agent_mode: 액티비티에서 설정된 에이전트 모드
+    
+    Returns:
+        결정된 에이전트 모드 (None, "A2A", "DRAFT", "COMPLETE")
+    """
+    # 액티비티에서 명시적으로 에이전트 모드가 설정된 경우
+    if activity_agent_mode is not None:
+        if activity_agent_mode.lower() not in ["none", "null"]:
+            return activity_agent_mode.upper()
+    
+    # user_id가 없으면 None 반환
+    if not user_id:
+        return None
+    
+    # 여러 사용자 ID가 있는 경우
+    if ',' in user_id:
+        user_ids = user_id.split(',')
+        has_user = False
+        has_agent = False
+        has_a2a = False
+        
+        for user_id in user_ids:
+            assignee_info = fetch_assignee_info(user_id)
+            if assignee_info['type'] == "user":
+                has_user = True
+            elif assignee_info['type'] == "agent":
+                has_agent = True
+            elif assignee_info['type'] == "a2a":
+                has_a2a = True
+        
+        # A2A가 하나라도 있으면 A2A
+        if has_a2a:
+            return "A2A"
+        # 사용자+에이전트 조합이면 DRAFT
+        elif has_user and has_agent:
+            return "DRAFT"
+        # 에이전트만 있으면 COMPLETE
+        elif has_agent and not has_user:
+            return "COMPLETE"
+        # 사용자만 있으면 None
+        elif has_user and not has_agent:
+            return None
+    
+    # 단일 사용자 ID인 경우
+    else:
+        assignee_info = fetch_assignee_info(user_id)
+        if assignee_info['type'] == "a2a":
+            return "A2A"
+        elif assignee_info['type'] == "agent":
+            return "COMPLETE"
+        elif assignee_info['type'] == "user":
+            return None
+    
+    return None
 
 
 def get_vector_store():
@@ -918,14 +1040,3 @@ def get_vector_store():
         query_name="match_documents",
     )
 
-
-def fetch_agent_by_id(agent_id: str) -> Optional[dict]:
-    try:
-        supabase = supabase_client_var.get()
-        if supabase is None:
-            raise Exception("Supabase client is not configured for this request")
-        
-        response = supabase.table("agents").select("*").eq('id', agent_id).execute()
-        return response.data[0]
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e

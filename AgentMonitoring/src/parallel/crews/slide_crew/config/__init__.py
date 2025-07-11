@@ -1,1 +1,0 @@
-# Config files for slide crew 

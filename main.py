@@ -21,6 +21,14 @@ from database import update_tenant_id, notification_polling_task
 from mcp_config_api import add_routes_to_app as add_mcp_routes_to_app
 from agent_chat import add_routes_to_app as add_agent_chat_routes_to_app
 
+from dotenv import load_dotenv
+
+if os.getenv("ENV") != "production":
+    load_dotenv()
+
+os.environ["LANGSMITH_TRACING"] = "true"
+os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
+
 # #캐시 적용
 # from langchain.cache import SQLiteCache
 # from langchain.globals import set_llm_cache
@@ -82,7 +90,8 @@ import asyncio
 @app.on_event("startup")
 async def start_background_tasks():
     # 알림 실시간 구독 태스크 시작
-    asyncio.create_task(notification_polling_task())
+    # asyncio.create_task(notification_polling_task())
+    pass
 
 if __name__ == "__main__":
     import uvicorn
