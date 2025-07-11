@@ -12,6 +12,27 @@ def Usage(raw_data):
     }
     insert_usage(cleaned_data)
 
+"""
+from Usage import Usage
+
+    Usage(raw_data)
+
+사용 예시:
+raw_data = { 
+    "tenantId": "테넌트 ID", #필수
+    "recordedAt": "2023-10-01T12:00:00+09:00", #필수
+    "quantity": "100", #필수
+    "model": "GPT-4", #필수
+    "userId": "사용자 ID", 
+    "serviceId": "서비스 ID",
+    "metadata": {
+        "used_for": "chat",
+        "used_for_id": "1234567890",
+        "used_for_name": "AI 생성 처리 채팅"
+    }
+}
+"""
+
 # DB DDL
 # CREATE TABLE public.usage (
 #     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,            -- 사용량 ID
