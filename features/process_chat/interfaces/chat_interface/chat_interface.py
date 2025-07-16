@@ -2,7 +2,7 @@ from typing import List, Dict, Any
 from .clients import ClientFactory
 from .factories import LangchainMessageFactory
 from .clients.base import StreamingResponse
-from Usage import usage
+from Usage import get_service_by_category, usage
 
 # from langchain.schema import Generation
 # from langchain.globals import get_llm_cache
@@ -24,7 +24,9 @@ class ChatInterface:
     async def messages(vendor: str, model: str, messages: List[Dict[str, Any]], stream: bool, modelConfig: Dict[str, Any]):
         client = ClientFactory.get_client(vendor)
         lc_messages = LangchainMessageFactory.create_messages(messages)
-        
+        # 요청 모델의 서비스 정보
+        # service = get_service_by_category("llm", model)
+        # print(service)
         # 요청 프롬프트 토큰 계산
         request_tokens = ChatInterface.count_tokens(vendor, model, messages)
         print(f"[DEBUG] Request tokens: {request_tokens}")
@@ -32,17 +34,30 @@ class ChatInterface:
         def record_usage(total_tokens: int, response_text: str = ""):
             """토큰 사용량을 기록하는 헬퍼 함수"""
             raw_data = { 
-                "used_at": "2023-10-01T12:00:00+09:00", #필수
-                "quantity": total_tokens, 
-                "model": model, #필수
-                "userId": "jaeh@uengine.org",
+                "service_master_id": "", # get_service_by_category 의 service_master_id            
+                "used_at": "2023-10-01T12:00:00+09:00", #실제 시작 시점/요청시점
+                "model": model, #모델명
+                "user_id": "jaeh@uengine.org", # 사용자 아이디
+                "quantity": total_tokens, #총 토크수, 총 호출 수
                 "metadata": {
-                    "used_for": "chat",
-                    "used_for_id": "1234567890",
-                    "used_for_name": "AI 생성 처리 채팅",
-                    "request_tokens": request_tokens,
-                    "response_tokens": total_tokens - request_tokens,
+                    # get_service_by_category의 dimension 정보로 구분
+                    "request": {
+                        "tokens": request_tokens,
+                        "creditPerUnit": 0 # get_service_by_category의 credit_per_unit
+                    },
+                    "cachedRequest": {
+                        "tokens": 0,
+                        "creditPerUnit": 0
+                    },
+                    "response": {
+                        "tokens": total_tokens - request_tokens,
+                        "creditPerUnit": 0
+                    },
+                    "usedFor": "chat",
+                    "usedForId": "1234567890",
+                    "usedForName": "AI 생성 처리 채팅"
                 }
+
             }
             try:
                 # usage(raw_data)

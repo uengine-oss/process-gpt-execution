@@ -18,6 +18,7 @@ import socket
 from firebase_admin import credentials, messaging
 import logging
 import asyncio
+from collections import defaultdict
 
 db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
@@ -155,7 +156,7 @@ def get_available_credits(tenant_id: str):
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching available credits: {e}")
     
 
-def get_service_list(category: str):
+def get_service(category: str, model: str):
     try:
         if not category:
             return []
@@ -165,9 +166,16 @@ def get_service_list(category: str):
         db_config = db_config_var.get()
         connection = psycopg2.connect(**db_config)
         cursor = connection.cursor(cursor_factory=RealDictCursor)
+        today_date = datetime.now(pytz.timezone('Asia/Seoul'))
         
         # supabase 테이블에서 서비스 목록을 가져오는 로직
-        response = supabase.table('credit_purchase').select('credit_id', 'created_at', 'expires_at').eq('tenant_id', subdomain_var.get()).gte('created_at', 'now()::date').lte('expires_at', 'now()::date').order('created_at', ascending=True).execute()
+        response = supabase.table('credit_purchase') \
+                    .select('credit_id', 'created_at', 'expires_at') \
+                    .eq('tenant_id', subdomain_var.get()) \
+                    .lte('created_at', today_date.isoformat()) \
+                    .gte('expires_at', today_date.isoformat()) \
+                    .order('created_at', desc=False) \
+                    .execute()
         
         if not response.data:
             return []
@@ -183,29 +191,69 @@ def get_service_list(category: str):
 
         # feature 정보에서 included_services를 추출
         feature_info = credit_response.data[0].get('feature', {})
-        included_service_ids = feature_info.get('included_services', [])
-        if not included_service_ids:
+        master_service_ids = feature_info.get('included_services', [])
+        if not master_service_ids:
             return []
 
         # SQL 쿼리를 사용하여 service_mater와 service 테이블을 조인하여 필요한 데이터를 가져옴
-        sql_query = """
+        sql_query = """    
             SELECT 
-                s.id, s.name, s.description, s.category, s.created_at, s.tenant_id, sm.id AS service_mater_id
+                sm.id AS master_id,
+                sm.name AS master_name,
+                sm.version,
+                s.id AS service_id,
+                s.name AS service_name,
+                s.category,
+                sr.credit_per_unit,
+                sr.unit,
+                sr.dimension
             FROM 
-                service_mater sm
+                service_master sm
             JOIN 
-                service s ON sm.service_id = s.id
+                service_master_item smi ON sm.id = smi.master_id
+            JOIN 
+                service s ON smi.service_id = s.id
+            JOIN 
+                service_rate sr ON smi.service_rate_id = sr.id
             WHERE 
-                sm.id = ANY(%s)
+                sm.id = ANY(%s::uuid[])
                 AND s.category = %s
-                AND S.tenant_id =  %s
+                AND s.tenant_id = %s
         """
-        cursor.execute(sql_query, (included_service_ids, category, subdomain_var.get()))
-        services_with_mater_id = cursor.fetchall()
+        params = [master_service_ids, category, subdomain_var.get()]
+
+        if model is not None:
+            sql_query += " AND s.name = %s"
+            params.append(model)
+        
+        sql_query += " ORDER BY s.name;"
+                
+        cursor.execute(sql_query, params)
+        services = cursor.fetchall()
         connection.close()
 
-        return services_with_mater_id
+        # master_id별로 그룹핑
+        grouped = defaultdict(list)
+        for row in services:
+            grouped[row['master_id']].append(row)
+
+        if grouped:
+            # master_id가 하나만 있다고 가정, 첫 번째만 꺼냄
+            master_id, rows = next(iter(grouped.items()))
+            result = {
+                "service_master_id": master_id,
+                "data": rows
+            }
+        else:
+            # 데이터가 없을 때
+            result = {
+                "service_master_id": "",
+                "data": []
+            }
+            
+        return result
     except Exception as e:
+        print(e)
         raise HTTPException(status_code=500, detail=f"서비스 목록을 가져오는 중 오류가 발생했습니다: {e}")
         
 def insert_usage(usage_data: dict):
