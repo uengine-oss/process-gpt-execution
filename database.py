@@ -141,7 +141,7 @@ def insert_usage(usage_data: dict):
         
         return supabase.table('usage').insert(usage_data).execute()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error upserting process definition with ID {process_definition_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error inserting usage data: {e}")
     
 
 

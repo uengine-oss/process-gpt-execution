@@ -1,11 +1,15 @@
 from database import insert_usage
 
 def Usage(raw_data):
+    # service_id 처리: 빈 문자열이면 None으로 설정
+    service_id = raw_data.get("serviceId", raw_data.get("service_id", "")).strip()
+    if not service_id:
+        service_id = None
+    
     cleaned_data = {
-        "service_id": raw_data.get("serviceId", raw_data.get("service_id", "")).strip(),
         "tenant_id": raw_data.get("tenantId", raw_data.get("tenant_id", "")).strip(),
-        "recorded_at": raw_data.get("recordedAt", raw_data.get("recorded_at", "")).strip(),
-        "quantity": raw_data.get("quantity", "").strip(),
+        "used_at": raw_data.get("used_at", raw_data.get("recorded_at", "")).strip(),
+        "quantity": raw_data.get("quantity", 0),
         "model": raw_data.get("model", "").strip(),
         "user_id": raw_data.get("userId", raw_data.get("user_id", "")).strip(),
         "metadata": raw_data.get("metadata", {})
