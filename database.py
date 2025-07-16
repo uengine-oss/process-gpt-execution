@@ -550,7 +550,7 @@ class ProcessInstance(BaseModel):
     proc_inst_name: Optional[str] = None
     role_bindings: Optional[List[Dict[str, Any]]] = []
     current_activity_ids: Optional[List[str]] = []
-    current_user_ids: Optional[List[str]] = []
+    participants: Optional[List[str]] = []
     variables_data: Optional[List[Dict[str, Any]]] = []
     process_definition: ProcessDefinition = None  # Add a reference to ProcessDefinition
     status: str = None
@@ -714,7 +714,7 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
             'proc_inst_id': process_instance.proc_inst_id,
             'proc_inst_name': process_instance.proc_inst_name,
             'current_activity_ids': process_instance.current_activity_ids,
-            'current_user_ids': process_instance.current_user_ids,
+            'participants': process_instance.participants,
             'role_bindings': process_instance.role_bindings,
             'variables_data': process_instance.variables_data,
             'status': status,
@@ -794,9 +794,9 @@ def fetch_process_instance_list(user_id: str, process_definition_id: Optional[st
         
         subdomain = subdomain_var.get()
         if process_definition_id:
-            response = supabase.table('bpm_proc_inst').select("*").eq('tenant_id', subdomain).eq('proc_def_id', process_definition_id).filter('current_user_ids', 'cs', '{' + user_id + '}').execute()
+            response = supabase.table('bpm_proc_inst').select("*").eq('tenant_id', subdomain).eq('proc_def_id', process_definition_id).filter('participants', 'cs', '{' + user_id + '}').execute()
         else:
-            response = supabase.table('bpm_proc_inst').select("*").eq('tenant_id', subdomain).filter('current_user_ids', 'cs', '{' + user_id + '}').execute()
+            response = supabase.table('bpm_proc_inst').select("*").eq('tenant_id', subdomain).filter('participants', 'cs', '{' + user_id + '}').execute()
         
         if response.data:
             return [ProcessInstance(**item) for item in response.data]
@@ -1163,9 +1163,13 @@ def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool, tenant_id
                     timeStamp=int(datetime.now(pytz.timezone('Asia/Seoul')).timestamp() * 1000)
                 )
             else:
-                user_info = fetch_user_info(data["email"])
+                if data["email"] == "external_customer":
+                    name = "외부 고객"
+                else:
+                    user_info = fetch_user_info(data["email"])
+                    name = user_info["username"]
                 message = ChatMessage(
-                    name=user_info["username"],
+                    name=name,
                     role="user",
                     email=data["email"],
                     image="",

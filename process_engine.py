@@ -47,14 +47,23 @@ async def handle_submit(request: Request):
         raise HTTPException(status_code=500, detail=str(e)) from e
     
 
-async def create_process_instance(process_definition, process_instance_id, user_email, is_initiate=False, role_bindings=[]):
+async def create_process_instance(process_definition, process_instance_id, is_initiate=False, role_bindings=[]):
     try:
+        participants = []
+        if isinstance(role_bindings, list) and len(role_bindings) > 0:
+            for role_binding in role_bindings:
+                if isinstance(role_binding.get('endpoint'), list):
+                    for endpoint in role_binding.get('endpoint'):
+                        participants.append(endpoint)
+                else:
+                    participants.append(role_binding.get('endpoint'))
+        
         process_definition_id = process_definition.processDefinitionId
         process_instance_data = {
             "proc_inst_id": process_instance_id,
             "proc_inst_name": process_definition.processDefinitionName,
             "proc_def_id": process_definition_id,
-            "current_user_ids": [user_email],
+            "participants": participants,
             "status": "RUNNING" if is_initiate else "NEW",
             "role_bindings": role_bindings,
             "start_date": datetime.now(pytz.timezone('Asia/Seoul')).isoformat()
@@ -108,7 +117,7 @@ async def submit_workitem(input: dict):
         workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_id, activity_id)
     else:
         process_instance_id = f"{process_definition_id.lower()}.{str(uuid.uuid4())}"
-        await create_process_instance(process_definition, process_instance_id, user_email, False, role_bindings)
+        await create_process_instance(process_definition, process_instance_id, False, role_bindings)
 
     now = datetime.now(pytz.timezone('Asia/Seoul'))
     start_date = now.isoformat()
@@ -146,9 +155,10 @@ async def submit_workitem(input: dict):
         
     upsert_workitem(workitem_data)
     message_data = {
-        "description": f"{activity.name} 업무를 시작합니다.",
+        "email": user_email,
+        "command": f"{activity.name} 업무를 시작합니다."
     }
-    upsert_chat_message(process_instance_id, message_data, True, input.get('tenant_id'), False)
+    upsert_chat_message(process_instance_id, message_data, False, input.get('tenant_id'), False)
     return workitem_data
 
 ############# start of role binding #############
@@ -274,7 +284,7 @@ async def initiate_workitem(input: dict):
             raise HTTPException(status_code=400, detail="No default user email found")
         
     process_instance_id = f"{process_definition_id.lower()}.{str(uuid.uuid4())}"
-    await create_process_instance(process_definition, process_instance_id, user_email, True, [])
+    await create_process_instance(process_definition, process_instance_id, True, [{"name": activity.role, "endpoint": user_email}])
 
     now = datetime.now(pytz.timezone('Asia/Seoul'))
     start_date = now.isoformat()
@@ -304,9 +314,10 @@ async def initiate_workitem(input: dict):
 
     upsert_workitem(workitem_data)
     message_data = {
-        "description": f"{activity.name} 업무를 시작합니다.",
+        "email": user_email,
+        "command": f"{activity.name} 업무를 시작합니다."
     }
-    upsert_chat_message(process_instance_id, message_data, True, tenant_id, False)
+    upsert_chat_message(process_instance_id, message_data, False, tenant_id, False)
     return workitem_data
 
 async def handle_initiate(request: Request):

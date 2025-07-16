@@ -152,8 +152,6 @@ Now, you're going to create an interactive system similar to a BPM system that h
 
 - Currently Running Activities: {current_activity_ids}
 
-- Users Currently Running Activities: {current_user_ids}
-
 - Currently Running Activity's Form Fields: {form_fields}
 
 - Received Message From Current Step:
@@ -345,7 +343,6 @@ def check_external_customer_and_send_email(activity_obj, user_email, process_ins
 def _create_or_get_process_instance(process_result: ProcessResult, process_result_json: dict, tenant_id: Optional[str] = None) -> ProcessInstance:
     """Create new process instance or get existing one"""
     if not fetch_process_instance(process_result.instanceId, tenant_id):
-        status = "RUNNING"
         if process_result.instanceId == "new" or '.' not in process_result.instanceId:
             instance_id = f"{process_result.processDefinitionId.lower()}.{str(uuid.uuid4())}"
         else:
@@ -355,30 +352,23 @@ def _create_or_get_process_instance(process_result: ProcessResult, process_resul
             proc_inst_name=f"{process_result.instanceName}",
             role_bindings=initialize_role_bindings(process_result_json),
             current_activity_ids=[],
-            current_user_ids=[],
+            participants=[],
             variables_data=[],
-            status=status,
+            status="RUNNING",
             tenant_id=tenant_id
         )
     else:
         process_instance = fetch_process_instance(process_result.instanceId, tenant_id)
-        if process_instance.status == "NEW":
-            return ProcessInstance(
-                proc_inst_id=process_result.instanceId,
-                proc_inst_name=f"{process_result.instanceName}",
-                role_bindings=initialize_role_bindings(process_result_json),
-                current_activity_ids=[],
-                current_user_ids=[],
-                variables_data=[],
-                status="RUNNING",
-                tenant_id=tenant_id
-            )
         return process_instance
 
 def _update_process_variables(process_instance: ProcessInstance, field_mappings: List[FieldMapping]):
     """Update process instance variables from field mappings"""
     if not field_mappings:
         return
+    
+    # Ensure variables_data is initialized
+    if process_instance.variables_data is None:
+        process_instance.variables_data = []
     
     for data_change in field_mappings:
         form_entry = next((item for item in process_instance.variables_data 
@@ -400,17 +390,14 @@ def _update_process_variables(process_instance: ProcessInstance, field_mappings:
                 process_instance.variables_data.append(variable)
 
 def _process_next_activities(process_instance: ProcessInstance, process_result: ProcessResult, 
-                           process_result_json: dict, process_definition) -> set:
-    """Process next activities and return set of user emails"""
-    all_user_emails = set()
-    
-    if not process_result.nextActivities:
+                           process_result_json: dict, process_definition):
+    """Process next activities"""
+    # Ensure current_activity_ids is initialized
+    if process_instance.current_activity_ids is None:
         process_instance.current_activity_ids = []
-        return all_user_emails
     
     for activity in process_result.nextActivities:
         if activity.nextActivityId in ["endEvent", "END_PROCESS", "end_event"]:
-            process_instance.status = "COMPLETED"
             process_instance.current_activity_ids = []
             break
             
@@ -418,7 +405,6 @@ def _process_next_activities(process_instance: ProcessInstance, process_result: 
             next_activities = process_definition.find_next_activities(activity.nextActivityId)
             if next_activities:
                 process_instance.current_activity_ids = [act.id for act in next_activities]
-                process_instance.status = "RUNNING"
                 process_result_json["nextActivities"] = []
                 next_activity_dicts = [
                     Activity(
@@ -435,17 +421,12 @@ def _process_next_activities(process_instance: ProcessInstance, process_result: 
                 
         elif activity.result == "IN_PROGRESS" and activity.nextActivityId not in process_instance.current_activity_ids:
             process_instance.current_activity_ids = [activity.nextActivityId]
-            process_instance.status = "RUNNING"
         else:
             process_instance.current_activity_ids.append(activity.nextActivityId)
         
         # Check external customer and send email
         activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
         check_external_customer_and_send_email(activity_obj, activity.nextUserEmail, process_instance, process_definition)
-        
-        all_user_emails.add(activity.nextUserEmail)
-    
-    return all_user_emails
 
 def _execute_script_tasks(process_instance: ProcessInstance, process_result: ProcessResult, 
                          process_result_json: dict, process_definition):
@@ -454,14 +435,16 @@ def _execute_script_tasks(process_instance: ProcessInstance, process_result: Pro
         activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
         if activity_obj and activity_obj.type == "scriptTask":
             env_vars = {}
-            for variable in process_instance.variables_data:
-                if variable["value"] is None:
-                    continue
-                if isinstance(variable["value"], list):
-                    variable["value"] = ', '.join(map(str, variable["value"]))
-                if isinstance(variable["value"], dict):
-                    variable["value"] = json.dumps(variable["value"])
-                env_vars[variable["key"]] = variable["value"]
+            # Ensure variables_data is not None
+            if process_instance.variables_data:
+                for variable in process_instance.variables_data:
+                    if variable["value"] is None:
+                        continue
+                    if isinstance(variable["value"], list):
+                        variable["value"] = ', '.join(map(str, variable["value"]))
+                    if isinstance(variable["value"], dict):
+                        variable["value"] = json.dumps(variable["value"])
+                    env_vars[variable["key"]] = variable["value"]
             
             result = execute_python_code(activity_obj.pythonCode, env_vars=env_vars)
             
@@ -497,23 +480,35 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
     """Persist process data to database and vector store"""
     # Upsert workitems
     upsert_todo_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
-    upsert_completed_workitem(process_instance.dict(), process_result_json, process_definition, tenant_id)
-    workitems = upsert_next_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
+    completed_workitems = upsert_completed_workitem(process_instance.dict(), process_result_json, process_definition, tenant_id)
+    next_workitems = upsert_next_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
     
     # Upsert process instance
+    if process_instance.status == "New":
+        process_instance.proc_inst_name = process_result.instanceName
     _, process_instance = upsert_process_instance(process_instance, tenant_id)
     
     # Send chat message
-    message_json = json.dumps({"role": "system", "content": process_result.description})
+    for completed_workitem in completed_workitems:
+        user_info = fetch_user_info(completed_workitem.user_id)
+        message_json = json.dumps({
+            "role": "user" if user_info.get("name") != "external_customer" else "system",
+            "name": user_info.get("username"),
+            "email": user_info.get("email"),
+            "profile": user_info.get("profile"),
+            "content": process_result.description
+        })
+        upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
+
     if process_result.cannotProceedErrors:
         reason = "\n".join(error.reason for error in process_result.cannotProceedErrors)
         message_json = json.dumps({"role": "system", "content": reason})
-    upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
+        upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
     
     # Update process_result_json
     process_result_json["instanceId"] = process_instance.proc_inst_id
     process_result_json["instanceName"] = process_instance.proc_inst_name
-    process_result_json["workitemIds"] = [workitem.id for workitem in workitems] if workitems else []
+    process_result_json["workitemIds"] = [workitem.id for workitem in next_workitems] if next_workitems else []
     
     # Add to vector store
     content_str = json.dumps(process_instance.dict(exclude={'process_definition'}), ensure_ascii=False, indent=2)
@@ -536,16 +531,7 @@ def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = 
         _update_process_variables(process_instance, process_result.fieldMappings)
         
         # Process next activities
-        all_user_emails = _process_next_activities(process_instance, process_result, process_result_json, process_definition)
-        
-        # Add completed activities user emails
-        for activity in process_result.completedActivities:
-            all_user_emails.add(activity.completedUserEmail)
-        
-        # Update current user IDs
-        current_user_ids_set = set(process_instance.current_user_ids)
-        updated_user_emails = current_user_ids_set.union(all_user_emails)
-        process_instance.current_user_ids = list(updated_user_emails)
+        _process_next_activities(process_instance, process_result, process_result_json, process_definition)
         
         # Execute script tasks
         _execute_script_tasks(process_instance, process_result, process_result_json, process_definition)
@@ -641,12 +627,13 @@ def update_instance_status_on_error(workitem: dict, is_first: bool, is_last: boo
         print(f"[ERROR] Failed to update instance status for {proc_inst_id}: {str(e)}")
 
 async def handle_workitem(workitem):
-    if workitem['retry'] >= 3:
-        return
-    
     # 워크아이템 위치 판별
     is_first, is_last = get_workitem_position(workitem)
-    
+
+    if workitem['retry'] >= 3:
+        update_instance_status_on_error(workitem, is_first, is_last)
+        return
+
     activity_id = workitem['activity_id']
     process_definition_id = workitem['proc_def_id']
     process_instance_id = workitem['proc_inst_id']
@@ -656,7 +643,7 @@ async def handle_workitem(workitem):
     process_instance = fetch_process_instance(process_instance_id, tenant_id) if process_instance_id != "new" else None
     organization_chart = fetch_organization_chart(tenant_id)
     if workitem['user_id'] != "external_customer":
-        if ',' in workitem['user_id']:
+        if workitem['user_id'] and ',' in workitem['user_id']:
             user_ids = workitem['user_id'].split(',')
             user_info = []
             for user_id in user_ids:
@@ -677,8 +664,10 @@ async def handle_workitem(workitem):
             }
     else:
         user_info = {
-            "name": "external_customer",
-            "email": workitem['user_id']
+            "name": "외부 고객",
+            "type": "external_customer",
+            "email": workitem['user_id'],
+            "info": {}
         }
     today = datetime.now().strftime("%Y-%m-%d")
     ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id, tenant_id)
@@ -698,14 +687,14 @@ async def handle_workitem(workitem):
             "answer": '',
             "instance_id": process_instance_id,
             "instance_variables_data": process_instance.variables_data if process_instance and process_instance.status == "RUNNING" else '',
-            "role_bindings": workitem['assignees'],
+            "role_bindings": workitem.get('assignees', []),
             "current_activity_ids": activity_id,
-            "current_user_ids": workitem['user_id'],
+            "participants": workitem['user_id'],
             "processDefinitionJson": process_definition_json,
             "process_definition_id": process_definition_id,
             "activity_id": activity_id,
             "user_info": user_info,
-            "user_email": workitem['user_id'] if ',' not in workitem['user_id'] else ','.join(workitem['user_id'].split(',')),
+            "user_email": workitem['user_id'] if not workitem['user_id'] or ',' not in workitem['user_id'] else ','.join(workitem['user_id'].split(',')),
             "today": today,
             "organizationChart": organization_chart,
             "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
@@ -747,23 +736,6 @@ async def handle_workitem(workitem):
                     # Log the problematic response for debugging
                     print(f"[ERROR] All JSON parsing attempts failed. Raw response: {collected_text[:500]}...")
                     
-                    # Create a fallback response to prevent complete failure
-                    fallback_response = {
-                        "instanceId": process_instance_id,
-                        "instanceName": f"Error_Instance_{workitem['id']}",
-                        "processDefinitionId": process_definition_id,
-                        "fieldMappings": [],
-                        "roleBindings": workitem['assignees'],
-
-                        "completedActivities": [],
-                        "nextActivities": [],
-                        "cannotProceedErrors": [{
-                            "type": "SYSTEM_ERROR",
-                            "reason": f"JSON 파싱 실패: {str(parse_error)}"
-                        }],
-                        "description": "JSON 파싱 오류로 인해 프로세스 진행이 중단되었습니다."
-                    }
-                    
                     # Update workitem with error status
                     upsert_workitem({
                         "id": workitem['id'],
@@ -790,10 +762,8 @@ async def handle_workitem(workitem):
         result_json = json.loads(result)
     except Exception as e:
         print(f"[ERROR] Error in handle_workitem for workitem {workitem['id']}: {str(e)}")
-        # 예외 발생 시 인스턴스 상태 업데이트
-        update_instance_status_on_error(workitem, is_first, is_last)
         raise e
-    
+
     if result_json.get("instanceId") != "new" and workitem['proc_inst_id'] == "new":
         instance_id = result_json.get("instanceId")
         new_workitem = fetch_workitem_by_proc_inst_and_activity(instance_id, activity_id, tenant_id)
@@ -816,7 +786,10 @@ async def handle_workitem(workitem):
         
         if form_html and output:
             message_data = {
-                "role": "system",
+                "role": "system" if user_info.get("name") == "external_customer" else "user",
+                "name": user_info.get("name"),
+                "email": user_info.get("email"),
+                "profile": user_info.get("info", {}).get("profile", ""),
                 "content": f"{workitem['activity_name']} 업무가 완료되었습니다.",
                 "jsonContent": output if output else {},
                 "htmlContent": form_html if form_html else "",
@@ -834,23 +807,26 @@ async def handle_agent_workitem(workitem):
     에이전트 업무를 처리하는 함수
     agent_processor의 handle_workitem_with_agent를 사용합니다.
     """
-    if workitem['retry'] >= 3:
-        return
-    
     # 워크아이템 위치 판별
     is_first, is_last = get_workitem_position(workitem)
+
+    if workitem['retry'] >= 3:
+        # 예외 발생 시 인스턴스 상태 업데이트
+        update_instance_status_on_error(workitem, is_first, is_last)
+        return
     
     try:
         print(f"[DEBUG] Starting agent workitem processing for: {workitem['id']}")
         
         # 에이전트 정보 가져오기
-        if ',' in workitem['user_id']:
+        if workitem['user_id'] and ',' in workitem['user_id']:
             agent_ids = workitem['user_id'].split(',')
             agent_info = []
             for agent_id in agent_ids:
                 agent_info.append(fetch_user_info(agent_id))
         else:
             agent_id = workitem['user_id']
+            agent_info = [fetch_user_info(agent_id)] if agent_id else []
         
         if not agent_info:
             print(f"[ERROR] Agent not found: {agent_id}")
@@ -884,6 +860,24 @@ async def handle_agent_workitem(workitem):
         
     except Exception as e:
         print(f"[ERROR] Error in handle_agent_workitem for workitem {workitem['id']}: {str(e)}")
+        raise e 
+
+
+async def handle_service_workitem(workitem):
+    """
+    서비스 업무를 처리하는 함수
+    """
+    # 워크아이템 위치 판별
+    is_first, is_last = get_workitem_position(workitem)
+
+    if workitem['retry'] >= 3:
         # 예외 발생 시 인스턴스 상태 업데이트
         update_instance_status_on_error(workitem, is_first, is_last)
-        raise e 
+        return
+
+    try:
+        print(f"[DEBUG] Starting service workitem processing for: {workitem['id']}")
+                
+    except Exception as e:
+        print(f"[ERROR] Error in handle_service_workitem for workitem {workitem['id']}: {str(e)}")
+        raise e

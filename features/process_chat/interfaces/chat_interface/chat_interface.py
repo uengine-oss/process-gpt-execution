@@ -2,6 +2,7 @@ from typing import List, Dict, Any
 from .clients import ClientFactory
 from .factories import LangchainMessageFactory
 from .clients.base import StreamingResponse
+from Usage import Usage
 
 # from langchain.schema import Generation
 # from langchain.globals import get_llm_cache
@@ -23,6 +24,31 @@ class ChatInterface:
     async def messages(vendor: str, model: str, messages: List[Dict[str, Any]], stream: bool, modelConfig: Dict[str, Any]):
         client = ClientFactory.get_client(vendor)
         lc_messages = LangchainMessageFactory.create_messages(messages)
+        
+        # 요청 프롬프트 토큰 계산
+        request_tokens = ChatInterface.count_tokens(vendor, model, messages)
+        print(f"[DEBUG] Request tokens: {request_tokens}")
+        
+        def record_usage(total_tokens: int, response_text: str = ""):
+            """토큰 사용량을 기록하는 헬퍼 함수"""
+            raw_data = { 
+                "used_at": "2023-10-01T12:00:00+09:00", #필수
+                "quantity": total_tokens, 
+                "model": model, #필수
+                "userId": "jaeh@uengine.org",
+                "metadata": {
+                    "used_for": "chat",
+                    "used_for_id": "1234567890",
+                    "used_for_name": "AI 생성 처리 채팅",
+                    "request_tokens": request_tokens,
+                    "response_tokens": total_tokens - request_tokens,
+                }
+            }
+            try:
+                # Usage(raw_data)
+                print(f"[DEBUG] Usage recorded - Total tokens: {total_tokens} (Request: {request_tokens}, Response: {total_tokens - request_tokens})")
+            except Exception as e:
+                print(f"[ERROR] Failed to record usage: {e}")
         
         # prompt = build_prompt_for_cache(vendor, model, messages, modelConfig)
         # llm_string = build_llm_string(vendor, model)
@@ -61,6 +87,16 @@ class ChatInterface:
                         pass
                     yield chunk
 
+                # 스트리밍 완료 후 응답 토큰 계산 및 사용량 기록
+                if result_text:
+                    response_tokens = ChatInterface.count_tokens(vendor, model, [{"role": "assistant", "content": result_text}])
+                    total_tokens = request_tokens + response_tokens
+                    print(f"[DEBUG] Response tokens: {response_tokens}, Total tokens: {total_tokens}")
+                    record_usage(total_tokens, result_text)
+                else:
+                    print(f"[WARNING] No response text in streaming, recording request tokens only")
+                    record_usage(request_tokens, "")
+
                 # try:
                 #     cache.update(prompt, llm_string, [Generation(text=result_text)])
                 # except Exception as e:
@@ -70,7 +106,27 @@ class ChatInterface:
 
         else:
             response = await client.invoke(messages=lc_messages, model=model, modelConfig=modelConfig)
-            # text = response["text"]
+            
+            # 비스트리밍 응답에서 텍스트 추출 및 토큰 계산
+            try:
+                response_text = ""
+                if "choices" in response and len(response["choices"]) > 0:
+                    if "message" in response["choices"][0]:
+                        response_text = response["choices"][0]["message"].get("content", "")
+                    elif "text" in response["choices"][0]:
+                        response_text = response["choices"][0]["text"]
+                
+                if response_text:
+                    response_tokens = ChatInterface.count_tokens(vendor, model, [{"role": "assistant", "content": response_text}])
+                    total_tokens = request_tokens + response_tokens
+                    print(f"[DEBUG] Response tokens: {response_tokens}, Total tokens: {total_tokens}")
+                    record_usage(total_tokens, response_text)
+                else:
+                    print(f"[WARNING] No response text found, recording request tokens only")
+                    record_usage(request_tokens, "")
+            except Exception as e:
+                print(f"[ERROR] Failed to calculate response tokens: {e}")
+                record_usage(request_tokens, "")
 
             # try:
             #     cache.update(prompt, llm_string, [Generation(text=text)])
@@ -80,14 +136,24 @@ class ChatInterface:
             return response
 
     @staticmethod
-    async def count_tokens(vendor: str, model: str, messages: List[Dict[str, Any]]):
-        client = ClientFactory.get_client(vendor)
-        lc_messages = LangchainMessageFactory.create_messages(messages)
-        return client.get_num_tokens_from_messages(
-            messages=lc_messages,
-            model=model
-        )
-    
+    def count_tokens(vendor: str, model: str, messages: List[Dict[str, Any]]):
+        try:
+            client = ClientFactory.get_client(vendor)
+            lc_messages = LangchainMessageFactory.create_messages(messages)
+            token_count = client.get_num_tokens_from_messages(
+                messages=lc_messages,
+                model=model
+            )
+            print(f"[DEBUG] Token count for {vendor}:{model}: {token_count}")
+            return token_count
+        except Exception as e:
+            print(f"[ERROR] Failed to count tokens for {vendor}:{model}: {str(e)}")
+            # 토큰 계산 실패 시 대략적인 추정값 반환
+            total_chars = sum(len(str(msg.get('content', ''))) for msg in messages)
+            estimated_tokens = total_chars // 4  # 대략적인 추정 (4글자 ≈ 1토큰)
+            print(f"[DEBUG] Using estimated token count: {estimated_tokens}")
+            return estimated_tokens
+        
     @staticmethod
     async def embeddings(vendor: str, model: str, text: str):
         client = ClientFactory.get_client(vendor)
