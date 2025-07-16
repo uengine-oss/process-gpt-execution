@@ -72,7 +72,7 @@ CREATE TABLE public.service (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),  -- 생성일
     tenant_id TEXT REFERENCES tenants(id),              -- 테넌트
 
-    CONSTRAINT unique_name_category UNIQUE (name, category)
+    CONSTRAINT unique_name_category UNIQUE (id, name, category)
 );
 
 # service_rate(서비스 종류별 가격) - 실제 credits_per_unit 파악.

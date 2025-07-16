@@ -25,8 +25,8 @@ class ChatInterface:
         client = ClientFactory.get_client(vendor)
         lc_messages = LangchainMessageFactory.create_messages(messages)
         # 요청 모델의 서비스 정보
-        # service = get_service_by_category("llm", model)
-        # print(service)
+        service = get_service_by_category("llm", model)
+        print(service)
         # 요청 프롬프트 토큰 계산
         request_tokens = ChatInterface.count_tokens(vendor, model, messages)
         print(f"[DEBUG] Request tokens: {request_tokens}")
@@ -45,7 +45,7 @@ class ChatInterface:
                         "tokens": request_tokens,
                         "creditPerUnit": 0 # get_service_by_category의 credit_per_unit
                     },
-                    "cachedRequest": {
+                    "cached_request": {
                         "tokens": 0,
                         "creditPerUnit": 0
                     },
