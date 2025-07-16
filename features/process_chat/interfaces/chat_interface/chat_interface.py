@@ -2,7 +2,7 @@ from typing import List, Dict, Any
 from .clients import ClientFactory
 from .factories import LangchainMessageFactory
 from .clients.base import StreamingResponse
-from Usage import Usage
+from Usage import usage
 
 # from langchain.schema import Generation
 # from langchain.globals import get_llm_cache
@@ -45,7 +45,7 @@ class ChatInterface:
                 }
             }
             try:
-                # Usage(raw_data)
+                # usage(raw_data)
                 print(f"[DEBUG] Usage recorded - Total tokens: {total_tokens} (Request: {request_tokens}, Response: {total_tokens - request_tokens})")
             except Exception as e:
                 print(f"[ERROR] Failed to record usage: {e}")
