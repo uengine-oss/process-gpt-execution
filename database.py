@@ -15,7 +15,6 @@ from contextvars import ContextVar
 import csv
 from dotenv import load_dotenv
 import socket
-import firebase_admin
 from firebase_admin import credentials, messaging
 import logging
 import asyncio
@@ -121,27 +120,115 @@ def load_sql_from_file(file_path):
 #         if connection:
 #             connection.close()
 
+def get_available_credits(tenant_id: str):
+    try:
+        db_config = db_config_var.get()
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
+
+        sql = """
+        SELECT
+                cp.id AS purchase_id,
+                cp.created_at,
+                cp.expires_at,
+                c.name AS credit_name,
+                c.credit AS total_credit,
+                COALESCE(SUM(cu.used_credit), 0) AS used_credit,
+                (c.credit - COALESCE(SUM(cu.used_credit), 0)) AS remaining_credit
+            FROM credit_purchase cp
+            JOIN credit c ON cp.credit_id = c.id
+            LEFT JOIN credit_usage cu 
+                ON cu.tenant_id = cp.tenant_id
+                AND cu.created_at >= cp.created_at 
+                AND (cp.expires_at IS NULL OR cu.created_at <= cp.expires_at)
+            WHERE cp.tenant_id = %s
+            AND (cp.expires_at IS NULL OR cp.expires_at > now())
+            GROUP BY cp.id, cp.created_at, cp.expires_at, c.name, c.credit
+            ORDER BY cp.created_at ASC;
+        """
+
+        cursor.execute(sql, (subdomain_var.get()))
+        result = cursor.fetchone()
+        connection.close()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching available credits: {e}")
+    
+
+def get_service_list(category: str):
+    try:
+        if not category:
+            return []
+        
+        supabase = supabase_client_var.get()
+        
+        db_config = db_config_var.get()
+        connection = psycopg2.connect(**db_config)
+        cursor = connection.cursor(cursor_factory=RealDictCursor)
+        
+        # supabase 테이블에서 서비스 목록을 가져오는 로직
+        response = supabase.table('credit_purchase').select('credit_id', 'created_at', 'expires_at').eq('tenant_id', subdomain_var.get()).gte('created_at', 'now()::date').lte('expires_at', 'now()::date').order('created_at', ascending=True).execute()
+        
+        if not response.data:
+            return []
+
+        # 가장 오래된 row의 credit_id를 가져옴
+        oldest_credit_id = response.data[0]['credit_id']
+
+        # credit 테이블에서 feature 정보를 가져옴
+        credit_response = supabase.table('credit').select('feature').eq('id', oldest_credit_id).execute()
+
+        if not credit_response.data:
+            return []
+
+        # feature 정보에서 included_services를 추출
+        feature_info = credit_response.data[0].get('feature', {})
+        included_service_ids = feature_info.get('included_services', [])
+        if not included_service_ids:
+            return []
+
+        # SQL 쿼리를 사용하여 service_mater와 service 테이블을 조인하여 필요한 데이터를 가져옴
+        sql_query = """
+            SELECT 
+                s.id, s.name, s.description, s.category, s.created_at, s.tenant_id, sm.id AS service_mater_id
+            FROM 
+                service_mater sm
+            JOIN 
+                service s ON sm.service_id = s.id
+            WHERE 
+                sm.id = ANY(%s)
+                AND s.category = %s
+                AND S.tenant_id =  %s
+        """
+        cursor.execute(sql_query, (included_service_ids, category, subdomain_var.get()))
+        services_with_mater_id = cursor.fetchall()
+        connection.close()
+
+        return services_with_mater_id
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"서비스 목록을 가져오는 중 오류가 발생했습니다: {e}")
+        
 def insert_usage(usage_data: dict):
     try:
         supabase = supabase_client_var.get()
         if supabase is None:
-            raise Exception("Supabase client is not configured for this request")
+            raise HTTPException(status_code=500, detail="Supabase 클라이언트가 요청에 대해 구성되지 않았습니다.")
         
         if not usage_data:
-            raise Exception("Usage data is not provided")
+            raise HTTPException(status_code=400, detail="사용량 데이터가 제공되지 않았습니다.")
         
         if not usage_data.get('quantity'):
-            raise Exception("Quantity is not provided")
+            raise HTTPException(status_code=400, detail="수량이 제공되지 않았습니다.")
         
         if not usage_data.get('model'):
-            raise Exception("Model is not provided")
+            raise HTTPException(status_code=400, detail="모델이 제공되지 않았습니다.")
             
         if not usage_data.get('tenant_id'):
             usage_data['tenant_id'] = subdomain_var.get()
         
         return supabase.table('usage').insert(usage_data).execute()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error upserting process definition with ID {process_definition_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"사용량 삽입 중 오류가 발생했습니다: {e}")
     
 
 
