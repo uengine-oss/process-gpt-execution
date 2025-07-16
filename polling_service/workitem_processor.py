@@ -359,6 +359,8 @@ def _create_or_get_process_instance(process_result: ProcessResult, process_resul
         )
     else:
         process_instance = fetch_process_instance(process_result.instanceId, tenant_id)
+        if process_instance.status == "NEW":
+            process_instance.proc_inst_name = process_result.instanceName
         return process_instance
 
 def _update_process_variables(process_instance: ProcessInstance, field_mappings: List[FieldMapping]):
@@ -484,21 +486,16 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
     next_workitems = upsert_next_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
     
     # Upsert process instance
-    if process_instance.status == "New":
+    if process_instance.status == "NEW":
         process_instance.proc_inst_name = process_result.instanceName
     _, process_instance = upsert_process_instance(process_instance, tenant_id)
     
     # Send chat message
-    for completed_workitem in completed_workitems:
-        user_info = fetch_user_info(completed_workitem.user_id)
-        message_json = json.dumps({
-            "role": "user" if user_info.get("name") != "external_customer" else "system",
-            "name": user_info.get("username"),
-            "email": user_info.get("email"),
-            "profile": user_info.get("profile"),
-            "content": process_result.description
-        })
-        upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
+    message_json = json.dumps({
+        "role": "system",
+        "content": process_result.description
+    })
+    upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
 
     if process_result.cannotProceedErrors:
         reason = "\n".join(error.reason for error in process_result.cannotProceedErrors)
@@ -790,7 +787,7 @@ async def handle_workitem(workitem):
                 "name": user_info.get("name"),
                 "email": user_info.get("email"),
                 "profile": user_info.get("info", {}).get("profile", ""),
-                "content": f"{workitem['activity_name']} 업무가 완료되었습니다.",
+                "content": "",
                 "jsonContent": output if output else {},
                 "htmlContent": form_html if form_html else "",
                 "contentType": "html" if form_html else "text"
