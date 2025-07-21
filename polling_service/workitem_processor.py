@@ -154,7 +154,7 @@ Now, you're going to create an interactive system similar to a BPM system that h
 
 - Process Instance Name Pattern: "{instance_name_pattern}"  // If there is no process instance name pattern, the key_value format of parameterValue, along with the process definition name, is the default for the instance name pattern. Instance name must be limited to 20 characters or less. e.g. 휴가신청_이름_홍길동_사유_개인일정_시작일_20240701
 
-IMPORTANT: The next_activities list contains the available next activities that can be executed. You should use these activities when determining the next steps. Only include activities from this list in your nextActivities response.
+IMPORTANT: The next_activities list contains ALL the available next activities that can be executed. You MUST include ALL activities from this list in your nextActivities response. Do not skip any activities from the provided list.
 
 Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
 The data changes should be derived from the user submitted data or attached image OCR.
@@ -165,7 +165,7 @@ If the person responsible for the next activity is an external customer, the nex
 If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
 If the user-submitted data is insufficient, refer to the process data to extract the value.
 When an image is input, the process activity is completed based on the analyzed contents by analyzing the image.
-IMPORTANT: Only include activities from the provided next_activities list in your nextActivities response. Do not create or suggest activities that are not in this list.
+IMPORTANT: Only include activities from the provided next_activities list in your nextActivities response. Do not create or suggest activities that are not in this list. You MUST include ALL activities from the next_activities list - do not skip any of them.
 
 CRITICAL INSTRUCTIONS:
 1. Return ONLY the JSON response wrapped in ```json and ``` markers
@@ -174,6 +174,7 @@ CRITICAL INSTRUCTIONS:
 4. Do not include trailing commas in arrays or objects
 5. Use proper JSON escaping for special characters in strings
 6. The response must be valid JSON that can be parsed without errors
+7. You MUST include ALL activities from the next_activities list in your nextActivities response - do not skip any activities
 
 result should be in this JSON format:
 {{
@@ -199,7 +200,7 @@ result should be in this JSON format:
         "nextUserEmail": "the email address OR agent id of next activity's role",
         "result": "IN_PROGRESS",
         "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)"
-    }}],
+    }}], // IMPORTANT: Include ALL activities from the next_activities list provided above
     "cannotProceedErrors":   // return errors if cannot proceed to next activity 
     [{{
         "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST"
