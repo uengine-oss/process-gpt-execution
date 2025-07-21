@@ -14,7 +14,6 @@ import requests
 
 # ChatOpenAI 객체 생성
 model = ChatOpenAI(model="gpt-4o", streaming=True)
-vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096, streaming=True)
 
 # parser 생성
 import re

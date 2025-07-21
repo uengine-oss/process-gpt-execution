@@ -18,7 +18,7 @@ import queue
 import time
 
 from database import (
-    fetch_process_definition, fetch_process_instance, fetch_organization_chart, 
+    fetch_process_definition, fetch_process_instance, 
     fetch_ui_definition_by_activity_id, fetch_user_info, fetch_assignee_info, 
     get_vector_store, fetch_workitem_by_proc_inst_and_activity, upsert_process_instance, 
     upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
@@ -28,12 +28,13 @@ from process_definition import load_process_definition
 from code_executor import execute_python_code
 from smtp_handler import generate_email_template, send_email
 from agent_processor import handle_workitem_with_agent
+from mcp_processor import mcp_processor
+
 
 load_dotenv()
 
 # ChatOpenAI 객체 생성
 model = ChatOpenAI(model="gpt-4o", streaming=True)
-vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096, streaming=True)
 
 # parser 생성
 class CustomJsonOutputParser(SimpleJsonOutputParser):
@@ -140,42 +141,31 @@ prompt = PromptTemplate.from_template(
 Now, you're going to create an interactive system similar to a BPM system that helps our company's employees understand various processes and take the next steps when they start a process or are curious about the next steps.
 
 - Process Definition: {processDefinitionJson}
-
 - Process Instance Id: {instance_id}
-- Process Instance Data: {instance_variables_data}
-    
-- Organization Chart: {organizationChart}
-
-- User Information: {user_info}
-
-- Role Bindings: {role_bindings}
-
-- Currently Running Activities: {current_activity_ids}
-
-- Currently Running Activity's Form Fields: {form_fields}
 
 - Received Message From Current Step:
     activity id: "{activity_id}",
     user: "{user_email}",
-    submitted form values: {form_values},
-    submitted answer: "{answer}"    // If no form values have been submitted, assign the values in the form field using the submitted answers. Based on the current running activity form fields. If the readonly="true" fields are not entered, never return an error and ignore it. But if fields with readonly="false" are not entered, return the error "DATA_FIELD_NOT_EXIST",
-    other output: {other_output} // 폼 입력 값이 누락된 경우 이걸 참고해서 폼 입력 값을 채워줄 것.
+    submitted output: {output}
+
+- next activities: {next_activities}
 
 - Today is:  {today}
 
 - Process Instance Name Pattern: "{instance_name_pattern}"  // If there is no process instance name pattern, the key_value format of parameterValue, along with the process definition name, is the default for the instance name pattern. Instance name must be limited to 20 characters or less. e.g. 휴가신청_이름_홍길동_사유_개인일정_시작일_20240701
 
+IMPORTANT: The next_activities list contains the available next activities that can be executed. You should use these activities when determining the next steps. Only include activities from this list in your nextActivities response.
+
 Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
 The data changes should be derived from the user submitted data or attached image OCR.
-By referencing the sequences of the process definition, the next activity step needs to be identified. The target ID of the sequence connected to the current completed activity ID is the ID of the next activity.
 At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if the process variable is declared as boolean, it should be true/false.
 Information about completed activities must be returned.
 When determining nextUserEmail for nextActivities, ALWAYS use the "endpoint" value from roleBindings instead of "default" value. If endpoint is a list, use the first element. If endpoint is different from default, prioritize endpoint value.
 If the person responsible for the next activity is an external customer, the nextUserEmail included in nextActivities must be returned customer email. Customer emails must be found in submitted form values or process instance data. Never write customer emails at will or return non-external ones. Instances will be broken.
 If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
-startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
 If the user-submitted data is insufficient, refer to the process data to extract the value.
 When an image is input, the process activity is completed based on the analyzed contents by analyzing the image.
+IMPORTANT: Only include activities from the provided next_activities list in your nextActivities response. Do not create or suggest activities that are not in this list.
 
 CRITICAL INSTRUCTIONS:
 1. Return ONLY the JSON response wrapped in ```json and ``` markers
@@ -207,7 +197,7 @@ result should be in this JSON format:
     [{{
         "nextActivityId": "the id of next activity id",
         "nextUserEmail": "the email address OR agent id of next activity's role",
-        "result": "IN_PROGRESS | PENDING | DONE",
+        "result": "IN_PROGRESS",
         "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)"
     }}],
     "cannotProceedErrors":   // return errors if cannot proceed to next activity 
@@ -516,6 +506,21 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
     vector_store = get_vector_store()
     vector_store.add_documents([Document(page_content=content_str, metadata=metadata)])
 
+def _check_service_tasks(process_instance: ProcessInstance, process_result_json: dict, process_definition):
+    try:
+        for activity in process_result_json.get("nextActivities", []):
+            activity_obj = process_definition.find_activity_by_id(activity.get("nextActivityId"))
+            if activity_obj and activity_obj.type == "serviceTask":
+                next_workitem = fetch_workitem_by_proc_inst_and_activity(process_instance.proc_inst_id, activity_obj.id, process_instance.tenant_id)
+                if next_workitem:
+                    upsert_workitem({
+                        "id": next_workitem.id,
+                        "status": "SUBMITTED",
+                    }, process_instance.tenant_id)
+    except Exception as e:
+        print(f"[ERROR] Failed to check service tasks: {str(e)}")
+        raise e
+    
 def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = None) -> str:
     try:
         process_result = ProcessResult(**process_result_json)
@@ -535,6 +540,9 @@ def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = 
         
         # Persist data
         _persist_process_data(process_instance, process_result, process_result_json, process_definition, tenant_id)
+        
+        # Check service tasks
+        _check_service_tasks(process_instance, process_result_json, process_definition)
         
         return json.dumps(process_result_json)
     except Exception as e:
@@ -637,8 +645,8 @@ async def handle_workitem(workitem):
     tenant_id = workitem['tenant_id']
 
     process_definition_json = fetch_process_definition(process_definition_id, tenant_id)
+    process_definition = load_process_definition(process_definition_json)
     process_instance = fetch_process_instance(process_instance_id, tenant_id) if process_instance_id != "new" else None
-    organization_chart = fetch_organization_chart(tenant_id)
     if workitem['user_id'] != "external_customer":
         if workitem['user_id'] and ',' in workitem['user_id']:
             user_ids = workitem['user_id'].split(',')
@@ -668,7 +676,6 @@ async def handle_workitem(workitem):
         }
     today = datetime.now().strftime("%Y-%m-%d")
     ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id, tenant_id)
-    form_fields = ui_definition.fields_json if ui_definition else None
     form_html = ui_definition.html if ui_definition else None
     output = {}
     if workitem['output'] and isinstance(workitem['output'], str):
@@ -678,26 +685,23 @@ async def handle_workitem(workitem):
     form_id = ui_definition.id if ui_definition else None
     if form_id and output.get(form_id):
         output = output.get(form_id)
+        
+    next_activities = []
+    if process_definition:
+        next_activities = [activity.id for activity in process_definition.find_next_activities(activity_id)]
     
     try:
         chain_input = {
-            "answer": '',
-            "instance_id": process_instance_id,
-            "instance_variables_data": process_instance.variables_data if process_instance and process_instance.status == "RUNNING" else '',
-            "role_bindings": workitem.get('assignees', []),
-            "current_activity_ids": activity_id,
-            "participants": workitem['user_id'],
             "processDefinitionJson": process_definition_json,
+            "instance_id": process_instance_id,
+            "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
             "process_definition_id": process_definition_id,
             "activity_id": activity_id,
-            "user_info": user_info,
             "user_email": workitem['user_id'] if not workitem['user_id'] or ',' not in workitem['user_id'] else ','.join(workitem['user_id'].split(',')),
+            "output": output,
             "today": today,
-            "organizationChart": organization_chart,
-            "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
-            "form_fields": form_fields,
-            "form_values": output,
-            "other_output": workitem['output']
+            "role_bindings": workitem.get('assignees', []),
+            "next_activities": next_activities,
         }
         
         collected_text = ""
@@ -872,9 +876,171 @@ async def handle_service_workitem(workitem):
         update_instance_status_on_error(workitem, is_first, is_last)
         return
 
+    def extract_tool_results_from_agent_messages(messages):
+        """
+        LangChain agent의 메시지 리스트에서 도구 실행 결과만 추출하여
+        {tool_name: {status, ...}} 형태의 딕셔너리로 반환
+        """
+        tool_results = {}
+        for msg in messages:
+            # ToolMessage: content가 JSON 문자열일 수 있음
+            if hasattr(msg, "name") and hasattr(msg, "content"):
+                try:
+                    content = msg.content
+                    if content and (content.startswith("{") or content.startswith("[")):
+                        parsed = json.loads(content)
+                        if isinstance(parsed, dict) and "status" in parsed:
+                            tool_results[msg.name] = parsed
+                        elif isinstance(parsed, list):
+                            for item in parsed:
+                                if isinstance(item, dict) and "status" in item:
+                                    tool_results[msg.name] = item
+                except Exception:
+                    continue
+            # AIMessage: additional_kwargs에 tool_calls가 있을 수 있음
+            elif hasattr(msg, "additional_kwargs"):
+                tool_calls = msg.additional_kwargs.get("tool_calls", [])
+                for call in tool_calls:
+                    tool_name = call.get("function", {}).get("name")
+                    arguments = call.get("function", {}).get("arguments")
+                    if tool_name and arguments:
+                        try:
+                            args = json.loads(arguments)
+                            tool_results[tool_name] = args
+                        except Exception:
+                            tool_results[tool_name] = arguments
+        return tool_results
+
     try:
         print(f"[DEBUG] Starting service workitem processing for: {workitem['id']}")
+        
+        agent_id = workitem['user_id']
+        tenant_id = workitem['tenant_id']
+        agent_info = None
+        if not agent_id:
+            print(f"[ERROR] No agent ID found in workitem: {workitem['id']}")
+            upsert_workitem({
+                "id": workitem['id'],
+                "log": "No agent ID found"
+            }, tenant_id)
+            return
+        
+        if agent_id and ',' in agent_id:
+            agent_ids = workitem['user_id'].split(',')
+            for agent_id in agent_ids:
+                assignee_info = fetch_assignee_info(agent_id)
+                if assignee_info and assignee_info.get("type") == "agent":
+                    agent_info = fetch_user_info(agent_id)
+                    break
+        else:
+            assignee_info = fetch_assignee_info(agent_id)
+            if assignee_info and assignee_info.get("type") == "agent":
+                agent_info = fetch_user_info(agent_id)
+
+        if not agent_info:
+            print(f"[ERROR] Agent not found: {agent_id}")
+            upsert_workitem({
+                "id": workitem['id'],
+                "log": f"Agent not found: {agent_id}"
+            }, tenant_id)
+            return
+
+        results = await mcp_processor.execute_mcp_tools(workitem, agent_info, tenant_id)
+        messages = results.get("messages", [])
+        
+        if messages:
+            tool_results = extract_tool_results_from_agent_messages(messages)
+        else:
+            tool_results = {}
+
+        if not tool_results:
+            print(f"[ERROR] MCP tools execution failed: No tool results found")
+            upsert_workitem({
+                "id": workitem['id'],
+                "log": "MCP tools execution failed: No tool results found"
+            }, tenant_id)
+            # return
+
+        error_count = 0
+        success_count = 0
+        result_summary = []
+        
+        for tool_name, result in tool_results.items():
+            if isinstance(result, dict) and result.get("status") == "success":
+                success_count += 1
+                connection_type = result.get("connection_type", "unknown")
+                result_summary.append(f"{tool_name} ({connection_type}): 성공")
+            else:
+                error_count += 1
+                connection_type = result.get("connection_type", "unknown") if isinstance(result, dict) else "unknown"
+                error_msg = result.get('error', 'Unknown error') if isinstance(result, dict) else str(result)
+                result_summary.append(f"{tool_name} ({connection_type}): 실패 - {error_msg}")
+        
+        if error_count == 0:
+            log_message = f"모든 MCP 도구 실행 완료: {', '.join(result_summary)}"
+        elif success_count > 0:
+            log_message = f"일부 MCP 도구 실행 완료: {', '.join(result_summary)}"
+        else:
+            log_message = f"모든 MCP 도구 실행 실패: {', '.join(result_summary)}"
+        
+        upsert_workitem({
+            "id": workitem['id'],
+            "status": "DONE",
+            "log": log_message,
+            "output": tool_results
+        }, tenant_id)
+        
+        # 채팅 메시지 추가
+        def summarize_agent_messages(messages):
+            lines = []
+            for msg in messages:
+                role = getattr(msg, 'role', None) or getattr(msg, 'name', None) or msg.__class__.__name__
+                content = getattr(msg, 'content', None)
+                if content:
+                    lines.append(f"[{role}] {content}")
+            return '\n'.join(lines)
+
+        summarized_messages = summarize_agent_messages(messages)
+        # 채팅 메시지 추가
+        def get_last_ai_message_content(messages):
+            last_content = ""
+            for msg in reversed(messages):
+                if msg.__class__.__name__ == "AIMessage" and hasattr(msg, "content"):
+                    last_content = msg.content
+                    break
+            return last_content
+
+        last_ai_content = get_last_ai_message_content(messages)
+        message_data = {
+            "role": "system",
+            "content": last_ai_content,
+            "jsonContent": tool_results
+        }
+        upsert_chat_message(workitem['proc_inst_id'], message_data, tenant_id)
+        
+        # 리소스 정리
+        await mcp_processor.cleanup()
                 
     except Exception as e:
         print(f"[ERROR] Error in handle_service_workitem for workitem {workitem['id']}: {str(e)}")
+        
+        # 에러 상태로 워크아이템 업데이트
+        upsert_workitem({
+            "id": workitem['id'],
+            "log": f"Service workitem processing failed: {str(e)}"
+        }, workitem['tenant_id'])
+        
+        # 에러 메시지를 채팅에 추가
+        error_message = json.dumps({
+            "role": "system",
+            "content": f"서비스 업무 처리 중 오류가 발생했습니다: {str(e)}"
+        })
+        upsert_chat_message(workitem['proc_inst_id'], error_message, workitem['tenant_id'])
+        
+        # 리소스 정리
+        try:
+            await mcp_processor.cleanup()
+        except:
+            pass
+        
         raise e

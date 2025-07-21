@@ -133,7 +133,7 @@ class ProcessDefinition(BaseModel):
                                 return self.find_prev_activity(sequence.source)
         return None
     
-    def find_prev_activities(self, activity_id, prev_activities=None, visited=None):
+    def find_prev_activities(self, activity_id, prev_activities=None, visited=None) -> List[ProcessActivity]:
         if prev_activities is None:
             prev_activities = []
         if visited is None:
