@@ -1,4 +1,4 @@
-name: process-gpt-execution-deploy
+name: process-gpt-build-and-deploy
 
 on:
   push:
@@ -17,7 +17,7 @@ jobs:
         run: |
           echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Build and push Docker image
+      - name: Build and push Docker image to GHCR
         run: |
           IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)
           IMAGE_NAME=ghcr.io/uengine-oss/process-gpt-execution:$IMAGE_TAG
@@ -25,28 +25,95 @@ jobs:
           docker build -t $IMAGE_NAME .
           docker push $IMAGE_NAME
 
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
           echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v1
+      - name: Checkout GitOps repository
+        uses: actions/checkout@v3
         with:
-          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+          repository: uengine-oss/process-gpt-k8s
+          token: ${{ secrets.GITOPS_PAT }}
+          path: gitops-repo
 
-      - name: Set up gcloud CLI
-        uses: google-github-actions/setup-gcloud@v1
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Update image tag in GitOps repository
+        run: |
+          cd gitops-repo
+          
+          # Update execution deployment image
+          yq eval '.spec.template.spec.containers[0].image = "'$IMAGE_NAME'"' -i execution-deployment.yaml
+          
+          echo "Updated image to: $IMAGE_NAME"
+
+      - name: Commit and push changes
+        run: |
+          cd gitops-repo
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          git add .
+          git commit -m "Update execution image to $IMAGE_TAG" || exit 0
+          git push
+
+      - name: Create deployment summary
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${{ env.IMAGE_NAME }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Tag** | \`${{ env.IMAGE_TAG }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Commit** | [\`${{ github.sha }}\`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **GitOps Repo** | [process-gpt-k8s](https://github.com/uengine-oss/process-gpt-k8s) |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ ArgoCD will automatically sync the changes from the GitOps repository." >> $GITHUB_STEP_SUMMARY
+
+      - name: Create deployment comment (with retry)
+        continue-on-error: true
+        uses: actions/github-script@v6
         with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
-      
-      - name: Install GKE Auth Plugin
-        run: |
-          gcloud components install gke-gcloud-auth-plugin --quiet
-
-      - name: Get GKE credentials
-        run: |
-          gcloud container clusters get-credentials ${{ secrets.GCP_CLUSTER_NAME }} \
-            --region ${{ secrets.GCP_REGION }} \
-            --project ${{ secrets.GCP_PROJECT_ID }}
-
-      - name: Deploy to GKE
-        run: |
-          kubectl set image deployment/execution-deployment execution=$IMAGE_NAME
+          retries: 3
+          retry-exempt-status-codes: 400,401,403,404,422
+          script: |
+            const maxRetries = 3;
+            let attempt = 0;
+            
+            while (attempt < maxRetries) {
+              try {
+                const commentBody = [
+                  '🚀 **Deployment Started**',
+                  '',
+                  '**Image:** `${{ env.IMAGE_NAME }}`',
+                  '**Tag:** `${{ env.IMAGE_TAG }}`',
+                  '',
+                  'ArgoCD will automatically sync the changes from [process-gpt-k8s](https://github.com/uengine-oss/process-gpt-k8s)',
+                  '',
+                  '---',
+                  '*Deployed via GitHub Actions*'
+                ].join('\n');
+                
+                await github.rest.repos.createCommitComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  commit_sha: context.sha,
+                  body: commentBody
+                });
+                console.log('Successfully created commit comment');
+                break;
+              } catch (error) {
+                attempt++;
+                console.log(`Attempt ${attempt} failed:`, error.message);
+                
+                if (attempt >= maxRetries) {
+                  console.log('All attempts failed, but deployment was successful');
+                  core.warning('Failed to create commit comment, but deployment completed successfully');
+                } else {
+                  console.log(`Retrying in ${attempt * 2} seconds...`);
+                  await new Promise(resolve => setTimeout(resolve, attempt * 2000));
+                }
+              }
+            }
