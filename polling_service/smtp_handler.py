@@ -3,6 +3,10 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
+from dotenv import load_dotenv
+
+if os.getenv("ENV") != "production":
+    load_dotenv(override=True)
 
 # SMTP Configuration
 smtp_server = os.getenv("SMTP_SERVER")

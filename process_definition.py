@@ -22,6 +22,7 @@ class ProcessData(BaseModel):
 
 class ProcessRole(BaseModel):
     name: str
+    default: Optional[Any] = None
     endpoint: Optional[Any] = None
     resolutionRule: Optional[str] = None
     
@@ -40,6 +41,8 @@ class ProcessActivity(BaseModel):
     properties: Optional[str] = None
     duration: Optional[int] = None
     srcTrg: Optional[str] = None
+    agentMode: Optional[str] = None
+    orchestration: Optional[str] = None
     
     def __hash__(self):
         return hash(self.id)  # 또는 다른 고유한 속성을 사용

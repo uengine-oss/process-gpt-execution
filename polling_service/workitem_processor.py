@@ -22,7 +22,8 @@ from database import (
     fetch_ui_definition_by_activity_id, fetch_user_info, fetch_assignee_info, 
     get_vector_store, fetch_workitem_by_proc_inst_and_activity, upsert_process_instance, 
     upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
-    upsert_todo_workitems, upsert_workitem, delete_workitem, ProcessInstance
+    upsert_todo_workitems, upsert_workitem, delete_workitem, ProcessInstance,
+    fetch_todolist_by_proc_inst_id
 )
 from process_definition import load_process_definition
 from code_executor import execute_python_code
@@ -31,7 +32,8 @@ from agent_processor import handle_workitem_with_agent
 from mcp_processor import mcp_processor
 
 
-load_dotenv()
+if os.getenv("ENV") != "production":
+    load_dotenv(override=True)
 
 # ChatOpenAI 객체 생성
 model = ChatOpenAI(model="gpt-4o", streaming=True)
@@ -194,13 +196,13 @@ result should be in this JSON format:
         "completedUserEmail": "the email address of completed activity's role",
         "result": "DONE"
     }}],
-    "nextActivities":
+    "nextActivities":   // IMPORTANT: Include ALL activities from the next_activities list provided above. Do not skip any activities.
     [{{
         "nextActivityId": "the id of next activity id",
-        "nextUserEmail": "the email address OR agent id of next activity's role",
+        "nextUserEmail": "the email address OR agent id of next activity's role", // If the next activity's role is assigned to external customer, the nextUserEmail must be 'external_customer'.
         "result": "IN_PROGRESS",
         "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)"
-    }}], // IMPORTANT: Include ALL activities from the next_activities list provided above
+    }}],
     "cannotProceedErrors":   // return errors if cannot proceed to next activity 
     [{{
         "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST"
@@ -284,7 +286,7 @@ def initialize_role_bindings(process_result_json: dict) -> list:
             initial_role_bindings.append(role_binding)
     return initial_role_bindings
 
-def check_external_customer_and_send_email(activity_obj, user_email, process_instance, process_definition):
+def check_external_customer_and_send_email(activity_obj, process_instance, process_definition):
     """
     Check that the next activity's role is assigned to external customer.
     If the next activity's role is assigned to external customer, send an email to the external customer.
@@ -295,11 +297,27 @@ def check_external_customer_and_send_email(activity_obj, user_email, process_ins
         role_info = next((role for role in process_definition.roles if role.name == role_name), None)
         
         if role_info and role_info.endpoint == "external_customer":
-            # Get customer email from role_info
-            if user_email == "external_customer":
-                customer_email = next((variable["value"] for variable in process_instance.variables_data if variable["key"] == "customer_email"), None)
-            else:
-                customer_email = user_email
+            customer_email = None
+            workitems = fetch_todolist_by_proc_inst_id(process_instance.proc_inst_id)
+            completed_workitems = [workitem for workitem in workitems if workitem.status == "DONE"]
+            completed_outputs = [workitem.output for workitem in completed_workitems]
+            for output in completed_outputs:
+                if output:
+                    try:
+                        output_json = json.loads(output) if isinstance(output, str) else output
+                        # output_json이 딕셔너리인지 확인
+                        if isinstance(output_json, dict):
+                            # 각 폼 필드에서 customer_email 찾기
+                            for form_key, form_data in output_json.items():
+                                if isinstance(form_data, dict) and "customer_email" in form_data:
+                                    customer_email = form_data["customer_email"]
+                                    break
+                            # customer_email을 찾았으면 루프 종료
+                            if customer_email:
+                                break
+                    except (json.JSONDecodeError, TypeError) as e:
+                        print(f"[WARNING] Failed to parse output JSON: {e}")
+                        continue
             
             if customer_email:
                 if (process_instance.tenant_id == "localhost"):
@@ -322,10 +340,14 @@ def check_external_customer_and_send_email(activity_obj, user_email, process_ins
                 # 이메일 템플릿 생성
                 email_template = generate_email_template(activity_obj, external_form_url, additional_info)
                 title = f"'{activity_obj.name}' 를 진행해주세요."
+                print(f"Sending email to {customer_email} with title {title}")
                 # 이메일 전송
                 send_email(subject=title, body=email_template, to_email=customer_email)
                 
                 return True
+            else:
+                print(f"No customer email found for {process_instance.proc_inst_id}")
+                return False
     except Exception as e:
         # Log the error but don't stop the process
         print(f"Failed to send notification to external customer: {str(e)}")
@@ -419,7 +441,7 @@ def _process_next_activities(process_instance: ProcessInstance, process_result: 
         
         # Check external customer and send email
         activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
-        check_external_customer_and_send_email(activity_obj, activity.nextUserEmail, process_instance, process_definition)
+        check_external_customer_and_send_email(activity_obj, process_instance, process_definition)
 
 def _execute_script_tasks(process_instance: ProcessInstance, process_result: ProcessResult, 
                          process_result_json: dict, process_definition):

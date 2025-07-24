@@ -11,7 +11,8 @@ from langchain.schema.runnable import RunnablePassthrough
 from fastapi import HTTPException
 from database import fetch_chat_history
 
-load_dotenv()
+if os.getenv("ENV") != "production":
+    load_dotenv(override=True)
 
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
