@@ -1,9 +1,8 @@
-name: process-gpt-build-and-deploy
+name: polling-service-build-and-deploy
 
 on:
-  push:
-    branches:
-      - main
+  release:
+    types: [created]
 
 jobs:
   build-and-deploy:
@@ -20,8 +19,8 @@ jobs:
       - name: Build and push Docker image to GHCR
         run: |
           IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)
-          IMAGE_NAME=ghcr.io/uengine-oss/process-gpt-execution:$IMAGE_TAG
-
+          IMAGE_NAME=ghcr.io/uengine-oss/process-gpt-polling-service:$IMAGE_TAG
+          cd polling_service
           docker build -t $IMAGE_NAME .
           docker push $IMAGE_NAME
 
@@ -44,8 +43,8 @@ jobs:
         run: |
           cd gitops-repo
           
-          # Update execution deployment image
-          yq eval '.spec.template.spec.containers[0].image = "'$IMAGE_NAME'"' -i dev/deployments/execution-deployment.yaml
+          # Update polling service deployment image
+          yq eval '.spec.template.spec.containers[0].image = "'$IMAGE_NAME'"' -i prod/deployments/polling-service-deployment.yaml
           
           echo "Updated image to: $IMAGE_NAME"
 
@@ -56,12 +55,12 @@ jobs:
           git config --local user.name "GitHub Action"
           
           git add .
-          git commit -m "Update execution image to $IMAGE_TAG" || exit 0
+          git commit -m "Update polling service image to $IMAGE_TAG" || exit 0
           git push
 
       - name: Create deployment summary
         run: |
-          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Polling Service Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -85,7 +84,7 @@ jobs:
             while (attempt < maxRetries) {
               try {
                 const commentBody = [
-                  '🚀 **Deployment Started**',
+                  '🚀 **Polling Service Deployment Started**',
                   '',
                   '**Image:** `${{ env.IMAGE_NAME }}`',
                   '**Tag:** `${{ env.IMAGE_TAG }}`',
