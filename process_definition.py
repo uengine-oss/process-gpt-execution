@@ -344,4 +344,6 @@ if __name__ == "__main__":
 class UIDefinition(BaseModel):
     id: str
     html: str
+    proc_def_id: Optional[str] = None
+    activity_id: Optional[str] = None
     fields_json: Optional[List[Dict[str, Any]]] = None

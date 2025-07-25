@@ -36,7 +36,7 @@ if os.getenv("ENV") != "production":
     load_dotenv(override=True)
 
 # ChatOpenAI 객체 생성
-model = ChatOpenAI(model="gpt-4o", streaming=True)
+model = ChatOpenAI(model="gpt-4o", streaming=True, temperature=0)
 
 # parser 생성
 class CustomJsonOutputParser(SimpleJsonOutputParser):
@@ -138,78 +138,135 @@ class CustomJsonOutputParser(SimpleJsonOutputParser):
 
 parser = CustomJsonOutputParser()
 
-prompt = PromptTemplate.from_template(
+selected_info_prompt = PromptTemplate.from_template(
 """
-Now, you're going to create an interactive system similar to a BPM system that helps our company's employees understand various processes and take the next steps when they start a process or are curious about the next steps.
+You are a BPMN Process Reasoning Agent.
 
-- Process Definition: {processDefinitionJson}
-- Process Instance Id: {instance_id}
+Your task is to select the necessary data fields required to proceed to the next activity, based strictly on outputs from previously completed workitems.
 
-- Received Message From Current Step:
-    activity id: "{activity_id}",
-    user: "{user_email}",
-    submitted output: {output}
+The output submitted in the current activity is provided for context only and must not be used as the primary source for selected data.
 
-- next activities: {next_activities}
 
-- Today is:  {today}
+Process Definition:
+- activities: {activities}
+- gateways: {gateways}
+- events: {events}
+- sequences: {sequences}
 
-- Process Instance Name Pattern: "{instance_name_pattern}"  // If there is no process instance name pattern, the key_value format of parameterValue, along with the process definition name, is the default for the instance name pattern. Instance name must be limited to 20 characters or less. e.g. 휴가신청_이름_홍길동_사유_개인일정_시작일_20240701
+Execution Context:
+- current_activity_id: {activity_id}
+- current_activity_output: {output}
+- current_participants: {user_id}
+- previous_outputs: {previous_outputs}
+- next_activity_ids: {next_activity_ids}
+- today: {today}
 
-IMPORTANT: The next_activities list contains ALL the available next activities that can be executed. You MUST include ALL activities from this list in your nextActivities response. Do not skip any activities from the provided list.
+Instructions:
+1. Review the process definition to understand the input requirements of the next activities.
+2. From the list of previously completed outputs (`previous_outputs`), select only the fields that are necessary for the upcoming activities.
+   - Ignore the currently submitted output except for context/reference.
+   - Do NOT select fields that are only present in the current activity output.
+3. If the sequence to the next activity contains any condition, ensure that only the outputs from previous activities that satisfy that condition are selected.
 
-Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
-The data changes should be derived from the user submitted data or attached image OCR.
-At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if the process variable is declared as boolean, it should be true/false.
-Information about completed activities must be returned.
-When determining nextUserEmail for nextActivities, ALWAYS use the "endpoint" value from roleBindings instead of "default" value. If endpoint is a list, use the first element. If endpoint is different from default, prioritize endpoint value.
-If the person responsible for the next activity is an external customer, the nextUserEmail included in nextActivities must be returned customer email. Customer emails must be found in submitted form values or process instance data. Never write customer emails at will or return non-external ones. Instances will be broken.
-If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
-If the user-submitted data is insufficient, refer to the process data to extract the value.
-When an image is input, the process activity is completed based on the analyzed contents by analyzing the image.
-IMPORTANT: Only include activities from the provided next_activities list in your nextActivities response. Do not create or suggest activities that are not in this list. You MUST include ALL activities from the next_activities list - do not skip any of them.
+Output Format:
+Return ONLY the following JSON structure wrapped in ```json and ``` markers:
 
 CRITICAL INSTRUCTIONS:
-1. Return ONLY the JSON response wrapped in ```json and ``` markers
-2. Do not include any explanation, comments, or additional text before or after the JSON
-3. Ensure all JSON keys and string values are properly quoted with double quotes
-4. Do not include trailing commas in arrays or objects
-5. Use proper JSON escaping for special characters in strings
-6. The response must be valid JSON that can be parsed without errors
-7. You MUST include ALL activities from the next_activities list in your nextActivities response - do not skip any activities
+- Do not include any explanations, comments, or extra text.
+- Use double quotes for all keys and string values.
+- No trailing commas.
+- Ensure valid JSON that can be parsed without errors.
 
 result should be in this JSON format:
 {{
-    "instanceId": "{instance_id}",
-    "instanceName": "process instance name",
-    "processDefinitionId": "{process_definition_id}",
-    "fieldMappings":
-    [{{
-        "key": "process data key", // Replace with _ if there is a space, Process Definition 에서 없는 데이터는 추가하지 않음. 프로세스 정의 데이터에 이메일이나 이름 같은 변수가 존재하지만 값이 누락된 경우 역할 바인딩에서 적절한 값을 알아서 지정하여 필드 매핑해줄 것.
-        "name": "process data name",
-        "value": <value for changed data>  // Refer to the data type of this process variable. For example, if the type of the process variable is Date, calculate and assign today's date. If the type of variable is a form, assign the JSON format. 
-    }}],
-    "roleBindings": {role_bindings},
-    "completedActivities":
-    [{{
-        "completedActivityId": "the id of completed activity id",
-        "completedUserEmail": "the email address of completed activity's role",
-        "result": "DONE"
-    }}],
-    "nextActivities":   // IMPORTANT: Include ALL activities from the next_activities list provided above. Do not skip any activities.
-    [{{
-        "nextActivityId": "the id of next activity id",
-        "nextUserEmail": "the email address OR agent id of next activity's role", // If the next activity's role is assigned to external customer, the nextUserEmail must be 'external_customer'.
-        "result": "IN_PROGRESS",
-        "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)"
-    }}],
-    "cannotProceedErrors":   // return errors if cannot proceed to next activity 
-    [{{
-        "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST"
-        "reason": "explanation for the error in Korean"
-    }}],
-    "description": "description of the completed activities and the next activities and what the user who will perform the task should do in Korean"
+  "selected_info": [
+    {{
+      "key": "output_data_key",
+      "name": "output_data_name",
+      "value": <value_from_previous_outputs>
+    }}
+  ]
+}}
+Remember: Return ONLY the JSON wrapped in ```json and ``` markers, nothing else.
+"""
+) 
 
+
+prompt = PromptTemplate.from_template(
+"""
+You are a BPMN Execution Agent.
+
+Your task is to analyze the current process state and determine the next executable steps based on the process definition, activity outputs, and role bindings. You must return a valid JSON response as described below.
+
+Process Definition:
+- activities: {activities}
+- gateways: {gateways}
+- events: {events}
+- sequences: {sequences}
+
+Current Step:
+- activity_id: "{activity_id}"
+- user: "{user_email}"
+- submitted_output: {output}
+
+Runtime Context:
+- next_activities: {next_activities}
+- previous_outputs: {previous_outputs}
+- today: {today}
+- instance_name_pattern: "{instance_name_pattern}" // If not provided, fallback to key_value format using process variables and definition name. Instance name must be <= 20 characters.
+
+Instructions:
+1. Determine the updated process variables (`fieldMappings`) from submitted_output or attached image.
+   - Values must match the declared types in the process definition (e.g., boolean -> true/false).
+   - Use contextual clues (roleBindings, instance data) if values are missing. Do not fabricate.
+2. Determine the valid next steps:
+   - The `next_activities` list includes all potential next activities.
+   - If the sequences leading to a next activity have no conditions, assume they are always valid.
+   - If a sequence has a condition, only include the activity if the condition is satisfied using current and previous outputs.
+   - Do not include any next activity whose condition is not satisfied. Instead, record it in `cannotProceedErrors` with type "PROCEED_CONDITION_NOT_MET".
+3. You MUST NOT create or suggest activities not listed in `next_activities`.
+4. For each next activity:
+   - Determine `nextUserEmail` using `roleBindings.endpoint`. If it's a list, use the first item. Always prefer `endpoint` over `default`.
+   - If the next user is an external customer, find the customer email in submitted_output or process data. Do not make up any emails.
+   - If no valid external email is found, return an error with type `DATA_FIELD_NOT_EXIST`.
+5. When image input is present, extract data via OCR and use it to complete the activity.
+6. Construct `instanceName` using the provided pattern or default key-value logic (max 20 chars).
+
+result should be in this JSON format:
+{{
+  "instanceId": "{instance_id}",
+  "instanceName": "process instance name",
+  "processDefinitionId": "{process_definition_id}",
+  "fieldMappings": [
+    {{
+      "key": "process_variable_key",
+      "name": "process_variable_name",
+      "value": <value_matching_type>
+    }}
+  ],
+  "roleBindings": {role_bindings},
+  "completedActivities": [
+    {{
+      "completedActivityId": "activity_id",
+      "completedUserEmail": "user_email",
+      "result": "DONE"
+    }}
+  ],
+  "nextActivities": [
+    {{
+      "nextActivityId": "activity_id",
+      "nextUserEmail": "email_or_agent_id", 
+      "result": "IN_PROGRESS",
+      "messageToUser": "Instructions in Korean: input values, checkpoints, references."
+    }}
+  ],
+  "cannotProceedErrors": [
+    {{
+      "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST",
+      "reason": "설명 (Korean)"
+    }}
+  ],
+  "description": "요약: 완료된 작업과 다음 액티비티에서 수행할 작업을 한국어로 설명"
 }}
 
 Remember: Return ONLY the JSON wrapped in ```json and ``` markers, nothing else.
@@ -484,7 +541,7 @@ def _execute_script_tasks(process_instance: ProcessInstance, process_result: Pro
                     completedUserEmail=activity.nextUserEmail,
                     result="DONE"
                 )
-                completed_activity_dict = completed_activity.dict()
+                completed_activity_dict = completed_activity.model_dump()
                 process_result_json["completedActivities"].append(completed_activity_dict)
         else:
             result = f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found."
@@ -494,9 +551,9 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
                          process_result_json: dict, process_definition, tenant_id: Optional[str] = None):
     """Persist process data to database and vector store"""
     # Upsert workitems
-    upsert_todo_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
-    completed_workitems = upsert_completed_workitem(process_instance.dict(), process_result_json, process_definition, tenant_id)
-    next_workitems = upsert_next_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
+    upsert_todo_workitems(process_instance.model_dump(), process_result_json, process_definition, tenant_id)
+    completed_workitems = upsert_completed_workitem(process_instance.model_dump(), process_result_json, process_definition, tenant_id)
+    next_workitems = upsert_next_workitems(process_instance.model_dump(), process_result_json, process_definition, tenant_id)
     
     # Upsert process instance
     if process_instance.status == "NEW":
@@ -654,6 +711,59 @@ def update_instance_status_on_error(workitem: dict, is_first: bool, is_last: boo
     except Exception as e:
         print(f"[ERROR] Failed to update instance status for {proc_inst_id}: {str(e)}")
 
+def get_selected_info(workitem: dict, process_definition: Any):
+    """
+    워크아이템에 대한 선택된 정보를 반환
+    """
+    try:
+        activities = process_definition.activities
+        sequences = process_definition.sequences
+
+        process_definition_json = fetch_process_definition(process_definition.processDefinitionId, workitem.get('tenant_id'))
+        gateways = process_definition_json.get('gateways', [])
+        events = process_definition_json.get('events', [])
+
+        activity_id = workitem.get('activity_id')
+        output = workitem.get('output')
+        today = datetime.now().strftime("%Y-%m-%d")
+        
+        # Get previous outputs
+        previous_outputs = []
+        previous_workitems = fetch_todolist_by_proc_inst_id(workitem.get('proc_inst_id'), workitem.get('tenant_id'))
+        previous_workitems = [workitem for workitem in previous_workitems if workitem.activity_id != activity_id and workitem.status == "DONE"]
+        for previous_workitem in previous_workitems:
+            previous_outputs.append(previous_workitem.output)
+        
+        # Get next activities
+        next_activities = [activity.id for activity in process_definition.find_next_activities(activity_id)]
+        
+        chain_input = {
+            "activities": activities,
+            "gateways": gateways,
+            "events": events,
+            "sequences": sequences,
+            "activity_id": activity_id,
+            "output": output,
+            "user_id": workitem['user_id'],
+            "previous_outputs": previous_outputs,
+            "today": today,
+            "next_activity_ids": next_activities,
+        }
+        
+        chain_input = selected_info_prompt.format(**chain_input)
+        selected_info_model = ChatOpenAI(model="gpt-4o", temperature=0)
+        selected_info_chain = selected_info_model | parser
+        
+        response = selected_info_chain.invoke(chain_input)
+        selected_info = response.get("selected_info", None)
+        
+        print(f"[DEBUG] selected_info: {selected_info}")
+        
+        return selected_info
+    except Exception as e:
+        print(f"[ERROR] Failed to get selected info for {workitem.get('id')}: {str(e)}")
+        return None
+
 async def handle_workitem(workitem):
     # 워크아이템 위치 판별
     is_first, is_last = get_workitem_position(workitem)
@@ -669,7 +779,7 @@ async def handle_workitem(workitem):
 
     process_definition_json = fetch_process_definition(process_definition_id, tenant_id)
     process_definition = load_process_definition(process_definition_json)
-    process_instance = fetch_process_instance(process_instance_id, tenant_id) if process_instance_id != "new" else None
+    
     if workitem['user_id'] != "external_customer":
         if workitem['user_id'] and ',' in workitem['user_id']:
             user_ids = workitem['user_id'].split(',')
@@ -697,6 +807,7 @@ async def handle_workitem(workitem):
             "email": workitem['user_id'],
             "info": {}
         }
+
     today = datetime.now().strftime("%Y-%m-%d")
     ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id, tenant_id)
     form_html = ui_definition.html if ui_definition else None
@@ -709,13 +820,22 @@ async def handle_workitem(workitem):
     if form_id and output.get(form_id):
         output = output.get(form_id)
         
-    next_activities = []
-    if process_definition:
-        next_activities = [activity.id for activity in process_definition.find_next_activities(activity_id)]
-    
     try:
+        next_activities = []
+        if process_definition:
+            next_activities = [activity.id for activity in process_definition.find_next_activities(activity_id)]
+
+        selected_info = None
+        try:
+            selected_info = get_selected_info(workitem, process_definition)
+        except Exception as e:
+            print(f"[ERROR] Failed to get selected info for {workitem.get('id')}: {str(e)}")
+    
         chain_input = {
-            "processDefinitionJson": process_definition_json,
+            "activities": process_definition.activities,
+            "gateways": process_definition_json.get('gateways', []),
+            "events": process_definition_json.get('events', []),
+            "sequences": process_definition.sequences,
             "instance_id": process_instance_id,
             "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
             "process_definition_id": process_definition_id,
@@ -725,6 +845,7 @@ async def handle_workitem(workitem):
             "today": today,
             "role_bindings": workitem.get('assignees', []),
             "next_activities": next_activities,
+            "previous_outputs": selected_info
         }
         
         collected_text = ""
@@ -791,7 +912,7 @@ async def handle_workitem(workitem):
     if result_json.get("instanceId") != "new" and workitem['proc_inst_id'] == "new":
         instance_id = result_json.get("instanceId")
         new_workitem = fetch_workitem_by_proc_inst_and_activity(instance_id, activity_id, tenant_id)
-        new_workitem_dict = new_workitem.dict()
+        new_workitem_dict = new_workitem.model_dump()
         if new_workitem_dict['id'] != workitem['id']:
             upsert_workitem({
                 "id": workitem['id'],

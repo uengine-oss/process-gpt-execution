@@ -131,7 +131,7 @@ async def submit_workitem(input: dict):
     due_date = due_date.isoformat() if due_date else None
     
     if workitem:
-        workitem_data = workitem.dict()
+        workitem_data = workitem.model_dump()
         workitem_data['status'] = 'SUBMITTED'
         workitem_data['output'] = output
         workitem_data['user_id'] = user_email

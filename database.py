@@ -1092,7 +1092,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     description=activity.description,
                     agent_orch=activity.orchestration
                 )
-                workitem_dict = workitem.dict()
+                workitem_dict = workitem.model_dump()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
                 workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
                 workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
@@ -1241,7 +1241,7 @@ def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool, tenant_id
             messages=message,
             tenant_id=tenant_id
         )
-        chat_item_dict = chat_item.dict()
+        chat_item_dict = chat_item.model_dump()
 
 
         supabase = supabase_client_var.get()

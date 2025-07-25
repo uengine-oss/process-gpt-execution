@@ -119,6 +119,25 @@ def fetch_process_definition_latest_version(def_id, tenant_id: Optional[str] = N
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"No process definition latest version found with ID {def_id}: {e}")
 
+def fetch_ui_definitions_by_def_id(def_id, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+            
+        response = supabase.table('form_def').select('*').eq('proc_def_id', def_id).eq('tenant_id', tenant_id).execute()
+        
+        if response.data and len(response.data) > 0:
+            return [UIDefinition(**item) for item in response.data]
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No UI definitions found with ID {def_id}: {e}")
+
 
 def fetch_ui_definition_by_activity_id(proc_def_id, activity_id, tenant_id: Optional[str] = None):
     try:
