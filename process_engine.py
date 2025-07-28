@@ -161,10 +161,6 @@ async def submit_workitem(input: dict):
         }
         
     upsert_workitem(workitem_data)
-    message_data = {
-        "description": f"{activity.name} 업무를 시작합니다."
-    }
-    upsert_chat_message(process_instance_id, message_data, True, input.get('tenant_id'), False)
     return workitem_data
 
 ############# start of role binding #############
@@ -320,10 +316,6 @@ async def initiate_workitem(input: dict):
     }
 
     upsert_workitem(workitem_data)
-    message_data = {
-        "description": f"{activity.name} 업무를 시작합니다."
-    }
-    upsert_chat_message(process_instance_id, message_data, True, tenant_id, False)
     return workitem_data
 
 async def handle_initiate(request: Request):

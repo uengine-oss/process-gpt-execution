@@ -146,6 +146,10 @@ Your task is to select the necessary data fields required to proceed to the next
 
 The output submitted in the current activity is provided for context only and must not be used as the primary source for selected data.
 
+IMPORTANT: You must carefully balance data privacy with business requirements:
+- EXCLUDE personal/sensitive information such as: names, phone numbers, addresses, emails, social security numbers, credit card numbers, passwords, etc.
+- INCLUDE critical business data such as: order quantities, inventory levels, product information, prices, dates, status codes, reference numbers, etc.
+- For example, in an order processing workflow: include order quantity, product ID, inventory status, but exclude customer name, phone, address.
 
 Process Definition:
 - activities: {activities}
@@ -166,7 +170,12 @@ Instructions:
 2. From the list of previously completed outputs (`previous_outputs`), select only the fields that are necessary for the upcoming activities.
    - Ignore the currently submitted output except for context/reference.
    - Do NOT select fields that are only present in the current activity output.
-3. If the sequence to the next activity contains any condition, ensure that only the outputs from previous activities that satisfy that condition are selected.
+3. Apply data filtering rules:
+   - EXCLUDE: Personal identifiers (names, emails, phones, addresses, SSN, credit cards)
+   - INCLUDE: Business data (quantities, amounts, IDs, statuses, dates, product info)
+   - INCLUDE: Process-related data (order numbers, reference IDs, status codes)
+   - INCLUDE: Operational data (inventory levels, stock quantities, prices)
+4. If the sequence to the next activity contains any condition, ensure that only the outputs from previous activities that satisfy that condition are selected.
 
 Output Format:
 Return ONLY the following JSON structure wrapped in ```json and ``` markers:
@@ -189,7 +198,7 @@ result should be in this JSON format:
 }}
 Remember: Return ONLY the JSON wrapped in ```json and ``` markers, nothing else.
 """
-) 
+)
 
 
 prompt = PromptTemplate.from_template(
@@ -205,34 +214,56 @@ Process Definition:
 - sequences: {sequences}
 
 Current Step:
-- activity_id: "{activity_id}"
-- user: "{user_email}"
+- activity_id: {activity_id}
+- user: {user_email}
 - submitted_output: {output}
 
 Runtime Context:
 - next_activities: {next_activities}
 - previous_outputs: {previous_outputs}
 - today: {today}
-- instance_name_pattern: "{instance_name_pattern}" // If not provided, fallback to key_value format using process variables and definition name. Instance name must be <= 20 characters.
+- instance_name_pattern: {instance_name_pattern} // If empty, fallback to key-value based logic from process variables (max 20 characters).
 
 Instructions:
-1. Determine the updated process variables (`fieldMappings`) from submitted_output or attached image.
-   - Values must match the declared types in the process definition (e.g., boolean -> true/false).
-   - Use contextual clues (roleBindings, instance data) if values are missing. Do not fabricate.
-2. Determine the valid next steps:
-   - The `next_activities` list includes all potential next activities.
-   - If the sequences leading to a next activity have no conditions, assume they are always valid.
-   - If a sequence has a condition, only include the activity if the condition is satisfied using current and previous outputs.
-   - Do not include any next activity whose condition is not satisfied. Instead, record it in `cannotProceedErrors` with type "PROCEED_CONDITION_NOT_MET".
-3. You MUST NOT create or suggest activities not listed in `next_activities`.
-4. For each next activity:
-   - Determine `nextUserEmail` using `roleBindings.endpoint`. If it's a list, use the first item. Always prefer `endpoint` over `default`.
-   - If the next user is an external customer, find the customer email in submitted_output or process data. Do not make up any emails.
-   - If no valid external email is found, return an error with type `DATA_FIELD_NOT_EXIST`.
-5. When image input is present, extract data via OCR and use it to complete the activity.
-6. Construct `instanceName` using the provided pattern or default key-value logic (max 20 chars).
 
-result should be in this JSON format:
+Step 1. Merge output variables
+- Merge submitted_output and previous_outputs into a single key-value dictionary called merged_outputs.
+- Use merged_outputs for all condition evaluation and variable extraction.
+- Do not fabricate or infer values that are not present.
+
+Step 2. Extract updated process variables (fieldMappings)
+- Parse variables from submitted_output.
+- Match value types to the declared types in the process definition (e.g., string, number, boolean).
+- If no new values are found, return an empty list.
+
+Step 3. Determine valid next activities
+- For each item in next_activities, check the sequence condition from the current activity.
+- If there is no condition, include the target activity.
+- If a condition exists, evaluate it using merged_outputs.
+  - Example: "stock_quantity >= order_quantity"
+  - Only include the activity if the condition evaluates to true.
+- Same inputs must always produce the same nextActivities. Do not randomly vary this.
+- If no conditions are satisfied, return a PROCEED_CONDITION_NOT_MET error in cannotProceedErrors.
+- Do not return multiple conflicting nextActivities for exclusive branches.
+
+Step 4. Assign next user
+- Use roleBindings.endpoint to assign nextUserEmail. If a list, pick the first item.
+- If the target role is an external customer, use email from merged_outputs.
+- If no valid email is found, return DATA_FIELD_NOT_EXIST error.
+
+Step 5. Generate instanceName
+- Use instance_name_pattern if provided.
+- If empty, use a fallback such as "processDefinitionId.key", using a value from submitted_output.
+- Ensure result is 20 characters or less.
+
+Step 6. Compose process description
+- In Korean, explain what activity was completed, what decisions were made, and what happens next.
+- If useful data is available, include a list of reference info at the end in the format:
+  - 주문 상품: 삼성 노트북
+  - 재고 수량: 10
+- Omit the list entirely if no meaningful information is available.
+
+Output format (must be wrapped in ```json and ``` markers):
 {{
   "instanceId": "{instance_id}",
   "instanceName": "process instance name",
@@ -266,10 +297,14 @@ result should be in this JSON format:
       "reason": "설명 (Korean)"
     }}
   ],
-  "description": "요약: 완료된 작업과 다음 액티비티에서 수행할 작업을 한국어로 설명"
-}}
+  "description": "Describe the completed tasks and the tasks to be performed in the next activity in Korean and output the reference information list together in the following format
+Example of a list of information referenced:
+- Product Information: Notebook
+- Inventory quantity: 10
 
-Remember: Return ONLY the JSON wrapped in ```json and ``` markers, nothing else.
+Never use an example and never print it out if the list is not available.
+"
+}}
 """
 )
 
@@ -560,16 +595,37 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
         process_instance.proc_inst_name = process_result.instanceName
     _, process_instance = upsert_process_instance(process_instance, tenant_id)
     
-    # Send chat message
-    message_json = json.dumps({
-        "role": "system",
-        "content": process_result.description
-    })
-    upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
+    if completed_workitems:
+        for completed_workitem in completed_workitems:
+            user_info = fetch_assignee_info(completed_workitem.user_id)
+            ui_definition = fetch_ui_definition_by_activity_id(completed_workitem.proc_def_id, completed_workitem.activity_id, tenant_id)
+            form_html = ui_definition.html if ui_definition else None
+            form_id = ui_definition.id if ui_definition else None
+            if completed_workitem.output:
+                output = completed_workitem.output.get(form_id)
+            else:
+                output = {}
+            message_data = {
+                "role": "system" if user_info.get("name") == "external_customer" else "user",
+                "name": user_info.get("name"),
+                "email": user_info.get("email"),
+                "profile": user_info.get("info", {}).get("profile", ""),
+                "content": "",
+                "jsonContent": output if output else {},
+                "htmlContent": form_html if form_html else "",
+                "contentType": "html" if form_html else "text"
+            }
+            upsert_chat_message(completed_workitem.proc_inst_id, message_data, tenant_id)
 
     if process_result.cannotProceedErrors:
         reason = "\n".join(error.reason for error in process_result.cannotProceedErrors)
         message_json = json.dumps({"role": "system", "content": reason})
+        upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
+    else:
+        message_json = json.dumps({
+            "role": "system",
+            "content": process_result.description
+        })
         upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
     
     # Update process_result_json
@@ -810,7 +866,6 @@ async def handle_workitem(workitem):
 
     today = datetime.now().strftime("%Y-%m-%d")
     ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id, tenant_id)
-    form_html = ui_definition.html if ui_definition else None
     output = {}
     if workitem['output'] and isinstance(workitem['output'], str):
         output = json.loads(workitem['output'])
@@ -905,42 +960,17 @@ async def handle_workitem(workitem):
         
         result = execute_next_activity(parsed_output, tenant_id)
         result_json = json.loads(result)
+        
     except Exception as e:
         print(f"[ERROR] Error in handle_workitem for workitem {workitem['id']}: {str(e)}")
         raise e
 
-    if result_json.get("instanceId") != "new" and workitem['proc_inst_id'] == "new":
-        instance_id = result_json.get("instanceId")
-        new_workitem = fetch_workitem_by_proc_inst_and_activity(instance_id, activity_id, tenant_id)
-        new_workitem_dict = new_workitem.model_dump()
-        if new_workitem_dict['id'] != workitem['id']:
-            upsert_workitem({
-                "id": workitem['id'],
-                "proc_inst_id": instance_id,
-                "status": "DONE",
-                "end_date": new_workitem_dict['end_date'].isoformat() if new_workitem_dict['end_date'] else None,
-                "due_date": new_workitem_dict['due_date'].isoformat() if new_workitem_dict['due_date'] else None
-            }, tenant_id)
-            delete_workitem(new_workitem_dict['id'], tenant_id)
-
-    else:
+    if result_json:
         upsert_workitem({
             "id": workitem['id'],
             "status": "DONE",
         }, tenant_id)
         
-        if form_html and output:
-            message_data = {
-                "role": "system" if user_info.get("name") == "external_customer" else "user",
-                "name": user_info.get("name"),
-                "email": user_info.get("email"),
-                "profile": user_info.get("info", {}).get("profile", ""),
-                "content": "",
-                "jsonContent": output if output else {},
-                "htmlContent": form_html if form_html else "",
-                "contentType": "html" if form_html else "text"
-            }
-            upsert_chat_message(workitem['proc_inst_id'], message_data, tenant_id)
         try:
             print(f"[DEBUG] process_output for workitem {workitem['id']}")
             process_output(workitem, tenant_id)
