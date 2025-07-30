@@ -18,7 +18,7 @@ import queue
 import time
 
 from database import (
-    fetch_process_definition, fetch_process_instance, 
+    fetch_process_definition, fetch_process_instance, fetch_ui_definition,
     fetch_ui_definition_by_activity_id, fetch_user_info, fetch_assignee_info, 
     get_vector_store, fetch_workitem_by_proc_inst_and_activity, upsert_process_instance, 
     upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
@@ -138,69 +138,6 @@ class CustomJsonOutputParser(SimpleJsonOutputParser):
 
 parser = CustomJsonOutputParser()
 
-selected_info_prompt = PromptTemplate.from_template(
-"""
-You are a BPMN Process Reasoning Agent.
-
-Your task is to select the necessary data fields required to proceed to the next activity, based strictly on outputs from previously completed workitems.
-
-The output submitted in the current activity is provided for context only and must not be used as the primary source for selected data.
-
-IMPORTANT: You must carefully balance data privacy with business requirements:
-- EXCLUDE personal/sensitive information such as: names, phone numbers, addresses, emails, social security numbers, credit card numbers, passwords, etc.
-- INCLUDE critical business data such as: order quantities, inventory levels, product information, prices, dates, status codes, reference numbers, etc.
-- For example, in an order processing workflow: include order quantity, product ID, inventory status, but exclude customer name, phone, address.
-
-Process Definition:
-- activities: {activities}
-- gateways: {gateways}
-- events: {events}
-- sequences: {sequences}
-
-Execution Context:
-- current_activity_id: {activity_id}
-- current_activity_output: {output}
-- current_participants: {user_id}
-- previous_outputs: {previous_outputs}
-- next_activity_ids: {next_activity_ids}
-- today: {today}
-
-Instructions:
-1. Review the process definition to understand the input requirements of the next activities.
-2. From the list of previously completed outputs (`previous_outputs`), select only the fields that are necessary for the upcoming activities.
-   - Ignore the currently submitted output except for context/reference.
-   - Do NOT select fields that are only present in the current activity output.
-3. Apply data filtering rules:
-   - EXCLUDE: Personal identifiers (names, emails, phones, addresses, SSN, credit cards)
-   - INCLUDE: Business data (quantities, amounts, IDs, statuses, dates, product info)
-   - INCLUDE: Process-related data (order numbers, reference IDs, status codes)
-   - INCLUDE: Operational data (inventory levels, stock quantities, prices)
-4. If the sequence to the next activity contains any condition, ensure that only the outputs from previous activities that satisfy that condition are selected.
-
-Output Format:
-Return ONLY the following JSON structure wrapped in ```json and ``` markers:
-
-CRITICAL INSTRUCTIONS:
-- Do not include any explanations, comments, or extra text.
-- Use double quotes for all keys and string values.
-- No trailing commas.
-- Ensure valid JSON that can be parsed without errors.
-
-result should be in this JSON format:
-{{
-  "selected_info": [
-    {{
-      "key": "output_data_key",
-      "name": "output_data_name",
-      "value": <value_from_previous_outputs>
-    }}
-  ]
-}}
-Remember: Return ONLY the JSON wrapped in ```json and ``` markers, nothing else.
-"""
-)
-
-
 prompt = PromptTemplate.from_template(
 """
 You are a BPMN Execution Agent.
@@ -222,7 +159,25 @@ Runtime Context:
 - next_activities: {next_activities}
 - previous_outputs: {previous_outputs}
 - today: {today}
+- gateway_condition_data: {gateway_condition_data}
 - instance_name_pattern: {instance_name_pattern} // If empty, fallback to key-value based logic from process variables (max 20 characters).
+
+--- OPTIONAL USER FEEDBACK ---
+
+User Feedback (Optional):
+- message_from_user: "{user_feedback_message}"
+
+If message_from_user is not empty:
+- Carefully interpret the message to determine if any part of the result should be temporarily modified.
+- Common changes include:
+  - Wrong user assignment (e.g., 담당자 잘못 지정)
+  - Incorrect or missing variables
+  - Incorrect description wording
+  - Request for different activity routing
+- Use your best judgment to revise output accordingly.
+- Changes should be applied **provisionally** and marked as feedback-applied.
+- Indicate in the `description` (in Korean) that the result has been adjusted based on user feedback.
+- Do not assume the user wants to override everything — only update what's explicitly or implicitly requested.
 
 Instructions:
 
@@ -291,18 +246,25 @@ Output format (must be wrapped in ```json and ``` markers):
       "messageToUser": "Instructions in Korean: input values, checkpoints, references."
     }}
   ],
+  "feedback_applied": true | false,
+  "isFinalized": true | false,
   "cannotProceedErrors": [
     {{
       "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST",
       "reason": "설명 (Korean)"
     }}
   ],
-  "description": "Describe the completed tasks and the tasks to be performed in the next activity in Korean and output the reference information list together in the following format
-Example of a list of information referenced:
+  "description": "Describe the completed task and the task to be performed in the next activity with a list of reference information and output the list of reference information together in the following format.
+Example)
+Completed Activity: "completed_activity_id"
+- Description:
+Next Activity: "next_activity_id"
+- Description:
+List of information referenced:
 - Product Information: Notebook
 - Inventory quantity: 10
-
 Never use an example and never print it out if the list is not available.
+Please write all content in Korean.
 "
 }}
 """
@@ -509,7 +471,7 @@ def _process_next_activities(process_instance: ProcessInstance, process_result: 
             break
             
         if process_definition.find_gateway_by_id(activity.nextActivityId):
-            next_activities = process_definition.find_next_activities(activity.nextActivityId)
+            next_activities = process_definition.find_next_activities(activity.nextActivityId, False)
             if next_activities:
                 process_instance.current_activity_ids = [act.id for act in next_activities]
                 process_result_json["nextActivities"] = []
@@ -557,7 +519,7 @@ def _execute_script_tasks(process_instance: ProcessInstance, process_result: Pro
             
             if result.returncode != 0:
                 # Script task execution error
-                process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
+                process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id, False)]
                 process_result_json["result"] = result.stderr
             else:
                 process_result_json["result"] = result.stdout
@@ -767,57 +729,121 @@ def update_instance_status_on_error(workitem: dict, is_first: bool, is_last: boo
     except Exception as e:
         print(f"[ERROR] Failed to update instance status for {proc_inst_id}: {str(e)}")
 
-def get_selected_info(workitem: dict, process_definition: Any):
+def get_field_value(field_info: str, process_definition: Any, process_instance_id: str, tenant_id: str):
     """
-    워크아이템에 대한 선택된 정보를 반환
+    산출물에서 특정 필드의 값을 추출
     """
     try:
-        activities = process_definition.activities
-        sequences = process_definition.sequences
+        field_value = {}
+        process_definition_id = process_definition.processDefinitionId
+        split_field_info = field_info.split('.')
+        form_id = split_field_info[0]
+        field_id = split_field_info[1]
+        activity_id = form_id.replace("_form", "").replace(f"{process_definition_id}_", "")
+        
+        workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_id, activity_id, tenant_id)
+        if workitem:
+            field_value[form_id] = {}
+            output = workitem.output
+            if output:
+                if output.get(form_id) and output.get(form_id).get(field_id):
+                    field_value[form_id][field_id] = output.get(form_id).get(field_id)
+                else:
+                    return None
+            else:
+                return None
 
-        process_definition_json = fetch_process_definition(process_definition.processDefinitionId, workitem.get('tenant_id'))
-        gateways = process_definition_json.get('gateways', [])
-        events = process_definition_json.get('events', [])
+        return field_value
+    except Exception as e:
+        print(f"[ERROR] Failed to get output field value for {field_info}: {str(e)}")
+        return None
 
+def group_fields_by_form(field_values: dict) -> dict:
+    """
+    필드 값들을 폼별로 그룹화하는 공통 함수
+    
+    Args:
+        field_values: {'form_id.field_name': {'form_id': {'field_name': value}}, ...} 형태의 딕셔너리
+    
+    Returns:
+        {'form_id': {'field_name': value, ...}, ...} 형태의 그룹화된 딕셔너리
+    """
+    form_groups = {}
+    
+    for field_key, field_value in field_values.items():
+        if not field_value:
+            continue
+            
+        form_id = field_key.split('.')[0]
+        if form_id not in form_groups:
+            form_groups[form_id] = {}
+        
+        field_id = field_key.split('.')[1] if '.' in field_key else field_key
+        
+        if isinstance(field_value, dict) and form_id in field_value:
+            actual_value = field_value[form_id].get(field_id)
+            if actual_value is not None:
+                form_groups[form_id][field_id] = actual_value
+    
+    return {form_id: fields for form_id, fields in form_groups.items() if fields}
+
+def get_input_data(workitem: dict, process_definition: Any):
+    """
+    워크아이템 실행에 필요한 입력 데이터 추출
+    """
+    try:
         activity_id = workitem.get('activity_id')
-        output = workitem.get('output')
-        today = datetime.now().strftime("%Y-%m-%d")
+        activity = process_definition.find_activity_by_id(activity_id)
+
+        if not activity:
+            return None
         
-        # Get previous outputs
-        previous_outputs = []
-        previous_workitems = fetch_todolist_by_proc_inst_id(workitem.get('proc_inst_id'), workitem.get('tenant_id'))
-        previous_workitems = [workitem for workitem in previous_workitems if workitem.activity_id != activity_id and workitem.status == "DONE"]
-        for previous_workitem in previous_workitems:
-            previous_outputs.append(previous_workitem.output)
-        
-        # Get next activities
-        next_activities = [activity.id for activity in process_definition.find_next_activities(activity_id)]
-        
-        chain_input = {
-            "activities": activities,
-            "gateways": gateways,
-            "events": events,
-            "sequences": sequences,
-            "activity_id": activity_id,
-            "output": output,
-            "user_id": workitem['user_id'],
-            "previous_outputs": previous_outputs,
-            "today": today,
-            "next_activity_ids": next_activities,
-        }
-        
-        chain_input = selected_info_prompt.format(**chain_input)
-        selected_info_model = ChatOpenAI(model="gpt-4o", temperature=0)
-        selected_info_chain = selected_info_model | parser
-        
-        response = selected_info_chain.invoke(chain_input)
-        selected_info = response.get("selected_info", None)
-        
-        print(f"[DEBUG] selected_info: {selected_info}")
-        
-        return selected_info
+        input_data = {}
+        input_fields = activity.inputData
+        if len(input_fields) != 0:
+            # 각 필드의 값을 가져오기
+            field_values = {}
+            for input_field in input_fields:
+                field_value = get_field_value(input_field, process_definition, workitem.get('proc_inst_id'), workitem.get('tenant_id'))
+                if field_value:
+                    field_values[input_field] = field_value
+            
+            # 폼별로 그룹화
+            grouped_data = group_fields_by_form(field_values)
+            input_data.update(grouped_data)
+
+        return input_data
+
     except Exception as e:
         print(f"[ERROR] Failed to get selected info for {workitem.get('id')}: {str(e)}")
+        return None
+
+def get_gateway_condition_data(workitem: dict, process_definition: Any, gateway_id: str):
+    """
+    워크아이템 실행에 필요한 게이트웨이 조건 데이터 추출
+    """
+    try:
+        gateway = process_definition.find_gateway_by_id(gateway_id)
+        if not gateway:
+            return None
+        
+        condition_data = {}
+        if gateway.conditionData:
+            process_instance_id = workitem.get('proc_inst_id')
+            # 각 필드의 값을 가져오기
+            field_values = {}
+            for condition_field in gateway.conditionData:
+                field_value = get_field_value(condition_field, process_definition, process_instance_id, workitem.get('tenant_id'))
+                if field_value:
+                    field_values[condition_field] = field_value
+            
+            # 폼별로 그룹화
+            grouped_data = group_fields_by_form(field_values)
+            condition_data.update(grouped_data)
+
+        return condition_data
+    except Exception as e:
+        print(f"[ERROR] Failed to get gateway condition data for {workitem.get('id')}: {str(e)}")
         return None
 
 async def handle_workitem(workitem):
@@ -877,12 +903,20 @@ async def handle_workitem(workitem):
         
     try:
         next_activities = []
+        gateway_condition_data = None
         if process_definition:
-            next_activities = [activity.id for activity in process_definition.find_next_activities(activity_id)]
+            next_activities = [activity.id for activity in process_definition.find_next_activities(activity_id, True)]
+            for act_id in next_activities:
+                if process_definition.find_gateway_by_id(act_id):
+                    try:
+                        gateway_condition_data = get_gateway_condition_data(workitem, process_definition, act_id)
+                    except Exception as e:
+                        print(f"[ERROR] Failed to get gateway condition data for {workitem.get('id')}: {str(e)}")
+                        gateway_condition_data = None
 
-        selected_info = None
+        workitem_input_data = None
         try:
-            selected_info = get_selected_info(workitem, process_definition)
+            workitem_input_data = get_input_data(workitem, process_definition)
         except Exception as e:
             print(f"[ERROR] Failed to get selected info for {workitem.get('id')}: {str(e)}")
     
@@ -900,7 +934,9 @@ async def handle_workitem(workitem):
             "today": today,
             "role_bindings": workitem.get('assignees', []),
             "next_activities": next_activities,
-            "previous_outputs": selected_info
+            "previous_outputs": workitem_input_data,
+            "user_feedback_message": workitem.get('feedback', ''),
+            "gateway_condition_data": gateway_condition_data
         }
         
         collected_text = ""
@@ -966,10 +1002,17 @@ async def handle_workitem(workitem):
         raise e
 
     if result_json:
-        upsert_workitem({
-            "id": workitem['id'],
-            "status": "DONE",
-        }, tenant_id)
+        if result_json.get("cannotProceedErrors"):
+            upsert_workitem({
+                "id": workitem['id'],
+                "status": "IN_PROGRESS",
+            }, tenant_id)
+            return
+        else:
+            upsert_workitem({
+                "id": workitem['id'],
+                "status": "DONE",
+            }, tenant_id)
         
         try:
             print(f"[DEBUG] process_output for workitem {workitem['id']}")

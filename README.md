@@ -10,7 +10,7 @@ cp .env.example .env
 
 # Edit .env file with your actual values
 # - OPENAI_API_KEY: Your OpenAI API key
-# - SUPABASE_URL, SUPABASE_KEY: Your Supabase configuration
+# - SUPABASE_URL, SUPABASE_KEY: Your Supabase configuration. SUPABASE_KEY should be a Service Role key
 # - Other required environment variables
 ```
 

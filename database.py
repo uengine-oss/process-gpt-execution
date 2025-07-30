@@ -654,6 +654,7 @@ class WorkItem(BaseModel):
     log: Optional[str] = None
     agent_mode: Optional[str] = None
     agent_orch: Optional[str] = None
+    feedback: Optional[Dict[str, Any]] = {}
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):

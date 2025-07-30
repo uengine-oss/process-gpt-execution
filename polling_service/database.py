@@ -119,6 +119,24 @@ def fetch_process_definition_latest_version(def_id, tenant_id: Optional[str] = N
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"No process definition latest version found with ID {def_id}: {e}")
 
+def fetch_ui_definition(def_id):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        response = supabase.table('form_def').select('*').eq('id', def_id.lower()).eq('tenant_id', subdomain).execute()
+        
+        if response.data:
+            # Assuming the first match is the desired one since ID should be unique
+            ui_definition = UIDefinition(**response.data[0])
+            return ui_definition
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No UI definition found with ID {def_id}: {e}")
+
 def fetch_ui_definitions_by_def_id(def_id, tenant_id: Optional[str] = None):
     try:
         supabase = supabase_client_var.get()
@@ -223,6 +241,7 @@ class WorkItem(BaseModel):
     log: Optional[str] = None
     agent_mode: Optional[str] = None
     agent_orch: Optional[str] = None
+    feedback: Optional[Dict[str, Any]] = {}
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):

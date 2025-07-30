@@ -65,6 +65,7 @@ class ProcessGateway(BaseModel):
     type: Optional[str] = None
     process: Optional[str] = None
     condition: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    conditionData: Optional[List[str]] = None
     properties: Optional[str] = None
     description: Optional[str] = None
     srcTrg: Optional[str] = None
@@ -174,18 +175,19 @@ class ProcessDefinition(BaseModel):
 
         return prev_activities
 
-    def find_next_activities(self, current_activity_id: str) -> List[ProcessActivity]:
+    def find_next_activities(self, current_activity_id: str, include_events: bool = False) -> List[Union[ProcessActivity, ProcessGateway]]:
         """
         Finds and returns the next activities in the process based on the current activity ID.
         If the next node is a gateway, it traverses through the gateway to find the actual next activities.
 
         Args:
             current_activity_id (str): The ID of the current activity.
+            include_events (bool): If True, includes events in the result. If False, only returns activities.
 
         Returns:
-            List[ProcessActivity]: A list of the next activities if found, empty list otherwise.
+            List[Union[ProcessActivity, ProcessGateway]]: A list of the next activities/events if found, empty list otherwise.
         """
-        next_activities = []
+        next_items = []
         visited = set()  # 순환 참조 방지를 위한 방문 체크
         
         def find_next_through_gateway(node_id: str):
@@ -202,19 +204,22 @@ class ProcessDefinition(BaseModel):
                 # 타겟이 액티비티인 경우
                 target_activity = self.find_activity_by_id(target_id)
                 if target_activity:
-                    if target_activity not in next_activities:
-                        next_activities.append(target_activity)
+                    if target_activity not in next_items:
+                        next_items.append(target_activity)
                     continue
                 
                 # 타겟이 게이트웨이인 경우
                 target_gateway = self.find_gateway_by_id(target_id)
                 if target_gateway:
+                    if include_events and target_gateway not in next_items:
+                        next_items.append(target_gateway)
+                    
                     # 게이트웨이에서 나가는 시퀀스 찾기
                     gateway_outgoing = [seq for seq in self.sequences if seq.source == target_gateway.id]
                     for gw_seq in gateway_outgoing:
                         gw_target = self.find_activity_by_id(gw_seq.target)
-                        if gw_target and gw_target not in next_activities:
-                            next_activities.append(gw_target)
+                        if gw_target and gw_target not in next_items:
+                            next_items.append(gw_target)
                         elif not gw_target:
                             # 게이트웨이에서 또 다른 게이트웨이로 가는 경우 재귀 호출
                             next_gateway = self.find_gateway_by_id(gw_seq.target)
@@ -230,26 +235,29 @@ class ProcessDefinition(BaseModel):
             # 타겟이 액티비티인 경우
             target_activity = self.find_activity_by_id(target_id)
             if target_activity:
-                if target_activity not in next_activities:
-                    next_activities.append(target_activity)
+                if target_activity not in next_items:
+                    next_items.append(target_activity)
                 continue
             
             # 타겟이 게이트웨이인 경우
             target_gateway = self.find_gateway_by_id(target_id)
             if target_gateway:
+                if include_events and target_gateway not in next_items:
+                    next_items.append(target_gateway)
+                
                 # 게이트웨이에서 나가는 시퀀스 찾기
                 gateway_outgoing = [seq for seq in self.sequences if seq.source == target_gateway.id]
                 for gw_seq in gateway_outgoing:
                     gw_target = self.find_activity_by_id(gw_seq.target)
-                    if gw_target and gw_target not in next_activities:
-                        next_activities.append(gw_target)
+                    if gw_target and gw_target not in next_items:
+                        next_items.append(gw_target)
                     elif not gw_target:
                         # 게이트웨이에서 또 다른 게이트웨이로 가는 경우 재귀 호출
                         next_gateway = self.find_gateway_by_id(gw_seq.target)
                         if next_gateway:
                             find_next_through_gateway(gw_seq.target)
         
-        return next_activities
+        return next_items
     
     def find_end_activity(self) -> Optional[ProcessActivity]:
         """
