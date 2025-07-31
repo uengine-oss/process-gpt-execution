@@ -15,7 +15,8 @@ from contextvars import ContextVar
 import csv
 from dotenv import load_dotenv
 import socket
-from firebase_admin import credentials, messaging
+# Firebase 관련 import 제거 - FCM 서비스로 분리됨
+# from firebase_admin import credentials, messaging
 import logging
 import asyncio
 from collections import defaultdict
@@ -28,8 +29,8 @@ subdomain_var = ContextVar('subdomain', default='localhost')
 jwt_secret_var = ContextVar('jwt_secret', default='')
 algorithm_var = ContextVar('algorithm', default='HS256')
 
-# 전역 변수로 변경
-firebase_app = None
+# Firebase 전역 변수 제거 - FCM 서비스로 분리됨
+# firebase_app = None
 
 # Realtime 로그 설정
 realtime_logger = logging.getLogger("realtime_subscriber")
@@ -1703,126 +1704,12 @@ def check_tenant_owner(tenant_id: str, uid: str) -> bool:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
-def fetch_device_token(user_id: str) -> Optional[str]:
-    """
-    특정 사용자의 FCM 디바이스 토큰을 조회합니다.
-    
-    Args:
-        user_id (str): 사용자 ID (이메일)
-        
-    Returns:
-        Optional[str]: 디바이스 토큰
-    """
-    try:
-        supabase = supabase_client_var.get()
-        if supabase is None:
-            raise Exception("Supabase client is not configured for this request")
-        
-        response = supabase.table('user_devices').select('device_token').eq('user_email', user_id).execute()
-        
-        if response.data:
-            device_token = response.data[0].get('device_token')
-            if device_token and device_token.strip():  # None이 아니고 빈 문자열이 아닌 경우
-                return device_token
-        
-        return None
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# fetch_device_token 함수 제거 - FCM 서비스로 분리됨
+# 필요한 경우 fcm_client.get_device_token() 사용
 
 
-def send_fcm_message(user_id: str, notification_data: dict) -> dict:
-    """
-    특정 사용자에게 FCM 푸시 알림을 전송합니다.
-    
-    Args:
-        user_id (str): 사용자 ID (이메일)
-        notification_data (dict): 알림 데이터
-            - title: 알림 제목
-            - body: 알림 내용
-            - data: 추가적인 데이터 (dict)
-            - type: 알림 타입 ('chat', 'workitem_bmp' 등)
-        
-    Returns:
-        dict: 알림 전송 결과
-    """
-    try:
-        global firebase_app
-        # 디바이스 토큰 조회
-        device_token = fetch_device_token(user_id)
-        if not device_token:
-            return {"success": False, "message": "No device token found for the user"}
-        
-        # FCM 메시지 발송
-        if not firebase_app:
-            try:
-                # Kubernetes 마운트된 시크릿에서 credentials 읽기
-                secret_path = '/etc/secrets/firebase-credentials.json'
-                if os.path.exists(secret_path):
-                    cred = credentials.Certificate(secret_path)
-                    firebase_app = firebase_admin.initialize_app(cred)
-                else:
-                    cred = credentials.Certificate('firebase-credentials.json')
-                    firebase_app = firebase_admin.initialize_app(cred)
-                
-            except Exception as e:
-                import traceback
-                realtime_logger.error(f"Stack trace: {traceback.format_exc()}")
-        
-        if not firebase_app:
-            raise Exception("Firebase app is not initialized")
-        
-        success_count = 0
-        failed = False
-
-        title = notification_data.get('title', '알림')
-        body = notification_data.get('body', notification_data.get('description', ''))
-        data = notification_data.get('data', {})
-        data['type'] = notification_data.get('type', 'general')
-        data['url'] = notification_data.get('url', '')
-        sender_name = notification_data.get('from_user_id', '')  # 발신자 이름
-
-        if sender_name:
-            noti_title = sender_name
-            noti_body = f"{body}\n{title}"
-        else:
-            noti_title = title
-            noti_body = body
-
-        data['title'] = noti_title
-        data['body'] = noti_body
-
-        message = messaging.Message(
-            token=device_token,
-            data=data,
-            android=messaging.AndroidConfig(
-                priority='high',
-            ),
-            apns=messaging.APNSConfig(
-                payload=messaging.APNSPayload(
-                    aps=messaging.Aps(
-                        badge=1,
-                        sound='default'
-                    )
-                )
-            )
-        )
-        
-        try:
-            response = messaging.send(message)
-            success_count = 1
-        except Exception as e:
-            print(f"FCM 메시지 전송 오류: {e}")
-            failed = True
-        
-        return {
-            "success": success_count > 0,
-            "message": "Message sent successfully" if success_count > 0 else "Failed to send message",
-        }
-    
-    except Exception as e:
-        print(f"FCM 메시지 전송 오류: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# send_fcm_message 함수 제거 - FCM 서비스로 분리됨
+# 필요한 경우 fcm_client.send_fcm_notification() 사용
 
 
 
@@ -1832,6 +1719,7 @@ def handle_new_notification(notification_record):
     새로운 알림에 대해 FCM 푸시 알림을 전송하는 핸들러
     """
     try:
+        from fcm_client import send_fcm_notification
         
         user_id = notification_record.get('user_id')
         if not user_id:
@@ -1860,8 +1748,9 @@ def handle_new_notification(notification_record):
             }
         }
         
-        # FCM 메시지 전송
-        result = send_fcm_message(user_id, notification_data)
+        # FCM 서비스를 통해 메시지 전송
+        result = send_fcm_notification(user_id, notification_data)
+        realtime_logger.info(f"FCM 알림 전송 결과: {result}")
         
     except Exception as e:
         realtime_logger.error(f"알림 처리 중 오류 발생: {e}")
@@ -1903,32 +1792,7 @@ def fetch_unprocessed_notifications() -> Optional[List[dict]]:
         return None
 
 
-async def check_new_notifications():
-    """
-    미처리 알림을 체크하고 FCM 푸시를 전송합니다.
-    """
-    try:
-        notifications = fetch_unprocessed_notifications()
-        if notifications:
-            
-            for notification in notifications:
-                handle_new_notification(notification)
-        
-    except Exception as e:
-        realtime_logger.error(f"알림 체크 중 오류: {e}")
-
-
-async def notification_polling_task():
-    """
-    15초마다 새로운 알림을 체크하는 폴링 태스크
-    """
-    while True:
-        try:
-            await check_new_notifications()
-            await asyncio.sleep(15)  # 15초 대기
-            
-        except Exception as e:
-            realtime_logger.error(f"폴링 태스크 오류: {e}")
-            await asyncio.sleep(15)  # 오류 발생 시에도 15초 후 재시도
+# check_new_notifications와 notification_polling_task 함수 제거
+# 이제 FCM 서비스에서 폴링 및 알림 처리를 담당합니다.
 
 
