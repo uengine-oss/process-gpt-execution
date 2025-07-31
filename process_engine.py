@@ -10,11 +10,9 @@ from process_definition import load_process_definition
 import uuid
 import json
 import pytz
-import requests
 
 # ChatOpenAI 객체 생성
 model = ChatOpenAI(model="gpt-4o", streaming=True)
-vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096, streaming=True)
 
 # parser 생성
 import re
@@ -57,6 +55,7 @@ async def create_process_instance(process_definition, process_instance_id, is_in
                         participants.append(endpoint)
                 else:
                     participants.append(role_binding.get('endpoint'))
+        
         
         process_definition_id = process_definition.processDefinitionId
         process_instance_data = {
@@ -102,12 +101,19 @@ async def submit_workitem(input: dict):
             endpoint = role_binding.get('endpoint')
             if roles and isinstance(roles, list) and len(roles) > 0:
                 for role in roles:
-                    if role.get('name') == role_binding.get('roleName') and (role.get('default') is None or role.get('default') == ''):
+                    if role.get('name') == role_binding.get('name') and (role.get('default') is None or role.get('default') == ''):
                         role['default'] = endpoint
 
             if endpoint == 'external_customer':
                 user_email = 'external_customer'
                 break
+
+        process_definition_json['roles'] = roles
+        definition_data = {
+            'id': process_definition_id,
+            'definition': process_definition_json
+        }
+        upsert_process_definition(definition_data)
 
     if not user_email:
         user_email = input.get('email')
@@ -125,7 +131,7 @@ async def submit_workitem(input: dict):
     due_date = due_date.isoformat() if due_date else None
     
     if workitem:
-        workitem_data = workitem.dict()
+        workitem_data = workitem.model_dump()
         workitem_data['status'] = 'SUBMITTED'
         workitem_data['output'] = output
         workitem_data['user_id'] = user_email
@@ -151,13 +157,10 @@ async def submit_workitem(input: dict):
             "output": output,
             "retry": 0,
             "consumer": None,
+            "description": activity.description
         }
         
     upsert_workitem(workitem_data)
-    message_data = {
-        "description": f"{activity.name} 업무를 시작합니다."
-    }
-    upsert_chat_message(process_instance_id, message_data, True, input.get('tenant_id'), False)
     return workitem_data
 
 ############# start of role binding #############
@@ -308,14 +311,11 @@ async def initiate_workitem(input: dict):
         "tool": activity.tool,
         "output": None,
         "retry": 0,
-        "consumer": None
+        "consumer": None,
+        "description": activity.description
     }
 
     upsert_workitem(workitem_data)
-    message_data = {
-        "description": f"{activity.name} 업무를 시작합니다."
-    }
-    upsert_chat_message(process_instance_id, message_data, True, tenant_id, False)
     return workitem_data
 
 async def handle_initiate(request: Request):

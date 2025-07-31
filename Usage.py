@@ -12,7 +12,7 @@ def get_service_by_category(category: str, model: str):
 def usage(raw_data):
     try:
         if not is_service_available(raw_data.get("tenantId", raw_data.get("tenant_id", "")).strip()):
-            raise HTTPException(status_code=403, detail="테넌트 제한 초과 관리자에게 문의하세요.")
+            raise HTTPException(status_code=403, detail="사용 제한되었습니다. 관리자에게 문의하세요.")
         
         insert_usage({
             "service_master_id": raw_data.get("service_master_id", raw_data.get("service_master_id", "")).strip(),
@@ -72,7 +72,7 @@ CREATE TABLE public.service (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),  -- 생성일
     tenant_id TEXT REFERENCES tenants(id),              -- 테넌트
 
-    CONSTRAINT unique_name_category UNIQUE (name, category)
+    CONSTRAINT unique_name_category UNIQUE (id, name, category)
 );
 
 # service_rate(서비스 종류별 가격) - 실제 credits_per_unit 파악.

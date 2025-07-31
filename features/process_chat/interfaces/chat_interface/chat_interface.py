@@ -45,7 +45,7 @@ class ChatInterface:
                         "tokens": request_tokens,
                         "creditPerUnit": 0 # get_service_by_category의 credit_per_unit
                     },
-                    "cachedRequest": {
+                    "cached_request": {
                         "tokens": 0,
                         "creditPerUnit": 0
                     },

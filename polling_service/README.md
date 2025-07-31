@@ -4,82 +4,74 @@
 
 ## 기능
 
-- 데이터베이스에서 SUBMITTED 상태의 워크아이템 폴링
+- 데이터베이스에서 SUBMITTED 상태의 워크아이템 폴링 및 처리
 - A2A 에이전트 모드 워크아이템 처리
-- 워크아이템 상태 업데이트 및 다음 단계 생성
-- 채팅 메시지 로깅
 
 ## 설치 및 실행
-
-### Docker를 사용한 실행
-
-1. 환경 변수 설정:
-```bash
-export SUPABASE_URL=your_supabase_url
-export SUPABASE_KEY=your_supabase_key
-export SUPABASE_JWT_SECRET=your_jwt_secret
-export DB_NAME=your_db_name
-export DB_USER=your_db_user
-export DB_PASSWORD=your_db_password
-export DB_HOST=your_db_host
-export DB_PORT=your_db_port
-```
-
-2. Docker Compose로 실행:
-```bash
-docker-compose up -d
-```
 
 ### 로컬 실행
 
 1. 의존성 설치:
 ```bash
-pip install -r requirements.txt
+# 가상환경 생성 및 활성화
+uv venv .venv
+
+# Windows PowerShell에서 가상환경 활성화
+.venv\Scripts\activate
+
+# Linux/Mac에서 가상환경 활성화
+source .venv/bin/activate
+
+# 의존성 설치
+uv pip install -r requirements.txt
+
+# 또는 pyproject.toml을 사용하는 경우
+uv sync
 ```
 
-2. 환경 변수 설정 후 실행:
+2. 환경 변수 설정:
 ```bash
+# .env.example 파일을 복사하여 .env 파일 생성
+cp .env.example .env
+
+# .env 파일을 편집하여 실제 값들을 설정하세요
+# Windows의 경우:
+notepad .env
+
+# Linux/Mac의 경우:
+nano .env
+# 또는
+vim .env
+```
+
+3. 서비스 실행:
+```bash
+# uv를 사용하여 직접 실행 (가상환경 자동 관리)
+uv run main.py
+
+# 또는 가상환경을 활성화한 후 실행
+# Windows PowerShell:
+.venv\Scripts\activate
+python main.py
+
+# Linux/Mac:
+source .venv/bin/activate
 python main.py
 ```
 
-## 서비스 구조
-
-```
-polling_service/
-├── polling_service.py      # 메인 폴링 로직
-├── workitem_processor.py   # 워크아이템 처리 로직
-├── agent_processor.py      # 에이전트 처리 로직
-├── database.py                 # 데이터베이스 함수들
-├── main.py                     # 서비스 진입점
-├── Dockerfile                  # Docker 이미지 설정
-├── docker-compose.yml          # Docker Compose 설정
-├── requirements.txt            # Python 의존성
-└── README.md                   # 이 파일
-```
-
 ## 환경 변수
-
+- `ENV`: 실행 모드
+- `OPENAI_API_KEY`: OpenAI API 키
 - `SUPABASE_URL`: Supabase 프로젝트 URL
 - `SUPABASE_KEY`: Supabase API 키
 - `SUPABASE_JWT_SECRET`: JWT 시크릿 키
-- `DB_NAME`: PostgreSQL 데이터베이스 이름
-- `DB_USER`: PostgreSQL 사용자명
-- `DB_PASSWORD`: PostgreSQL 비밀번호
-- `DB_HOST`: PostgreSQL 호스트
-- `DB_PORT`: PostgreSQL 포트
+- `SMTP_SERVER`: SMTP 서버 주소
+- `SMTP_PORT`: SMTP 포트 번호
+- `SMTP_USERNAME`: SMTP 사용자명
+- `SMTP_PASSWORD`: SMTP 비밀번호
+- `MEMENTO_SERVICE_URL`: Memento 서비스 URL (기본값: http://localhost:8005)
+- `EXECUTION_SERVICE_URL`: 실행 서비스 URL (기본값: http://localhost:8000)
+- `LANGSMITH_API_KEY`: LangSmith API 키
+- `LANGSMITH_PROJECT`: LangSmith 프로젝트명
 
-## 로그
 
-서비스는 다음과 같은 로그를 출력합니다:
-- `[INFO]`: 일반 정보
-- `[DEBUG]`: 디버그 정보
-- `[ERROR]`: 오류 정보
-
-## 중지
-
-Docker Compose를 사용하는 경우:
-```bash
-docker-compose down
-```
-
-로컬 실행의 경우 Ctrl+C로 중지할 수 있습니다. 

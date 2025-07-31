@@ -24,7 +24,7 @@ subdomain_var = ContextVar('subdomain', default='localhost')
 def setting_database():
     try:
         if os.getenv("ENV") != "production":
-            load_dotenv()
+            load_dotenv(override=True)
         
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_KEY")
@@ -119,6 +119,43 @@ def fetch_process_definition_latest_version(def_id, tenant_id: Optional[str] = N
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"No process definition latest version found with ID {def_id}: {e}")
 
+def fetch_ui_definition(def_id):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        response = supabase.table('form_def').select('*').eq('id', def_id.lower()).eq('tenant_id', subdomain).execute()
+        
+        if response.data:
+            # Assuming the first match is the desired one since ID should be unique
+            ui_definition = UIDefinition(**response.data[0])
+            return ui_definition
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No UI definition found with ID {def_id}: {e}")
+
+def fetch_ui_definitions_by_def_id(def_id, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+            
+        response = supabase.table('form_def').select('*').eq('proc_def_id', def_id).eq('tenant_id', tenant_id).execute()
+        
+        if response.data and len(response.data) > 0:
+            return [UIDefinition(**item) for item in response.data]
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No UI definitions found with ID {def_id}: {e}")
+
 
 def fetch_ui_definition_by_activity_id(proc_def_id, activity_id, tenant_id: Optional[str] = None):
     try:
@@ -203,6 +240,8 @@ class WorkItem(BaseModel):
     consumer: Optional[str] = None
     log: Optional[str] = None
     agent_mode: Optional[str] = None
+    agent_orch: Optional[str] = None
+    feedback: Optional[Dict[str, Any]] = {}
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
@@ -285,6 +324,39 @@ def insert_process_instance(process_instance_data: dict, tenant_id: Optional[str
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
+def set_participants_from_workitems(process_instance, tenant_id=None):
+    """
+    proc_inst_id에 해당하는 todolist의 user_id들을 파싱하여 participants를 세팅
+    """
+    workitems = fetch_todolist_by_proc_inst_id(process_instance.proc_inst_id, tenant_id)
+    user_ids = []
+    if workitems:
+        for workitem in workitems:
+            if workitem.user_id:
+                ids = [uid.strip() for uid in workitem.user_id.split(',') if uid.strip()]
+                user_ids.extend(ids)
+    participants = []
+    seen = set()
+    for user_id in user_ids:
+        if (
+            user_id is not None
+            and user_id != ''
+            and user_id != 'undefined'
+            and user_id.strip() != ''
+        ):
+            if user_id == 'external_customer':
+                if user_id not in seen:
+                    participants.append(user_id)
+                    seen.add(user_id)
+            else:
+                assignee_info = fetch_assignee_info(user_id)
+                if assignee_info['type'] not in ['unknown', 'error'] and user_id not in seen:
+                    participants.append(user_id)
+                    seen.add(user_id)
+    process_instance.participants = participants
+    return process_instance
+
+
 def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Optional[str] = None) -> (bool, ProcessInstance):
     process_definition = process_instance.process_definition
     if process_definition is None:
@@ -308,6 +380,10 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
             else:
                 status = 'RUNNING'
     
+    # Set participants from workitems
+    process_instance = set_participants_from_workitems(process_instance, tenant_id)
+    participants = process_instance.participants
+
     process_instance_data = process_instance.dict(exclude={'process_definition'})  # Convert Pydantic model to dict
     process_instance_data = convert_decimal(process_instance_data)
 
@@ -325,22 +401,6 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
         else:
             arcv_id = None
         
-        participants = process_instance.participants
-        
-        # 빈 값들 필터링 및 유효성 검증
-        if participants:
-            valid_user_ids = []
-            for user_id in participants:
-                if user_id is not None and user_id != '' and user_id != 'undefined' and user_id.strip() != '':
-                    # 'external_customer'는 특별 케이스로 허용
-                    if user_id == 'external_customer':
-                        valid_user_ids.append(user_id)
-                    else:
-                        assignee_info = fetch_assignee_info(user_id)
-                        if assignee_info['type'] not in ['unknown', 'error']:
-                            valid_user_ids.append(user_id)
-            participants = valid_user_ids
-
         response = supabase.table('bpm_proc_inst').upsert({
             'proc_inst_id': process_instance.proc_inst_id,
             'proc_inst_name': process_instance.proc_inst_name,
@@ -625,10 +685,13 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     due_date=due_date,
                     tenant_id=tenant_id,
                     assignees=assignees,
-                    duration=activity.duration
+                    duration=activity.duration,
+                    description=activity.description,
+                    agent_orch=activity.orchestration,
+                    agent_mode=activity.agentMode
                 )
             
-            workitem_dict = workitem.dict()
+            workitem_dict = workitem.model_dump()
             workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
             workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
             workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
@@ -665,7 +728,7 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                 workitem.user_id = activity_data['nextUserEmail']
             if workitem.agent_mode == None:
                 workitem.agent_mode = determine_agent_mode(workitem.user_id, workitem.agent_mode)
-            print(f"[DEBUG] workitem.agent_mode: {workitem.agent_mode}")
+            # print(f"[DEBUG] workitem.agent_mode: {workitem.agent_mode}")
         else:
             activity = process_definition.find_activity_by_id(activity_data['nextActivityId'])
             if activity:
@@ -688,12 +751,14 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     due_date=due_date,
                     tool=activity.tool,
                     tenant_id=tenant_id,
-                    agent_mode=agent_mode
+                    agent_mode=agent_mode,
+                    description=activity.description,
+                    agent_orch=activity.orchestration
                 )
         
         try:
             if workitem:
-                workitem_dict = workitem.dict()
+                workitem_dict = workitem.model_dump()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
                 workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
                 workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
@@ -797,9 +862,11 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     tenant_id=tenant_id,
                     assignees=assignees if assignees else [],
                     duration=activity.duration,
-                    agent_mode=agent_mode
+                    agent_mode=agent_mode,
+                    description=activity.description,
+                    agent_orch=activity.orchestration
                 )
-                workitem_dict = workitem.dict()
+                workitem_dict = workitem.model_dump()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
                 workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
                 workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None

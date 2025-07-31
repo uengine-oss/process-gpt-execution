@@ -64,12 +64,20 @@ spec:
             secretKeyRef:
               key: JWT_SECRET
               name: my-secrets
-        # PostgreSQL 직접 연결 환경 변수 제거 (Supabase Client API 사용)
-        # - name: DB_NAME
-        # - name: DB_USER  
-        # - name: DB_PASSWORD
-        # - name: DB_HOST
-        # - name: DB_PORT
+        - name: SMTP_SERVER
+          value: smtp.gmail.com
+        - name: SMTP_PORT
+          value: 587
+        - name: SMTP_USERNAME
+          valueFrom:
+            secretKeyRef:
+              key: SMTP_USERNAME
+              name: my-secrets
+        - name: SMTP_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: SMTP_PASSWORD
+              name: my-secrets
         - name: EXECUTION_SERVICE_URL
           value: http://execution-service:8000
         - name: MEMENTO_SERVICE_URL

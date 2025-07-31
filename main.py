@@ -25,7 +25,7 @@ from agent_chat import add_routes_to_app as add_agent_chat_routes_to_app
 from dotenv import load_dotenv
 
 if os.getenv("ENV") != "production":
-    load_dotenv()
+    load_dotenv(override=True)
 
 os.environ["LANGSMITH_TRACING"] = "true"
 os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"

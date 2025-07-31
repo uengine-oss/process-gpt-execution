@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from polling_service import run_polling_service
 
 if os.getenv("ENV") != "production":
-    load_dotenv()
+    load_dotenv(override=True)
 
 os.environ["LANGSMITH_TRACING"] = "true"
 os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"

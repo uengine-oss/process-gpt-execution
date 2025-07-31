@@ -11,7 +11,8 @@ import logging
 
 from database import fetch_todolist_by_proc_inst_id, upsert_workitem, upsert_chat_message, fetch_workitem_by_proc_inst_and_activity
 
-load_dotenv()
+if os.getenv("ENV") != "production":
+    load_dotenv(override=True)
 
 # 로깅 설정
 logging.basicConfig(
@@ -48,7 +49,7 @@ agent_request_prompt = PromptTemplate.from_template(
 Please create a request text for the agent using the information provided below. 
 
 Previous Output: {previous_output}
-Workitem: {workitem}
+Workitem Information: {workitem_description}
 
 Generate a clear and concise request text that the agent can understand and process.
 The text should include all relevant context from the previous output and workitem information.
@@ -112,7 +113,7 @@ async def generate_agent_request_text(prev_workitem, current_workitem, tenant_id
 
         preprocessing_input = {
             "previous_output": previous_output,
-            "workitem": current_workitem.dict() if current_workitem else {}
+            "workitem_description": current_workitem.description if current_workitem else ""
         }
         logger.info(f"Calling preprocessing chain with input keys: {list(preprocessing_input.keys())}")
         response = await preprocessing_chain.ainvoke(preprocessing_input)

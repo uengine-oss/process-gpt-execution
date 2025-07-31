@@ -43,7 +43,7 @@ if not realtime_logger.handlers:
 def setting_database():
     try:
         if os.getenv("ENV") != "production":
-            load_dotenv()
+            load_dotenv(override=True)
 
         jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
         jwt_secret_var.set(jwt_secret)
@@ -69,7 +69,7 @@ async def setting_async_database():
     """비동기 Supabase 클라이언트 설정"""
     try:
         if os.getenv("ENV") != "production":
-            load_dotenv()
+            load_dotenv(override=True)
         
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_KEY")
@@ -654,6 +654,8 @@ class WorkItem(BaseModel):
     consumer: Optional[str] = None
     log: Optional[str] = None
     agent_mode: Optional[str] = None
+    agent_orch: Optional[str] = None
+    feedback: Optional[Dict[str, Any]] = {}
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
@@ -1058,7 +1060,10 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     role_bindings = process_result_data['roleBindings']
                     for role_binding in role_bindings:
                         if role_binding['name'] == activity.role:
-                            user_id = role_binding['endpoint'][0] if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
+                            if isinstance(role_binding['endpoint'], list):
+                                user_id = ','.join(role_binding['endpoint'])
+                            else:
+                                user_id = role_binding['endpoint']
                             assignees.append(role_binding)
                 
                 agent_mode = None
@@ -1085,9 +1090,11 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     tenant_id=tenant_id,
                     assignees=assignees if assignees else [],
                     duration=activity.duration,
-                    agent_mode=agent_mode
+                    agent_mode=agent_mode,
+                    description=activity.description,
+                    agent_orch=activity.orchestration
                 )
-                workitem_dict = workitem.dict()
+                workitem_dict = workitem.model_dump()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
                 workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
                 workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
@@ -1236,7 +1243,7 @@ def upsert_chat_message(chat_room_id: str, data: Any, is_system: bool, tenant_id
             messages=message,
             tenant_id=tenant_id
         )
-        chat_item_dict = chat_item.dict()
+        chat_item_dict = chat_item.model_dump()
 
 
         supabase = supabase_client_var.get()

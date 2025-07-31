@@ -22,6 +22,7 @@ class ProcessData(BaseModel):
 
 class ProcessRole(BaseModel):
     name: str
+    default: Optional[Any] = None
     endpoint: Optional[Any] = None
     resolutionRule: Optional[str] = None
     
@@ -40,6 +41,8 @@ class ProcessActivity(BaseModel):
     properties: Optional[str] = None
     duration: Optional[int] = None
     srcTrg: Optional[str] = None
+    agentMode: Optional[str] = None
+    orchestration: Optional[str] = None
     
     def __hash__(self):
         return hash(self.id)  # 또는 다른 고유한 속성을 사용
@@ -133,7 +136,7 @@ class ProcessDefinition(BaseModel):
                                 return self.find_prev_activity(sequence.source)
         return None
     
-    def find_prev_activities(self, activity_id, prev_activities=None, visited=None):
+    def find_prev_activities(self, activity_id, prev_activities=None, visited=None) -> List[ProcessActivity]:
         if prev_activities is None:
             prev_activities = []
         if visited is None:
@@ -341,4 +344,6 @@ if __name__ == "__main__":
 class UIDefinition(BaseModel):
     id: str
     html: str
+    proc_def_id: Optional[str] = None
+    activity_id: Optional[str] = None
     fields_json: Optional[List[Dict[str, Any]]] = None
