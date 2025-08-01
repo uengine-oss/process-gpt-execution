@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fcm-service-deployment
+  namespace: default
+spec:
+  replicas: 2
+  revisionHistoryLimit: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # 새로운 파드가 준비될 때까지 기존 파드를 유지
+  selector:
+    matchLabels:
+      app: fcm-service
+  template:
+    metadata:
+      labels:
+        app: fcm-service
+    spec:
+      terminationGracePeriodSeconds: 300  # 5분 grace period
+      containers:
+      - name: fcm-service
+        image: ghcr.io/uengine-oss/fcm-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8666
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "echo 'Graceful shutdown initiated'; sleep 10"]
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8666
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8666
+          initialDelaySeconds: 30
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 3
+        env:
+        - name: SUPABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              key: SUPABASE_URL
+              name: my-config
+        - name: SUPABASE_KEY
+          valueFrom:
+            secretKeyRef:
+              key: SERVICE_ROLE_KEY
+              name: my-secrets
+        - name: SUPABASE_JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              key: JWT_SECRET
+              name: my-secrets
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              key: DB_NAME
+              name: my-secrets
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              key: DB_USER
+              name: my-secrets
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: DB_PASSWORD
+              name: my-secrets
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              key: DB_HOST
+              name: my-secrets
+        - name: DB_PORT
+          valueFrom:
+            secretKeyRef:
+              key: DB_PORT
+              name: my-secrets
+        - name: ENV
+          value: production
+        volumeMounts:
+        - name: firebase-credentials
+          mountPath: /etc/secrets
+          readOnly: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+      - name: firebase-credentials
+        secret:
+          secretName: firebase-credentials
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fcm-service
+  namespace: default
+spec:
+  selector:
+    app: fcm-service
+  ports:
+  - port: 8666
+    targetPort: 8666
+    protocol: TCP
+  type: ClusterIP
