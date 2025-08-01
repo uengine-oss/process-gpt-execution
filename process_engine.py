@@ -4,9 +4,10 @@ from langchain_openai import ChatOpenAI
 from langchain.output_parsers.json import SimpleJsonOutputParser
 from datetime import datetime, timedelta
 
-from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, upsert_chat_message, upsert_process_definition
+from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, fetch_workitem_by_id, upsert_process_definition
 from process_definition import load_process_definition
 
+import traceback
 import uuid
 import json
 import pytz
@@ -40,7 +41,6 @@ async def handle_submit(request: Request):
         return await submit_workitem(input)
 
     except Exception as e:
-        import traceback
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e)) from e
     
@@ -69,7 +69,6 @@ async def create_process_instance(process_definition, process_instance_id, is_in
         }
         insert_process_instance(process_instance_data)
     except Exception as e:
-        import traceback
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e)) from e
     
@@ -326,12 +325,63 @@ async def handle_initiate(request: Request):
         return await initiate_workitem(input)
 
     except Exception as e:
-        import traceback
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e)) from e
     
 ############# end of initiate #############
 
+############# start of feedback #############
+feedback_prompt = PromptTemplate.from_template("""
+You are a helpful assistant that can provide feedback on a process.
+
+Process Definition: {process_definition}
+Need to get feedback for the following activity: {activity_id}
+
+Executed Activity Task's Result: {activity_result}
+
+Please write the feedback in Korean.
+
+result should be in this JSON format:
+{{
+    "feedback": [
+        "feedback1",
+        "feedback2",
+        "feedback3"
+    ]
+}}
+"""
+)
+
+feedback_chain = (
+    feedback_prompt | model | parser
+)
+
+async def handle_get_feedback(request: Request):
+    try:
+        body = await request.json()
+        
+        process_definition_id = body.get('processDefinitionId')
+        process_definition_json = fetch_process_definition(process_definition_id)
+        process_definition = load_process_definition(process_definition_json)
+        
+        activity_id = body.get('activityId')
+        task_id = body.get('taskId')
+        workitem = fetch_workitem_by_id(task_id)
+        
+        chain_input = {
+            "process_definition": process_definition,
+            "activity_id": activity_id,
+            "activity_result": workitem
+        }
+        result = feedback_chain.invoke(chain_input)
+        feedback = result.get('feedback')
+        return feedback
+
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+############# end of feedback ##############
 
 
 def add_routes_to_app(app) :
@@ -339,6 +389,7 @@ def add_routes_to_app(app) :
     app.add_api_route("/vision-complete", handle_submit, methods=["POST"])
     app.add_api_route("/role-binding", handle_role_binding, methods=["POST"])
     app.add_api_route("/initiate", handle_initiate, methods=["POST"])
+    app.add_api_route("/get-feedback", handle_get_feedback, methods=["POST"])
 
 """
 # try this: 

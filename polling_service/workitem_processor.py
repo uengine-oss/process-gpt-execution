@@ -234,16 +234,19 @@ Output format (must be wrapped in ```json and ``` markers):
   "completedActivities": [
     {{
       "completedActivityId": "activity_id",
+      "completedActivityName": "activity_name",
       "completedUserEmail": "user_email",
-      "result": "DONE"
+      "result": "DONE",
+      "description": "완료된 활동에 대한 설명 (Korean)"
     }}
   ],
   "nextActivities": [
     {{
       "nextActivityId": "activity_id",
+      "nextActivityName": "activity_name",
       "nextUserEmail": "email_or_agent_id", 
       "result": "IN_PROGRESS",
-      "messageToUser": "Instructions in Korean: input values, checkpoints, references."
+      "description": "다음 활동에 대한 설명 (Korean)"
     }}
   ],
   "feedback_applied": true | false,
@@ -254,18 +257,12 @@ Output format (must be wrapped in ```json and ``` markers):
       "reason": "설명 (Korean)"
     }}
   ],
-  "description": "Describe the completed task and the task to be performed in the next activity with a list of reference information and output the list of reference information together in the following format.
-Example)
-Completed Activity: "completed_activity_id"
-- Description:
-Next Activity: "next_activity_id"
-- Description:
-List of information referenced:
-- Product Information: Notebook
-- Inventory quantity: 10
-Never use an example and never print it out if the list is not available.
-Please write all content in Korean.
-"
+  "referenceInfo": [
+    {{
+      "key": "이전 산출물에서 참조한 키 (in Korean)",
+      "value": "이전 산출물에서 참조한 값 (in Korean)"
+    }}
+  ]
 }}
 """
 )
@@ -273,15 +270,21 @@ Please write all content in Korean.
 # Pydantic model for process execution
 class Activity(BaseModel):
     nextActivityId: Optional[str] = None
+    nextActivityName: Optional[str] = None
     nextUserEmail: Optional[str] = None
     result: Optional[str] = None
+    description: Optional[str] = None
 
 class CompletedActivity(BaseModel):
     completedActivityId: Optional[str] = None
+    completedActivityName: Optional[str] = None
     completedUserEmail: Optional[str] = None
     result: Optional[str] = None
+    description: Optional[str] = None
 
-
+class ReferenceInfo(BaseModel):
+    key: Optional[str] = None
+    value: Optional[str] = None
 
 class FieldMapping(BaseModel):
     key: str
@@ -301,8 +304,8 @@ class ProcessResult(BaseModel):
     processDefinitionId: str
     result: Optional[str] = None
     cannotProceedErrors: Optional[List[ProceedError]] = None
-    description: str
-
+    referenceInfo: Optional[List[ReferenceInfo]] = None
+    
 # upsert 디바운스 큐 및 쓰레드 정의 (파일 상단에 위치)
 upsert_queue = queue.Queue()
 
@@ -584,9 +587,15 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
         message_json = json.dumps({"role": "system", "content": reason})
         upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
     else:
+        description = {
+            "referenceInfo": process_result_json.get("referenceInfo", []),
+            "completedActivities": process_result_json.get("completedActivities", []),
+            "nextActivities": process_result_json.get("nextActivities", [])
+        }
         message_json = json.dumps({
             "role": "system",
-            "content": process_result.description
+            "contentType": "json",
+            "jsonContent": description
         })
         upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
     

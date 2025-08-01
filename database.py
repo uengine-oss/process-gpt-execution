@@ -654,7 +654,7 @@ class WorkItem(BaseModel):
     log: Optional[str] = None
     agent_mode: Optional[str] = None
     agent_orch: Optional[str] = None
-    feedback: Optional[Dict[str, Any]] = {}
+    feedback: Optional[List[Dict[str, Any]]] = []
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
@@ -915,6 +915,24 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
+def fetch_workitem_by_id(workitem_id: str, tenant_id: Optional[str] = None) -> Optional[WorkItem]:
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+            
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+            
+        response = supabase.table('todolist').select("*").eq('id', workitem_id).eq('tenant_id', tenant_id).execute()
+        
+        if response.data and len(response.data) > 0:
+            return WorkItem(**response.data[0])
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
     try:

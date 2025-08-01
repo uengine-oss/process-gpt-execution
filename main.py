@@ -2,10 +2,6 @@ import os
 
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
-# 환경에 따른 캐시 디렉토리 설정
-# CACHE_DIR = "/data" if os.path.exists("/.dockerenv") else "."
-# os.makedirs(CACHE_DIR, exist_ok=True)
-
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,15 +21,13 @@ from dotenv import load_dotenv
 
 if os.getenv("ENV") != "production":
     load_dotenv(override=True)
+    # 캐시 적용
+    from langchain.cache import SQLiteCache
+    from langchain.globals import set_llm_cache
+    set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 
 os.environ["LANGSMITH_TRACING"] = "true"
 os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
-
-# #캐시 적용
-# from langchain.cache import SQLiteCache
-# from langchain.globals import set_llm_cache
-
-# set_llm_cache(SQLiteCache(database_path=os.path.join(CACHE_DIR, ".langchain.db")))
 
 
 app = FastAPI(
