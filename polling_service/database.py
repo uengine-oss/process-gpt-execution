@@ -890,6 +890,10 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                 if agent_orch == 'none':
                     agent_orch = None
 
+                status = "TODO"
+                if(activity.type == "intermediateThrowEvent"):
+                    status = "IN_PROGRESS"
+
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     reference_ids=reference_ids if prev_activities else [],
@@ -898,7 +902,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     activity_id=safeget(activity, 'id', ''),
                     activity_name=safeget(activity, 'name', ''),
                     user_id=user_id,
-                    status="TODO",
+                    status=status,
                     tool=safeget(activity, 'tool', ''),
                     start_date=start_date,
                     due_date=due_date,
