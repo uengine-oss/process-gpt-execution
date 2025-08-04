@@ -249,8 +249,6 @@ Output format (must be wrapped in ```json and ``` markers):
       "description": "다음 활동에 대한 설명 (Korean)"
     }}
   ],
-  "feedback_applied": true | false,
-  "isFinalized": true | false,
   "cannotProceedErrors": [
     {{
       "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST",
@@ -944,7 +942,7 @@ async def handle_workitem(workitem):
             "role_bindings": workitem.get('assignees', []),
             "next_activities": next_activities,
             "previous_outputs": workitem_input_data,
-            "user_feedback_message": workitem.get('feedback', ''),
+            "user_feedback_message": workitem.get('temp_feedback', ''),
             "gateway_condition_data": gateway_condition_data
         }
         
