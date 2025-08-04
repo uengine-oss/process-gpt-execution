@@ -23,7 +23,7 @@ from database import (
     get_vector_store, fetch_workitem_by_proc_inst_and_activity, upsert_process_instance, 
     upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
     upsert_todo_workitems, upsert_workitem, delete_workitem, ProcessInstance,
-    fetch_todolist_by_proc_inst_id
+    fetch_todolist_by_proc_inst_id, execute_rpc
 )
 from process_definition import load_process_definition
 from code_executor import execute_python_code
@@ -186,12 +186,28 @@ Step 1. Merge output variables
 - Use merged_outputs for all condition evaluation and variable extraction.
 - Do not fabricate or infer values that are not present.
 
-Step 2. Extract updated process variables (fieldMappings)
-- Parse variables from submitted_output.
-- Match value types to the declared types in the process definition (e.g., string, number, boolean).
-- If no new values are found, return an empty list.
+Step 2. Detect interrupting events
+- If any intermediateThrowEvent from `events` contains a cron-style expression field:
+  - Do not rely on predefined expression values.
+  - Instead, infer the appropriate cron expression dynamically using merged_outputs and the current date.
+  - Identify any date field in merged_outputs that is likely associated with the event (e.g., payment_date, due_date, etc).
+  - If today's date matches that value, proceed to the next check.
+  - Only consider the event as valid **if it is reachable from the current activity** based on the `sequences` graph.
+    - Use a forward traversal from activity_id to verify connectivity to the event_id.
+  - When the event is due and reachable:
+    - Extract the day and month from the matched field.
+    - Generate a cron expression in the format `"0 0 DD MM *"` (e.g., "0 0 30 7 *").
+    - Use this value as `expression` in both nextActivities and completedActivities (for display only).
+    - Set interruptByEvent to true.
+    - Return only this event in nextActivities.
+    - Do NOT evaluate or return gateway-based activities.
+    
+Step 3. If no event overrides, evaluate next activities
+- For each next_activities item, match its sequence condition.
+- Evaluate the condition using merged_outputs.
+- If no condition is matched, return a PROCEED_CONDITION_NOT_MET error.
 
-Step 3. Determine valid next activities
+Step 4. Determine valid next activities
 - For each item in next_activities, check the sequence condition from the current activity.
 - If there is no condition, include the target activity.
 - If a condition exists, evaluate it using merged_outputs.
@@ -201,17 +217,17 @@ Step 3. Determine valid next activities
 - If no conditions are satisfied, return a PROCEED_CONDITION_NOT_MET error in cannotProceedErrors.
 - Do not return multiple conflicting nextActivities for exclusive branches.
 
-Step 4. Assign next user
+Step 5. Assign next user
 - Use roleBindings.endpoint to assign nextUserEmail. If a list, pick the first item.
 - If the target role is an external customer, use email from merged_outputs.
 - If no valid email is found, return DATA_FIELD_NOT_EXIST error.
 
-Step 5. Generate instanceName
+Step 6. Generate instanceName
 - Use instance_name_pattern if provided.
 - If empty, use a fallback such as "processDefinitionId.key", using a value from submitted_output.
 - Ensure result is 20 characters or less.
 
-Step 6. Compose process description
+Step 7. Compose process description
 - In Korean, explain what activity was completed, what decisions were made, and what happens next.
 - If useful data is available, include a list of reference info at the end in the format:
   - 주문 상품: 삼성 노트북
@@ -236,15 +252,34 @@ Output format (must be wrapped in ```json and ``` markers):
       "completedActivityId": "activity_id",
       "completedActivityName": "activity_name",
       "completedUserEmail": "user_email",
+      "type": "activity",
       "result": "DONE",
+      "description": "완료된 활동에 대한 설명 (Korean)"
+    }},
+    {{
+      "completedActivityId": "event_id",
+      "completedUserEmail": "email_or_agent_id",
+      "type": "event",
+      "expression": "cron expression",
+      "dueDate": "YYYY-MM-DD",
+      "result": "DONE"
       "description": "완료된 활동에 대한 설명 (Korean)"
     }}
   ],
   "nextActivities": [
     {{
       "nextActivityId": "activity_id",
-      "nextActivityName": "activity_name",
-      "nextUserEmail": "email_or_agent_id", 
+      "nextUserEmail": "email_or_agent_id",
+      "type": "activity",
+      "result": "IN_PROGRESS",
+      "messageToUser": "Instructions in Korean"
+    }},
+    {{
+      "nextActivityId": "event_id",
+      "nextUserEmail": "email_or_agent_id",
+      "type": "event",
+      "expression": "cron expression",
+      "dueDate": "YYYY-MM-DD",
       "result": "IN_PROGRESS",
       "description": "다음 활동에 대한 설명 (Korean)"
     }}
@@ -272,6 +307,8 @@ class Activity(BaseModel):
     nextUserEmail: Optional[str] = None
     result: Optional[str] = None
     description: Optional[str] = None
+    type: Optional[str] = None
+    expression: Optional[str] = None
 
 class CompletedActivity(BaseModel):
     completedActivityId: Optional[str] = None
@@ -471,23 +508,29 @@ def _process_next_activities(process_instance: ProcessInstance, process_result: 
             process_instance.current_activity_ids = []
             break
             
-        if process_definition.find_gateway_by_id(activity.nextActivityId):
-            next_activities = process_definition.find_next_activities(activity.nextActivityId, False)
-            if next_activities:
-                process_instance.current_activity_ids = [act.id for act in next_activities]
-                process_result_json["nextActivities"] = []
-                next_activity_dicts = [
-                    Activity(
-                        nextActivityId=act.id,
-                        nextUserEmail=activity.nextUserEmail,
-                        result="IN_PROGRESS"
-                    ).model_dump() for act in next_activities
-                ]
-                process_result_json["nextActivities"].extend(next_activity_dicts)
-            else:
-                process_instance.current_activity_ids = []
+        gateway = process_definition.find_gateway_by_id(activity.nextActivityId)
+        if gateway:
+            if gateway.type == "intermediateThrowEvent":
+                process_instance.current_activity_ids = [gateway.id]
                 process_result_json["nextActivities"] = []
                 break
+            else:
+                next_activities = process_definition.find_next_activities(activity.nextActivityId, True)
+                if next_activities:
+                    process_instance.current_activity_ids = [act.id for act in next_activities]
+                    process_result_json["nextActivities"] = []
+                    next_activity_dicts = [
+                        Activity(
+                            nextActivityId=act.id,
+                            nextUserEmail=activity.nextUserEmail,
+                            result="IN_PROGRESS"
+                        ).model_dump() for act in next_activities
+                    ]
+                    process_result_json["nextActivities"].extend(next_activity_dicts)
+                else:
+                    process_instance.current_activity_ids = []
+                    process_result_json["nextActivities"] = []
+                    break
                 
         elif activity.result == "IN_PROGRESS" and activity.nextActivityId not in process_instance.current_activity_ids:
             process_instance.current_activity_ids = [activity.nextActivityId]
@@ -545,6 +588,98 @@ def _execute_script_tasks(process_instance: ProcessInstance, process_result: Pro
             result = f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found."
             process_result_json["result"] = result
 
+def _register_event(process_instance: ProcessInstance, process_result: ProcessResult, 
+                   process_result_json: dict, process_definition):
+    """Register intermediate events when process instance is in WAITING status"""
+    try:
+        print(f"[DEBUG] Starting event registration for process instance: {process_instance.proc_inst_id}")
+        
+        # Find intermediate events in current process state
+        intermediate_events = []
+        
+        # Check current activity IDs for intermediate events
+        if process_result.nextActivities:
+            for activity in process_result.nextActivities:
+                # Check if activity is an intermediate event (gateway with event type)
+                gateway = process_definition.find_gateway_by_id(activity.nextActivityId)
+                if gateway and _is_intermediate_event(gateway):
+                    intermediate_events.append({
+                        'event_id': gateway.id,
+                        'event_name': gateway.name,
+                        'event_type': gateway.type,
+                        'condition': gateway.condition,
+                        'expression': activity.expression,
+                        'process_id': process_instance.proc_inst_id,
+                        'properties': gateway.properties
+                    })
+                    print(f"[DEBUG] Found intermediate event: {gateway.id} of type {gateway.type}")
+        
+        # Register events if found
+        if intermediate_events:
+            for event in intermediate_events:
+                _register_single_event(process_instance, event, process_result_json)
+                print(f"[INFO] Registered intermediate event: {event['event_id']}")
+        else:
+            print(f"[DEBUG] No intermediate events found for process instance: {process_instance.proc_inst_id}")
+            
+    except Exception as e:
+        print(f"[ERROR] Failed to register events for process instance {process_instance.proc_inst_id}: {str(e)}")
+        # Don't raise exception to avoid breaking the main process flow
+        import traceback
+        print(traceback.format_exc())
+def _is_intermediate_event(gateway) -> bool:
+    """Check if gateway represents an intermediate event"""
+    intermediate_event_types = [
+        "intermediateThrowEvent",
+        "intermediateCatchEvent", 
+        "timerIntermediateEvent",
+        "messageIntermediateEvent",
+        "signalIntermediateEvent",
+        "conditionalIntermediateEvent",
+        "linkIntermediateEvent",
+        "escalationIntermediateEvent",
+        "errorIntermediateEvent",
+        "cancelIntermediateEvent",
+        "compensationIntermediateEvent"
+    ]
+    
+    return gateway.type in intermediate_event_types
+def _register_single_event(process_instance: ProcessInstance, event: dict, process_result_json: dict):
+    """Register a single intermediate event - Implementation placeholder"""
+    # TODO: Implement actual event registration logic here
+    # This could involve:
+    # - Creating event listeners for timer events
+    # - Setting up message subscriptions for message events  
+    # - Registering signal handlers for signal events
+    # - Setting up conditional checks for conditional events
+    # - Storing event metadata in database
+    
+    print(f"[PLACEHOLDER] Event registration logic for {event['event_type']} event {event['event_id']} goes here")
+    
+    # Example structure for what the implementation might look like:
+    _register_timer_event(process_instance, event)
+    # elif event['event_type'] == 'messageIntermediateEvent':
+    #     _register_message_event(process_instance, event)
+    # elif event['event_type'] == 'signalIntermediateEvent':
+    #     _register_signal_event(process_instance, event)
+    # else:
+    #     _register_generic_event(process_instance, event)
+    
+def _register_timer_event(process_instance: ProcessInstance, event: dict):
+    """Register a timer intermediate event"""
+    print(f"[INFO] Registering timer intermediate event: {event['event_id']}")
+    job_name = f"{event['process_id']}_{event['event_id']}"
+    cron_expr = event['expression']
+    params = {
+        "p_job_name": job_name,
+        "p_cron_expr": cron_expr,
+        "p_input": {
+            "proc_inst_id": event['process_id'],
+            "activity_id": event['event_id']
+        }
+    }
+    result = execute_rpc("register_cron_intermidiated", params)
+    return result
 def _persist_process_data(process_instance: ProcessInstance, process_result: ProcessResult, 
                          process_result_json: dict, process_definition, tenant_id: Optional[str] = None):
     """Persist process data to database and vector store"""
@@ -636,6 +771,9 @@ def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = 
         
         # Update process variables
         _update_process_variables(process_instance, process_result.fieldMappings)
+        
+        # Regester event
+        _register_event(process_instance, process_result, process_result_json, process_definition)
         
         # Process next activities
         _process_next_activities(process_instance, process_result, process_result_json, process_definition)

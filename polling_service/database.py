@@ -63,6 +63,17 @@ def execute_sql(sql_query):
     
     except Exception as e:
         return(f"An error occurred while executing the SQL query: {e}")
+    
+def execute_rpc(rpc_name, params):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.rpc(rpc_name, params).execute()
+        return response.data
+    except Exception as e:
+        return(f"An error occurred while executing the RPC: {e}")
 
 
 def fetch_process_definition(def_id, tenant_id: Optional[str] = None):
@@ -689,24 +700,28 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                 if completed_activity['completedUserEmail'] != user_id:
                     user_id = completed_activity['completedUserEmail']
 
+                agent_orch = safeget(activity, 'orchestration', None)
+                if agent_orch == 'none':
+                    agent_orch = None
+                    
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=completed_activity['completedActivityId'],
-                    activity_name=activity.name,
+                    activity_name=safeget(activity, 'name', ''),
                     user_id=user_id,
                     status=completed_activity['result'],
-                    tool=activity.tool,
+                    tool=safeget(activity, 'tool', ''),
                     start_date=start_date,
                     end_date=datetime.now(pytz.timezone('Asia/Seoul')) if completed_activity['result'] == 'DONE' else None,
                     due_date=due_date,
                     tenant_id=tenant_id,
                     assignees=assignees,
-                    duration=activity.duration,
-                    description=activity.description,
-                    agent_orch=activity.orchestration,
-                    agent_mode=activity.agentMode
+                    duration=safeget(activity, 'duration', 0),
+                    description=safeget(activity, 'description', ''),
+                    agent_orch=agent_orch,
+                    agent_mode=safeget(activity, 'agentMode', None)
                 )
             
             workitem_dict = workitem.model_dump()
@@ -726,6 +741,8 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
         print(f"[ERROR] upsert_completed_workitem: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e)) from e
 
+def safeget(obj, attr, default=None):
+    return getattr(obj, attr, default)
 
 def upsert_next_workitems(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None) -> List[WorkItem]:
     workitems = []
@@ -757,21 +774,26 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                         start_date = start_date + timedelta(days=prev_activity.duration)
                 due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
                 agent_mode = determine_agent_mode(activity_data['nextUserEmail'], activity.agentMode)
+                
+                agent_orch = safeget(activity, 'orchestration', None)
+                if agent_orch == 'none':
+                    agent_orch = None
+                    
                 workitem = WorkItem(
                     id=str(uuid.uuid4()),
                     proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
-                    activity_id=activity.id,
-                    activity_name=activity.name,
+                    activity_id=safeget(activity, 'id', ''),
+                    activity_name=safeget(activity, 'name', ''),
                     user_id=activity_data['nextUserEmail'],
                     status=activity_data['result'],
                     start_date=start_date,
                     due_date=due_date,
-                    tool=activity.tool,
+                    tool=safeget(activity, 'tool', ''),
                     tenant_id=tenant_id,
                     agent_mode=agent_mode,
-                    description=activity.description,
-                    agent_orch=activity.orchestration
+                    description=safeget(activity, 'description', ''),
+                    agent_orch=agent_orch
                 )
         
         try:
@@ -828,7 +850,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
         if not initial_activity:
             initial_activity = process_definition.find_initial_activity()
 
-        next_activities = [activity for activity in process_definition.activities if activity.id != initial_activity.id]
+        next_activities = process_definition.find_next_activities(initial_activity.id, True)
         for activity in next_activities:
             prev_activities = process_definition.find_prev_activities(activity.id, [])
             start_date = datetime.now(pytz.timezone('Asia/Seoul'))
@@ -864,25 +886,32 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                             assignees.append(role_binding)
                 
                 agent_mode = determine_agent_mode(user_id, activity.agentMode)
+                agent_orch = safeget(activity, 'orchestration', None)
+                if agent_orch == 'none':
+                    agent_orch = None
+
+                status = "TODO"
+                if(activity.type == "intermediateThrowEvent"):
+                    status = "IN_PROGRESS"
 
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     reference_ids=reference_ids if prev_activities else [],
                     proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
-                    activity_id=activity.id,
-                    activity_name=activity.name,
+                    activity_id=safeget(activity, 'id', ''),
+                    activity_name=safeget(activity, 'name', ''),
                     user_id=user_id,
-                    status="TODO",
-                    tool=activity.tool,
+                    status=status,
+                    tool=safeget(activity, 'tool', ''),
                     start_date=start_date,
                     due_date=due_date,
                     tenant_id=tenant_id,
                     assignees=assignees if assignees else [],
-                    duration=activity.duration,
+                    duration=safeget(activity, 'duration', 0),
                     agent_mode=agent_mode,
-                    description=activity.description,
-                    agent_orch=activity.orchestration
+                    description=safeget(activity, 'description', ''),
+                    agent_orch=agent_orch
                 )
                 workitem_dict = workitem.model_dump()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
