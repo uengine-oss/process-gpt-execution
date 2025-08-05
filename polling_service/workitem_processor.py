@@ -495,29 +495,29 @@ def _process_next_activities(process_instance: ProcessInstance, process_result: 
             process_instance.current_activity_ids = []
             break
             
-        gateway = process_definition.find_gateway_by_id(activity.nextActivityId)
-        if gateway:
-            if gateway.type == "intermediateThrowEvent":
-                process_instance.current_activity_ids = [gateway.id]
+        if process_definition.find_gateway_by_id(activity.nextActivityId):
+            if activity.type == "event":
+                status = "TODO"
+            else:
+                status = "IN_PROGRESS"
+            next_activities = process_definition.find_next_activities(activity.nextActivityId, True)
+            if next_activities:
+                process_instance.current_activity_ids = [act.id for act in next_activities]
+                process_result_json["nextActivities"] = []
+                next_activity_dicts = [
+                    Activity(
+                        nextActivityId=act.id,
+                        nextActivityName=activity.nextActivityName,
+                        nextUserEmail=activity.nextUserEmail,
+                        description=activity.description,
+                        result=status
+                    ).model_dump() for act in next_activities
+                ]
+                process_result_json["nextActivities"].extend(next_activity_dicts)
+            else:
+                process_instance.current_activity_ids = []
                 process_result_json["nextActivities"] = []
                 break
-            else:
-                next_activities = process_definition.find_next_activities(activity.nextActivityId)
-                if next_activities:
-                    process_instance.current_activity_ids = [act.id for act in next_activities]
-                    process_result_json["nextActivities"] = []
-                    next_activity_dicts = [
-                        Activity(
-                            nextActivityId=act.id,
-                            nextUserEmail=activity.nextUserEmail,
-                            result="IN_PROGRESS"
-                        ).model_dump() for act in next_activities
-                    ]
-                    process_result_json["nextActivities"].extend(next_activity_dicts)
-                else:
-                    process_instance.current_activity_ids = []
-                    process_result_json["nextActivities"] = []
-                    break
                 
         elif activity.result == "IN_PROGRESS" and activity.nextActivityId not in process_instance.current_activity_ids:
             process_instance.current_activity_ids = [activity.nextActivityId]
