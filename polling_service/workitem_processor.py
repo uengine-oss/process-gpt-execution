@@ -249,40 +249,27 @@ Output format (must be wrapped in ```json and ``` markers):
   "roleBindings": {role_bindings},
   "completedActivities": [
     {{
-      "completedActivityId": "activity_id",
-      "completedActivityName": "activity_name",
-      "completedUserEmail": "user_email",
-      "type": "activity",
+      "completedActivityId": "activity id or event id",
+      "completedActivityName": "activity name or event name",
+      "completedUserEmail": "user email or agent id",
+      "type": "activity | event",
       "result": "DONE",
-      "description": "완료된 활동에 대한 설명 (Korean)"
+      "description": "완료된 활동에 대한 설명 (Korean)",
+      "expression": "cron expression", // If type is event, this field is required.
+      "dueDate": "YYYY-MM-DD" // If type is event, this field is required.
     }},
-    {{
-      "completedActivityId": "event_id",
-      "completedUserEmail": "email_or_agent_id",
-      "type": "event",
-      "expression": "cron expression",
-      "dueDate": "YYYY-MM-DD",
-      "result": "DONE"
-      "description": "완료된 활동에 대한 설명 (Korean)"
-    }}
   ],
   "nextActivities": [
     {{
-      "nextActivityId": "activity_id",
-      "nextUserEmail": "email_or_agent_id",
-      "type": "activity",
+      "nextActivityId": "activity id or event id",
+      "nextActivityName": "activity name or event name",
+      "nextUserEmail": "user email or agent id",
+      "type": "activity | event",
       "result": "IN_PROGRESS",
-      "messageToUser": "Instructions in Korean"
+      "description": "다음 활동에 대한 설명 (Korean)",
+      "expression": "cron expression", // If type is event, this field is required.
+      "dueDate": "YYYY-MM-DD" // If type is event, this field is required.
     }},
-    {{
-      "nextActivityId": "event_id",
-      "nextUserEmail": "email_or_agent_id",
-      "type": "event",
-      "expression": "cron expression",
-      "dueDate": "YYYY-MM-DD",
-      "result": "IN_PROGRESS",
-      "description": "다음 활동에 대한 설명 (Korean)"
-    }}
   ],
   "cannotProceedErrors": [
     {{
@@ -515,7 +502,7 @@ def _process_next_activities(process_instance: ProcessInstance, process_result: 
                 process_result_json["nextActivities"] = []
                 break
             else:
-                next_activities = process_definition.find_next_activities(activity.nextActivityId, True)
+                next_activities = process_definition.find_next_activities(activity.nextActivityId)
                 if next_activities:
                     process_instance.current_activity_ids = [act.id for act in next_activities]
                     process_result_json["nextActivities"] = []
@@ -563,7 +550,7 @@ def _execute_script_tasks(process_instance: ProcessInstance, process_result: Pro
             
             if result.returncode != 0:
                 # Script task execution error
-                process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id, False)]
+                process_instance.current_activity_ids = [activity.id for activity in process_definition.find_next_activities(activity_obj.id)]
                 process_result_json["result"] = result.stderr
             else:
                 process_result_json["result"] = result.stdout
@@ -693,6 +680,7 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
         process_instance.proc_inst_name = process_result.instanceName
     _, process_instance = upsert_process_instance(process_instance, tenant_id)
     
+    appliedFeedback = False
     if completed_workitems:
         for completed_workitem in completed_workitems:
             user_info = fetch_assignee_info(completed_workitem.user_id)
@@ -714,6 +702,8 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
                 "contentType": "html" if form_html else "text"
             }
             upsert_chat_message(completed_workitem.proc_inst_id, message_data, tenant_id)
+            if completed_workitem.temp_feedback and completed_workitem.temp_feedback not in [None, ""]:
+                appliedFeedback = True
 
     if process_result.cannotProceedErrors:
         reason = "\n".join(error.reason for error in process_result.cannotProceedErrors)
@@ -723,7 +713,8 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
         description = {
             "referenceInfo": process_result_json.get("referenceInfo", []),
             "completedActivities": process_result_json.get("completedActivities", []),
-            "nextActivities": process_result_json.get("nextActivities", [])
+            "nextActivities": process_result_json.get("nextActivities", []),
+            "appliedFeedback": appliedFeedback
         }
         message_json = json.dumps({
             "role": "system",
@@ -1050,7 +1041,7 @@ async def handle_workitem(workitem):
         next_activities = []
         gateway_condition_data = None
         if process_definition:
-            next_activities = [activity.id for activity in process_definition.find_next_activities(activity_id, True)]
+            next_activities = [activity.id for activity in process_definition.find_next_activities(activity_id)]
             for act_id in next_activities:
                 if process_definition.find_gateway_by_id(act_id):
                     try:
