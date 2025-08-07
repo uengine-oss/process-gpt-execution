@@ -4,7 +4,7 @@ from langchain_openai import ChatOpenAI
 from langchain.output_parsers.json import SimpleJsonOutputParser
 from datetime import datetime, timedelta
 
-from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, fetch_workitem_by_id, upsert_process_definition
+from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, fetch_workitem_by_id, upsert_process_definition, fetch_assignee_info
 from process_definition import load_process_definition
 
 import traceback
@@ -129,11 +129,16 @@ async def submit_workitem(input: dict):
     due_date = now + timedelta(days=activity.duration) if activity.duration else None
     due_date = due_date.isoformat() if due_date else None
     
+    user_info = None
+    if user_email:
+        user_info = fetch_assignee_info(user_email)
+    
     if workitem:
         workitem_data = workitem.model_dump()
         workitem_data['status'] = 'SUBMITTED'
         workitem_data['output'] = output
-        workitem_data['user_id'] = user_email
+        workitem_data['user_id'] = user_info.get('id')
+        workitem_data['username'] = user_info.get('name')
         workitem_data['start_date'] = workitem_data['start_date'].isoformat()
         workitem_data['due_date'] = workitem_data['due_date'].isoformat()
         workitem_data['retry'] = 0
@@ -141,7 +146,8 @@ async def submit_workitem(input: dict):
     else:
         workitem_data = {
             "id": str(uuid.uuid4()),
-            "user_id": user_email,
+            "user_id": user_info.get('id'),
+            "username": user_info.get('name'),
             "proc_inst_id": process_instance_id,
             "proc_def_id": process_definition_id,
             "activity_id": activity_id,
@@ -333,6 +339,7 @@ async def handle_initiate(request: Request):
 ############# start of feedback #############
 feedback_prompt = PromptTemplate.from_template("""
 You are a helpful assistant that can provide feedback on a process.
+The user needs feedback because the process execution result is not satisfactory. Please analyze the activity task result and provide feedback on areas that need improvement.
 
 Process Definition: {process_definition}
 Need to get feedback for the following activity: {activity_id}
@@ -381,6 +388,97 @@ async def handle_get_feedback(request: Request):
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e)) from e
 
+diff_prompt = PromptTemplate.from_template("""
+Please analyze the activity and feedback to provide a detailed comparison of the modifiable properties.
+
+Activities: {activities}
+Gateways: {gateways}
+Feedback: {feedback}
+Feedback Result: {feedback_result}
+
+Based on the feedback, provide the before and after values for the following modifiable properties:
+- inputData: Data fields that the activity receives as input
+- checkpoints: Verification points that need to be completed
+- description: Description of what the activity does
+- instruction: Instructions for completing the activity
+
+Output format (must be wrapped in ```json and ``` markers. Do not include any other text):
+{{
+    "modifications": {{
+        "inputData": {{
+            "before": [
+                {{
+                    "key": "input data field key",
+                    "name": "input data field name",
+                    "value": "input data field value"
+                }}
+            ],
+            "after": [
+                {{
+                    "key": "input data field key",
+                    "name": "input data field name",
+                    "value": "input data field value"
+                }}
+            ]
+        }},
+        "checkpoints": {{
+            "before": ["original checkpoints"],
+            "after": ["modified checkpoints"]
+        }},
+        "description": {{
+            "before": "original description",
+            "after": "modified description"
+        }},
+        "instruction": {{
+            "before": "original instruction",
+            "after": "modified instruction"
+        }}
+    }},
+    "summary": "Brief summary of the key changes made based on feedback"
+}}
+"""
+)
+
+diff_chain = (
+    diff_prompt | model | parser
+)
+
+
+async def handle_get_feedback_diff(request: Request):
+    try:
+        body = await request.json()
+        
+        task_id = body.get('taskId')
+        workitem = fetch_workitem_by_id(task_id)
+        process_definition_id = workitem.proc_def_id
+        process_definition_json = fetch_process_definition(process_definition_id)
+        process_definition = load_process_definition(process_definition_json)
+        
+        activity_id = workitem.activity_id
+        activity = process_definition.find_activity_by_id(activity_id)
+        if activity is None:
+            raise HTTPException(status_code=400, detail="No activity found")
+        
+        activities = [ activity.model_dump() ]
+        gateways = []
+        next_item = process_definition.find_next_item(activity_id)
+        if 'task' not in next_item.type:
+            gateways.append(next_item.model_dump())
+        else:
+            activities.append(next_item.model_dump())
+
+        chain_input = {
+            "activities": activities,
+            "gateways": gateways,
+            "feedback": workitem.temp_feedback,
+            "feedback_result": workitem.log
+        }
+        result = diff_chain.invoke(chain_input)
+        return result
+
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e)) from e
 ############# end of feedback ##############
 
 
@@ -390,6 +488,7 @@ def add_routes_to_app(app) :
     app.add_api_route("/role-binding", handle_role_binding, methods=["POST"])
     app.add_api_route("/initiate", handle_initiate, methods=["POST"])
     app.add_api_route("/get-feedback", handle_get_feedback, methods=["POST"])
+    app.add_api_route("/get-feedback-diff", handle_get_feedback_diff, methods=["POST"])
 
 """
 # try this: 

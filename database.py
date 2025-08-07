@@ -635,6 +635,7 @@ class ProcessInstance(BaseModel):
 class WorkItem(BaseModel):
     id: str
     user_id: Optional[str]
+    username: Optional[str] = None
     proc_inst_id: Optional[str] = None
     proc_def_id: Optional[str] = None
     activity_id: str
@@ -656,6 +657,7 @@ class WorkItem(BaseModel):
     agent_mode: Optional[str] = None
     agent_orch: Optional[str] = None
     feedback: Optional[List[Dict[str, Any]]] = []
+    temp_feedback: Optional[str] = None
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
@@ -1281,10 +1283,14 @@ def fetch_user_info(email: str) -> Dict[str, str]:
         
         response = supabase.table("users").select("*").eq('email', email).execute()
         
-        if response.data:
+        if response.data and len(response.data) > 0:
             return response.data[0]
         else:
-            raise HTTPException(status_code=404, detail="User not found")
+            response = supabase.table("users").select("*").eq('id', email).execute()
+            if response.data and len(response.data) > 0:
+                return response.data[0]
+            else:
+                raise HTTPException(status_code=404, detail="User not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1310,9 +1316,9 @@ def fetch_assignee_info(assignee_id: str) -> Dict[str, str]:
                     type = "a2a"
             return {
                 "type": type,
-                "id": assignee_id,
+                "id": user_info.get("id", assignee_id),
                 "name": user_info.get("username", assignee_id),
-                "email": assignee_id,
+                "email": user_info.get("email", assignee_id),
                 "info": user_info
             }
         except HTTPException as user_error:
@@ -1706,7 +1712,7 @@ def fetch_user_info_by_uid(uid: str) -> Dict[str, str]:
             raise Exception("Supabase client is not configured for this request")
         
         response = supabase.table("users").select("*").eq('id', uid).execute()
-        if response.data:
+        if response.data and len(response.data) > 0:
             return response.data[0]
         else:
             raise HTTPException(status_code=404, detail="User not found")

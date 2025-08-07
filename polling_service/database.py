@@ -232,6 +232,7 @@ class ProcessInstance(BaseModel):
 class WorkItem(BaseModel):
     id: str
     user_id: Optional[str]
+    username: Optional[str] = None
     proc_inst_id: Optional[str] = None
     proc_def_id: Optional[str] = None
     activity_id: str
@@ -253,6 +254,7 @@ class WorkItem(BaseModel):
     agent_mode: Optional[str] = None
     agent_orch: Optional[str] = None
     feedback: Optional[List[Dict[str, Any]]] = []
+    temp_feedback: Optional[str] = None
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
@@ -676,7 +678,10 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
             if workitem:
                 workitem.status = completed_activity['result']
                 workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul'))
-                workitem.user_id = completed_activity['completedUserEmail']
+                user_info = fetch_assignee_info(completed_activity['completedUserEmail'])
+                if user_info:
+                    workitem.user_id = user_info.get('id')
+                    workitem.username = user_info.get('name')
                 if workitem.assignees and len(workitem.assignees) > 0:
                     for assignee in workitem.assignees:
                         if assignee.get('endpoint') and assignee.get('endpoint') == workitem.user_id:
@@ -697,8 +702,9 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                             user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
+                user_info = None
                 if completed_activity['completedUserEmail'] != user_id:
-                    user_id = completed_activity['completedUserEmail']
+                    user_info = fetch_assignee_info(completed_activity['completedUserEmail'])
 
                 agent_orch = safeget(activity, 'orchestration', None)
                 if agent_orch == 'none':
@@ -710,7 +716,8 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=completed_activity['completedActivityId'],
                     activity_name=safeget(activity, 'name', ''),
-                    user_id=user_id,
+                    user_id=user_info.get('id'),
+                    username=user_info.get('name'),
                     status=completed_activity['result'],
                     tool=safeget(activity, 'tool', ''),
                     start_date=start_date,
@@ -728,7 +735,6 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
             workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
             workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
             workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
-
 
             supabase = supabase_client_var.get()
             if supabase is None:
@@ -760,7 +766,10 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
             workitem.status = activity_data['result']
             workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul')) if activity_data['result'] == 'DONE' else None
             if workitem.user_id == '' or workitem.user_id == None:
-                workitem.user_id = activity_data['nextUserEmail']
+                user_info = fetch_assignee_info(activity_data['nextUserEmail'])
+                if user_info:
+                    workitem.user_id = user_info.get('id')
+                    workitem.username = user_info.get('name')
             if workitem.agent_mode == None:
                 workitem.agent_mode = determine_agent_mode(workitem.user_id, workitem.agent_mode)
             # print(f"[DEBUG] workitem.agent_mode: {workitem.agent_mode}")
@@ -778,14 +787,17 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                 agent_orch = safeget(activity, 'orchestration', None)
                 if agent_orch == 'none':
                     agent_orch = None
-                    
+                
+                user_info = fetch_assignee_info(activity_data['nextUserEmail'])
+                
                 workitem = WorkItem(
                     id=str(uuid.uuid4()),
                     proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=safeget(activity, 'id', ''),
                     activity_name=safeget(activity, 'name', ''),
-                    user_id=activity_data['nextUserEmail'],
+                    user_id=user_info.get('id'),
+                    username=user_info.get('name'),
                     status=activity_data['result'],
                     start_date=start_date,
                     due_date=due_date,
@@ -850,8 +862,8 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
         if not initial_activity:
             initial_activity = process_definition.find_initial_activity()
 
-        next_activities = process_definition.find_next_activities(initial_activity.id, True)
-        for activity in next_activities:
+        next_all_activities = [activity for activity in process_definition.activities if activity.id != initial_activity.id]
+        for activity in next_all_activities:
             prev_activities = process_definition.find_prev_activities(activity.id, [])
             start_date = datetime.now(pytz.timezone('Asia/Seoul'))
         
@@ -885,6 +897,20 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                             user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
+                username = ''
+                if ',' in user_id:
+                    usernames = []
+                    user_ids = user_id.split(',')
+                    for user_id in user_ids:
+                        user_info = fetch_assignee_info(user_id)
+                        if user_info:
+                            usernames.append(user_info.get('name'))
+                    username = ','.join(usernames)
+                else:
+                    user_info = fetch_assignee_info(user_id)
+                    if user_info:
+                        username = user_info.get('name')
+                
                 agent_mode = determine_agent_mode(user_id, activity.agentMode)
                 agent_orch = safeget(activity, 'orchestration', None)
                 if agent_orch == 'none':
@@ -902,6 +928,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     activity_id=safeget(activity, 'id', ''),
                     activity_name=safeget(activity, 'name', ''),
                     user_id=user_id,
+                    username=username,
                     status=status,
                     tool=safeget(activity, 'tool', ''),
                     start_date=start_date,
@@ -1054,9 +1081,9 @@ def fetch_assignee_info(assignee_id: str) -> Dict[str, str]:
                     type = "a2a"
             return {
                 "type": type,
-                "id": assignee_id,
+                "id": user_info.get("id", assignee_id),
                 "name": user_info.get("username", assignee_id),
-                "email": assignee_id,
+                "email": user_info.get("email", assignee_id),
                 "info": user_info
             }
         except HTTPException as user_error:

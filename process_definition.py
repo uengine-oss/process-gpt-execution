@@ -174,6 +174,19 @@ class ProcessDefinition(BaseModel):
                 self.find_prev_activities(source_id, prev_activities, visited)
 
         return prev_activities
+    
+    def find_next_item(self, current_item_id: str) -> Union[ProcessActivity, ProcessGateway]:
+        for sequence in self.sequences:
+            if sequence.source == current_item_id:
+                source_id = sequence.target
+                source_activity = self.find_activity_by_id(source_id)
+                if source_activity:
+                    return source_activity
+                else:
+                    source_gateway = self.find_gateway_by_id(source_id)
+                    if source_gateway:
+                        return source_gateway
+        return None
 
     def find_next_activities(self, current_activity_id: str) -> List[ProcessActivity]:
         """
