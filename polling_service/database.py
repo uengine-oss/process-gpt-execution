@@ -731,10 +731,41 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     agent_mode=safeget(activity, 'agentMode', None)
                 )
             
+            
             workitem_dict = workitem.model_dump()
             workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
             workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
             workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
+            
+            process_result_data.setdefault('cancelledActivities', [])
+            activity = process_definition.find_activity_by_id(completed_activity['completedActivityId'])
+            if activity:
+                attached_events = activity.attachedEvents
+                if attached_events:
+                    for attached_event in attached_events:
+                        if attached_event != completed_activity['completedActivityId']:
+                            process_result_data['cancelledActivities'].append({
+                                'cancelledActivityId': attached_event,
+                                'cancelledUserEmail': workitem.user_id,
+                                'result': 'CANCELLED'
+                            })
+                        
+            attached_activity = process_definition.find_attached_activity(completed_activity['completedActivityId'])
+            if attached_activity:
+                process_result_data['cancelledActivities'].append({
+                                'cancelledActivityId': attached_activity.id,
+                                'cancelledUserEmail': workitem.user_id,
+                                'result': 'CANCELLED'
+                            })
+                attached_events = attached_activity.attachedEvents
+                if attached_events:
+                    for attached_event in attached_events:
+                        if attached_event != completed_activity['completedActivityId']:
+                            process_result_data['cancelledActivities'].append({
+                                'cancelledActivityId': attached_event,
+                                'cancelledUserEmail': workitem.user_id,
+                                'result': 'CANCELLED'
+                            })
 
             supabase = supabase_client_var.get()
             if supabase is None:
@@ -747,6 +778,80 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
         print(f"[ERROR] upsert_completed_workitem: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e)) from e
 
+def upsert_cancelled_workitem(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None) -> List[WorkItem]:
+    try:
+        workitems = []
+        for cancelled_activity in process_result_data['cancelledActivities']:
+            workitem = fetch_workitem_by_proc_inst_and_activity(
+                process_instance_data['proc_inst_id'],
+                cancelled_activity['cancelledActivityId'],
+                tenant_id
+            )
+            if workitem:
+                workitem.status = cancelled_activity['result']
+                workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul'))
+                workitem.user_id = cancelled_activity['cancelledUserEmail']
+                if workitem.assignees and len(workitem.assignees) > 0:
+                    for assignee in workitem.assignees:
+                        if assignee.get('endpoint') and assignee.get('endpoint') == workitem.user_id:
+                            assignee = {
+                                'roleName': assignee.get('name'),
+                                'userId': assignee.get('endpoint')
+                            }
+                            break
+            else:
+                activity = process_definition.find_activity_by_id(cancelled_activity['cancelledActivityId'])
+                start_date = datetime.now(pytz.timezone('Asia/Seoul'))
+                due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
+                assignees = []
+                if process_instance_data['role_bindings']:
+                    role_bindings = process_instance_data['role_bindings']
+                    for role_binding in role_bindings:
+                        if role_binding['name'] == activity.role:
+                            user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
+                            assignees.append(role_binding)
+                
+                if cancelled_activity['cancelledUserEmail'] != user_id:
+                    user_id = cancelled_activity['cancelledUserEmail']
+                agent_orch = safeget(activity, 'orchestration', None)
+                if agent_orch == 'none':
+                    agent_orch = None
+                    
+                workitem = WorkItem(
+                    id=f"{str(uuid.uuid4())}",
+                    proc_inst_id=process_instance_data['proc_inst_id'],
+                    proc_def_id=process_result_data['processDefinitionId'].lower(),
+                    activity_id=cancelled_activity['cancelledActivityId'],
+                    activity_name=safeget(activity, 'name', ''),
+                    user_id=user_id,
+                    status="CANCELLED",
+                    tool=safeget(activity, 'tool', ''),
+                    start_date=start_date,
+                    end_date=datetime.now(pytz.timezone('Asia/Seoul')),
+                    due_date=due_date,
+                    tenant_id=tenant_id,
+                    assignees=assignees,
+                    duration=safeget(activity, 'duration', 0),
+                    description=safeget(activity, 'description', ''),
+                    agent_orch=agent_orch,
+                    agent_mode=safeget(activity, 'agentMode', None)
+                )
+                
+            workitem_dict = workitem.model_dump()
+            workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
+            workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
+            workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
+            
+            supabase = supabase_client_var.get()
+            if supabase is None:
+                raise Exception("Supabase client is not configured for this request")
+            supabase.table('todolist').upsert(workitem_dict).execute()
+            workitems.append(workitem)
+        return workitems
+            
+    except Exception as e:
+        print(f"[ERROR] upsert_cancelled_workitem: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e)) from e
 def safeget(obj, attr, default=None):
     return getattr(obj, attr, default)
 
@@ -862,8 +967,8 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
         if not initial_activity:
             initial_activity = process_definition.find_initial_activity()
 
-        next_all_activities = [activity for activity in process_definition.activities if activity.id != initial_activity.id]
-        for activity in next_all_activities:
+        next_activities = process_definition.find_next_activities(initial_activity.id, True)
+        for activity in next_activities:
             prev_activities = process_definition.find_prev_activities(activity.id, [])
             start_date = datetime.now(pytz.timezone('Asia/Seoul'))
         
@@ -917,8 +1022,6 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     agent_orch = None
 
                 status = "TODO"
-                if(activity.type == "intermediateThrowEvent"):
-                    status = "IN_PROGRESS"
 
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
