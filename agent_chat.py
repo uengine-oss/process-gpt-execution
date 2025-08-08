@@ -8,8 +8,10 @@ from mem0_agent_client import process_mem0_message
 from fastapi.responses import StreamingResponse, JSONResponse
 
 import requests
+import os
 
-load_dotenv()
+if os.getenv("ENV") != "production":
+    load_dotenv(override=True)
 
 def add_routes_to_app(app):
     app.add_api_route("/multi-agent/chat", chat_message, methods=["POST"])

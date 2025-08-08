@@ -18,7 +18,8 @@ from a2a.types import (
 )
 from a2a.server.tasks import InMemoryTaskStore
 
-load_dotenv(override=True)
+if os.getenv("ENV") != "production":
+    load_dotenv(override=True)
 
 
 @click.command()

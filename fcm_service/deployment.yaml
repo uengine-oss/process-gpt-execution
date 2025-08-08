@@ -1,10 +1,10 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: polling-service-deployment
+  name: fcm-service-deployment
   namespace: default
 spec:
-  replicas: 3
+  replicas: 2
   revisionHistoryLimit: 1
   strategy:
     type: RollingUpdate
@@ -13,42 +13,40 @@ spec:
       maxUnavailable: 0  # 새로운 파드가 준비될 때까지 기존 파드를 유지
   selector:
     matchLabels:
-      app: polling-service
+      app: fcm-service
   template:
     metadata:
       labels:
-        app: polling-service
+        app: fcm-service
     spec:
       terminationGracePeriodSeconds: 300  # 5분 grace period
       containers:
-      - name: polling-service
-        image: ghcr.io/uengine-oss/process-gpt-polling-service:latest
+      - name: fcm-service
+        image: ghcr.io/uengine-oss/fcm-service:latest
+        imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 8000
+        - containerPort: 8666
         lifecycle:
           preStop:
             exec:
               command: ["sh", "-c", "echo 'Graceful shutdown initiated'; sleep 10"]
         readinessProbe:
-          exec:
-            command: ["python", "-c", "import requests; import os; url=os.getenv('SUPABASE_URL'); exit(0 if url else 1)"]
+          httpGet:
+            path: /health
+            port: 8666
           initialDelaySeconds: 15
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
         livenessProbe:
-          exec:
-            command: ["python", "-c", "import psutil; import os; pid=1; exit(0 if psutil.pid_exists(pid) else 1)"]
+          httpGet:
+            path: /health
+            port: 8666
           initialDelaySeconds: 30
           periodSeconds: 15
           timeoutSeconds: 5
           failureThreshold: 3
         env:
-        - name: OPENAI_API_KEY
-          valueFrom:
-            secretKeyRef:
-              key: OPENAI_API_KEY
-              name: openai-secret
         - name: SUPABASE_URL
           valueFrom:
             configMapKeyRef:
@@ -64,36 +62,37 @@ spec:
             secretKeyRef:
               key: JWT_SECRET
               name: my-secrets
-        - name: SMTP_SERVER
-          value: smtp.gmail.com
-        - name: SMTP_PORT
-          value: 587
-        - name: SMTP_USERNAME
+        - name: DB_NAME
           valueFrom:
             secretKeyRef:
-              key: SMTP_USERNAME
+              key: DB_NAME
               name: my-secrets
-        - name: SMTP_PASSWORD
+        - name: DB_USER
           valueFrom:
             secretKeyRef:
-              key: SMTP_PASSWORD
+              key: DB_USER
               name: my-secrets
-        - name: EXECUTION_SERVICE_URL
-          value: http://execution-service:8000
-        - name: MEMENTO_SERVICE_URL
-          value: http://memento-service:8005
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: DB_PASSWORD
+              name: my-secrets
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              key: DB_HOST
+              name: my-secrets
+        - name: DB_PORT
+          valueFrom:
+            secretKeyRef:
+              key: DB_PORT
+              name: my-secrets
         - name: ENV
           value: production
-        - name: LANGSMITH_API_KEY
-          valueFrom:
-            secretKeyRef:
-              key: LANGSMITH_API_KEY
-              name: langsmith-secrets
-        - name: LANGSMITH_PROJECT
-          valueFrom:
-            secretKeyRef:
-              key: LANGSMITH_PROJECT
-              name: langsmith-secrets
+        volumeMounts:
+        - name: firebase-credentials
+          mountPath: /etc/secrets
+          readOnly: true
         resources:
           requests:
             cpu: 100m
@@ -101,3 +100,21 @@ spec:
           limits:
             cpu: 500m
             memory: 512Mi
+      volumes:
+      - name: firebase-credentials
+        secret:
+          secretName: firebase-credentials
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fcm-service
+  namespace: default
+spec:
+  selector:
+    app: fcm-service
+  ports:
+  - port: 8666
+    targetPort: 8666
+    protocol: TCP
+  type: ClusterIP

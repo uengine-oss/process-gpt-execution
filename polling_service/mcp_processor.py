@@ -9,7 +9,8 @@ from langchain.tools import StructuredTool
 from pydantic import BaseModel
 from langchain.tools import StructuredTool
 
-load_dotenv()
+if os.getenv("ENV") != "production":
+    load_dotenv(override=True)
 
 class EmptySchema(BaseModel):
     """빈 파라미터용 스키마"""

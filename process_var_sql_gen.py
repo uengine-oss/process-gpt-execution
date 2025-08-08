@@ -189,7 +189,7 @@ def combine_input_with_process_table_schema(input, path):
         if email:
             instances = fetch_process_instance_list(email)
             if instances:
-                proc_inst_list = [inst.dict(exclude={'process_definition'}) for inst in instances]
+                proc_inst_list = [inst.model_dump(exclude={'process_definition'}) for inst in instances]
         proc_inst_str = json.dumps(proc_inst_list, ensure_ascii=False, default=default)
         
         # 할일 목록 가져오기
@@ -197,7 +197,7 @@ def combine_input_with_process_table_schema(input, path):
         if email:
             todos = fetch_todolist_by_user_id(email)
             if todos:
-                todo_list = [todo.dict() for todo in todos]
+                todo_list = [todo.model_dump() for todo in todos]
         todo_list_str = json.dumps(todo_list, ensure_ascii=False, default=default)
         
         # 폼 정의 목록 가져오기

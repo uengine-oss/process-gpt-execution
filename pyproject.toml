@@ -40,7 +40,6 @@ dependencies = [
     "fastapi==0.115.12",
     "filelock==3.18.0",
     "filetype==1.2.0",
-    "firebase-admin==6.9.0",
     "flask==3.1.1",
     "flatbuffers==25.2.10",
     "flupy==1.2.2",

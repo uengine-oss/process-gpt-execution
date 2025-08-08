@@ -11,7 +11,8 @@ import logging
 
 from database import fetch_todolist_by_proc_inst_id, upsert_workitem, upsert_chat_message, fetch_workitem_by_proc_inst_and_activity
 
-load_dotenv()
+if os.getenv("ENV") != "production":
+    load_dotenv(override=True)
 
 # 로깅 설정
 logging.basicConfig(
