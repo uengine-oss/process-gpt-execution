@@ -45,7 +45,7 @@ jobs:
           cd gitops-repo
           
           # Update polling service deployment image
-          yq eval '.spec.template.spec.containers[0].image = "'$IMAGE_NAME'"' -i dev/deployments/polling-service-deployment.yaml
+          yq eval '.spec.template.spec.containers[0].image = "'$IMAGE_NAME'"' -i deployments/polling-service-deployment.yaml
           
           echo "Updated image to: $IMAGE_NAME"
 

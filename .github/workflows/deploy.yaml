@@ -45,7 +45,7 @@ jobs:
           cd gitops-repo
           
           # Update execution deployment image
-          yq eval '.spec.template.spec.containers[0].image = "'$IMAGE_NAME'"' -i dev/deployments/execution-deployment.yaml
+          yq eval '.spec.template.spec.containers[0].image = "'$IMAGE_NAME'"' -i deployments/execution-deployment.yaml
           
           echo "Updated image to: $IMAGE_NAME"
 

@@ -33,6 +33,7 @@ jobs:
           repository: uengine-oss/process-gpt-k8s
           token: ${{ secrets.GITOPS_PAT }}
           path: gitops-repo
+          ref: prod
 
       - name: Install yq
         run: |

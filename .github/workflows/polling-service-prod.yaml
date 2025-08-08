@@ -33,6 +33,7 @@ jobs:
           repository: uengine-oss/process-gpt-k8s
           token: ${{ secrets.GITOPS_PAT }}
           path: gitops-repo
+          ref: prod
 
       - name: Install yq
         run: |
@@ -44,7 +45,7 @@ jobs:
           cd gitops-repo
           
           # Update polling service deployment image
-          yq eval '.spec.template.spec.containers[0].image = "'$IMAGE_NAME'"' -i prod/deployments/polling-service-deployment.yaml
+          yq eval '.spec.template.spec.containers[0].image = "'$IMAGE_NAME'"' -i deployments/polling-service-deployment.yaml
           
           echo "Updated image to: $IMAGE_NAME"
 
