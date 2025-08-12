@@ -409,29 +409,31 @@ Output format (must be wrapped in ```json and ``` markers. Do not include any ot
             "before": [
                 {{
                     "key": "input data field key",
-                    "name": "input data field name",
-                    "value": "input data field value"
+                    "name": "input data field name (Korean)"
                 }}
             ],
             "after": [
                 {{
                     "key": "input data field key",
-                    "name": "input data field name",
-                    "value": "input data field value"
+                    "name": "input data field name (Korean)"
                 }}
-            ]
+            ],
+            "changed": true/false
         }},
         "checkpoints": {{
             "before": ["original checkpoints"],
-            "after": ["modified checkpoints"]
+            "after": ["modified checkpoints"],
+            "changed": true/false
         }},
         "description": {{
             "before": "original description",
-            "after": "modified description"
+            "after": "modified description",
+            "changed": true/false
         }},
         "instruction": {{
             "before": "original instruction",
-            "after": "modified instruction"
+            "after": "modified instruction",
+            "changed": true/false
         }}
     }},
     "summary": "Brief summary of the key changes made based on feedback"
