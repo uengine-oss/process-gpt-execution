@@ -120,142 +120,7 @@ def load_sql_from_file(file_path):
 #     finally:
 #         if connection:
 #             connection.close()
-
-def get_available_credits(tenant_id: str):
-    try:
-        db_config = db_config_var.get()
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-        sql = """
-        SELECT
-                cp.id AS purchase_id,
-                cp.created_at,
-                cp.expires_at,
-                c.name AS credit_name,
-                c.credit AS total_credit,
-                COALESCE(SUM(cu.used_credit), 0) AS used_credit,
-                (c.credit - COALESCE(SUM(cu.used_credit), 0)) AS remaining_credit
-            FROM credit_purchase cp
-            JOIN credit c ON cp.credit_id = c.id
-            LEFT JOIN credit_usage cu 
-                ON cu.tenant_id = cp.tenant_id
-                AND cu.created_at >= cp.created_at 
-                AND (cp.expires_at IS NULL OR cu.created_at <= cp.expires_at)
-            WHERE cp.tenant_id = %s
-            AND (cp.expires_at IS NULL OR cp.expires_at > now())
-            GROUP BY cp.id, cp.created_at, cp.expires_at, c.name, c.credit
-            ORDER BY cp.created_at ASC;
-        """
-
-        cursor.execute(sql, (subdomain_var.get()))
-        result = cursor.fetchone()
-        connection.close()
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred while fetching available credits: {e}")
-    
-
-def get_service(category: str, model: str):
-    try:
-        if not category:
-            return []
-        
-        supabase = supabase_client_var.get()
-        
-        db_config = db_config_var.get()
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
-        today_date = datetime.now(pytz.timezone('Asia/Seoul'))
-        
-        # supabase 테이블에서 서비스 목록을 가져오는 로직
-        response = supabase.table('credit_purchase') \
-                    .select('credit_id', 'created_at', 'expires_at') \
-                    .eq('tenant_id', subdomain_var.get()) \
-                    .lte('created_at', today_date.isoformat()) \
-                    .gte('expires_at', today_date.isoformat()) \
-                    .order('created_at', desc=False) \
-                    .execute()
-        
-        if not response.data:
-            return []
-
-        # 가장 오래된 row의 credit_id를 가져옴
-        oldest_credit_id = response.data[0]['credit_id']
-
-        # credit 테이블에서 feature 정보를 가져옴
-        credit_response = supabase.table('credit').select('feature').eq('id', oldest_credit_id).execute()
-
-        if not credit_response.data:
-            return []
-
-        # feature 정보에서 included_services를 추출
-        feature_info = credit_response.data[0].get('feature', {})
-        master_service_ids = feature_info.get('included_services', [])
-        if not master_service_ids:
-            return []
-
-        # SQL 쿼리를 사용하여 service_mater와 service 테이블을 조인하여 필요한 데이터를 가져옴
-        sql_query = """    
-            SELECT 
-                sm.id AS master_id,
-                sm.name AS master_name,
-                sm.version,
-                s.id AS service_id,
-                s.name AS service_name,
-                s.category,
-                sr.credit_per_unit,
-                sr.unit,
-                sr.dimension
-            FROM 
-                service_master sm
-            JOIN 
-                service_master_item smi ON sm.id = smi.master_id
-            JOIN 
-                service s ON smi.service_id = s.id
-            JOIN 
-                service_rate sr ON smi.service_rate_id = sr.id
-            WHERE 
-                sm.id = ANY(%s::uuid[])
-                AND s.category = %s
-                AND s.tenant_id = %s
-        """
-        params = [master_service_ids, category, subdomain_var.get()]
-
-        if model is not None:
-            sql_query += " AND s.name = %s"
-            params.append(model)
-        
-        sql_query += " ORDER BY s.name;"
-                
-        cursor.execute(sql_query, params)
-        services = cursor.fetchall()
-        connection.close()
-
-        # master_id별로 그룹핑
-        grouped = defaultdict(list)
-        for row in services:
-            grouped[row['master_id']].append(row)
-
-        if grouped:
-            # master_id가 하나만 있다고 가정, 첫 번째만 꺼냄
-            master_id, rows = next(iter(grouped.items()))
-            result = {
-                "service_master_id": master_id,
-                "data": rows
-            }
-        else:
-            # 데이터가 없을 때
-            result = {
-                "service_master_id": "",
-                "data": []
-            }
-            
-        return result
-    except Exception as e:
-        print(e)
-        raise HTTPException(status_code=500, detail=f"서비스 목록을 가져오는 중 오류가 발생했습니다: {e}")
-        
+     
 def insert_usage(usage_data: dict):
     try:
         supabase = supabase_client_var.get()
@@ -265,16 +130,24 @@ def insert_usage(usage_data: dict):
         if not usage_data:
             raise HTTPException(status_code=400, detail="사용량 데이터가 제공되지 않았습니다.")
         
-        if not usage_data.get('quantity'):
-            raise HTTPException(status_code=400, detail="수량이 제공되지 않았습니다.")
+        if not usage_data.get('serviceId'):
+            raise HTTPException(status_code=400, detail="서비스 ID가 제공되지 않았습니다.")
         
-        if not usage_data.get('model'):
-            raise HTTPException(status_code=400, detail="모델이 제공되지 않았습니다.")
+        if not usage_data.get('userId'):
+            raise HTTPException(status_code=400, detail="사용자 ID가 제공되지 않았습니다.")
             
-        if not usage_data.get('tenant_id'):
-            usage_data['tenant_id'] = subdomain_var.get()
-        
-        return supabase.table('usage').insert(usage_data).execute()
+        if not usage_data.get('startAt'):
+            raise HTTPException(status_code=400, detail="사용 시작 시점이 제공되지 않았습니다.")
+            
+        if not usage_data.get('usage'):
+            raise HTTPException(status_code=400, detail="메타데이터 제공되지 않았습니다.")
+    
+        if not usage_data.get('tenantId'):
+            usage_data['tenantId'] = subdomain_var.get()
+    
+
+        # Procedure 호출
+        return supabase.rpc("insert_usage_from_payload", usage_data).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"사용량 삽입 중 오류가 발생했습니다: {e}")
     
