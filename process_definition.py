@@ -22,6 +22,7 @@ class ProcessData(BaseModel):
 
 class ProcessRole(BaseModel):
     name: str
+    default: Optional[Any] = None
     endpoint: Optional[Any] = None
     resolutionRule: Optional[str] = None
     
@@ -40,6 +41,8 @@ class ProcessActivity(BaseModel):
     properties: Optional[str] = None
     duration: Optional[int] = None
     srcTrg: Optional[str] = None
+    agentMode: Optional[str] = None
+    orchestration: Optional[str] = None
     
     def __hash__(self):
         return hash(self.id)  # 또는 다른 고유한 속성을 사용
@@ -133,7 +136,7 @@ class ProcessDefinition(BaseModel):
                                 return self.find_prev_activity(sequence.source)
         return None
     
-    def find_prev_activities(self, activity_id, prev_activities=None, visited=None):
+    def find_prev_activities(self, activity_id, prev_activities=None, visited=None) -> List[ProcessActivity]:
         if prev_activities is None:
             prev_activities = []
         if visited is None:
@@ -171,6 +174,19 @@ class ProcessDefinition(BaseModel):
                 self.find_prev_activities(source_id, prev_activities, visited)
 
         return prev_activities
+    
+    def find_next_item(self, current_item_id: str) -> Union[ProcessActivity, ProcessGateway]:
+        for sequence in self.sequences:
+            if sequence.source == current_item_id:
+                source_id = sequence.target
+                source_activity = self.find_activity_by_id(source_id)
+                if source_activity:
+                    return source_activity
+                else:
+                    source_gateway = self.find_gateway_by_id(source_id)
+                    if source_gateway:
+                        return source_gateway
+        return None
 
     def find_next_activities(self, current_activity_id: str) -> List[ProcessActivity]:
         """
@@ -341,4 +357,6 @@ if __name__ == "__main__":
 class UIDefinition(BaseModel):
     id: str
     html: str
+    proc_def_id: Optional[str] = None
+    activity_id: Optional[str] = None
     fields_json: Optional[List[Dict[str, Any]]] = None

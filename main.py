@@ -2,10 +2,6 @@ import os
 
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
-# 환경에 따른 캐시 디렉토리 설정
-# CACHE_DIR = "/data" if os.path.exists("/.dockerenv") else "."
-# os.makedirs(CACHE_DIR, exist_ok=True)
-
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,23 +13,22 @@ from audio_input import add_routes_to_app as add_audio_input_routes_to_app
 from min import add_routes_to_app as add_min_routes_to_app
 from process_def_search import add_routes_to_app as add_process_def_search_routes_to_app
 from process_chat import add_routes_to_app as add_process_chat_routes_to_app
-from database import update_tenant_id, notification_polling_task
+from database import update_tenant_id
+# notification_polling_task는 FCM 서비스로 분리됨
 from mcp_config_api import add_routes_to_app as add_mcp_routes_to_app
 from agent_chat import add_routes_to_app as add_agent_chat_routes_to_app
 
 from dotenv import load_dotenv
 
 if os.getenv("ENV") != "production":
-    load_dotenv()
+    load_dotenv(override=True)
+    # 캐시 적용
+    from langchain.cache import SQLiteCache
+    from langchain.globals import set_llm_cache
+    set_llm_cache(SQLiteCache(database_path=".langchain.db"))
 
 os.environ["LANGSMITH_TRACING"] = "true"
 os.environ["LANGSMITH_ENDPOINT"] = "https://api.smith.langchain.com"
-
-# #캐시 적용
-# from langchain.cache import SQLiteCache
-# from langchain.globals import set_llm_cache
-
-# set_llm_cache(SQLiteCache(database_path=os.path.join(CACHE_DIR, ".langchain.db")))
 
 
 app = FastAPI(

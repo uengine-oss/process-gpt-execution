@@ -4,9 +4,13 @@ from .factories import LangchainMessageFactory
 from .clients.base import StreamingResponse
 from Usage import usage
 
-# from langchain.schema import Generation
-# from langchain.globals import get_llm_cache
+from langchain.schema import Generation
+from langchain.globals import get_llm_cache
+
 import hashlib, json, asyncio
+import os
+
+ENV = os.getenv("ENV")
 
 def build_prompt_for_cache(vendor: str, model: str, messages: list, model_config: dict) -> str:
     return json.dumps({
@@ -49,20 +53,22 @@ class ChatInterface:
             except Exception as e:
                 print(f"[ERROR] Failed to record usage: {e}")
         
-        # prompt = build_prompt_for_cache(vendor, model, messages, modelConfig)
-        # llm_string = build_llm_string(vendor, model)
-        
-        # cache = get_llm_cache()
-        # cached_generations = cache.lookup(prompt, llm_string)
-        
-        # if cached_generations:
-        #     cached_text = cached_generations[0].text
 
-        #     async def stream_cached_response(text: str):
-        #         yield f"data: {json.dumps({'choices': [{'delta': {'content': text}}]})}\n\n"
-        #         yield "data: [DONE]\n\n"
+        if ENV != "production":
+            prompt = build_prompt_for_cache(vendor, model, messages, modelConfig)
+            llm_string = build_llm_string(vendor, model)
+            
+            cache = get_llm_cache()
+            cached_generations = cache.lookup(prompt, llm_string)
+            
+            if cached_generations:
+                cached_text = cached_generations[0].text
 
-        #     return StreamingResponse(stream_cached_response(cached_text), media_type="text/event-stream")
+                async def stream_cached_response(text: str):
+                    yield f"data: {json.dumps({'choices': [{'delta': {'content': text}}]})}\n\n"
+                    yield "data: [DONE]\n\n"
+
+                return StreamingResponse(stream_cached_response(cached_text), media_type="text/event-stream")
 
         if stream:
             response = await client.stream_response(
@@ -96,10 +102,11 @@ class ChatInterface:
                     print(f"[WARNING] No response text in streaming, recording request tokens only")
                     record_usage(request_tokens, "")
 
-                # try:
-                #     cache.update(prompt, llm_string, [Generation(text=result_text)])
-                # except Exception as e:
-                #     print(f"[cache error] {e}")
+                if ENV != "production":
+                    try:
+                        cache.update(prompt, llm_string, [Generation(text=result_text)])
+                    except Exception as e:
+                        print(f"[cache error] {e}")
 
             return StreamingResponse(streaming_response(), media_type="text/event-stream")
 
@@ -127,10 +134,11 @@ class ChatInterface:
                 print(f"[ERROR] Failed to calculate response tokens: {e}")
                 record_usage(request_tokens, "")
 
-            # try:
-            #     cache.update(prompt, llm_string, [Generation(text=text)])
-            # except Exception as e:
-            #     print(f"[cache error] {e}")
+            if ENV != "production":
+                try:
+                    cache.update(prompt, llm_string, [Generation(text=response_text)])
+                except Exception as e:
+                    print(f"[cache error] {e}")
 
             return response
 

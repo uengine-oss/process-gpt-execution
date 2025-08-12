@@ -18,22 +18,25 @@ import queue
 import time
 
 from database import (
-    fetch_process_definition, fetch_process_instance, fetch_organization_chart, 
+    fetch_process_definition, fetch_process_instance, fetch_ui_definition,
     fetch_ui_definition_by_activity_id, fetch_user_info, fetch_assignee_info, 
     get_vector_store, fetch_workitem_by_proc_inst_and_activity, upsert_process_instance, 
     upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
-    upsert_todo_workitems, upsert_workitem, delete_workitem, ProcessInstance
+    upsert_todo_workitems, upsert_workitem, delete_workitem, ProcessInstance,
+    fetch_todolist_by_proc_inst_id, execute_rpc, upsert_cancelled_workitem
 )
 from process_definition import load_process_definition
 from code_executor import execute_python_code
 from smtp_handler import generate_email_template, send_email
 from agent_processor import handle_workitem_with_agent
+from mcp_processor import mcp_processor
 
-load_dotenv()
+
+if os.getenv("ENV") != "production":
+    load_dotenv(override=True)
 
 # ChatOpenAI 객체 생성
-model = ChatOpenAI(model="gpt-4o", streaming=True)
-vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096, streaming=True)
+model = ChatOpenAI(model="gpt-4o", streaming=True, temperature=0)
 
 # parser 생성
 class CustomJsonOutputParser(SimpleJsonOutputParser):
@@ -137,104 +140,211 @@ parser = CustomJsonOutputParser()
 
 prompt = PromptTemplate.from_template(
 """
-Now, you're going to create an interactive system similar to a BPM system that helps our company's employees understand various processes and take the next steps when they start a process or are curious about the next steps.
+You are a BPMN Execution Agent.
 
-- Process Definition: {processDefinitionJson}
+Your task is to analyze the current process state and determine the next executable steps based on the process definition, activity outputs, and role bindings. You must return a valid JSON response as described below.
 
-- Process Instance Id: {instance_id}
-- Process Instance Data: {instance_variables_data}
-    
-- Organization Chart: {organizationChart}
+Process Definition:
+- activities: {activities}
+- gateways: {gateways}
+- events: {events}
+- sequences: {sequences}
+- attached_activities: {attached_activities}
 
-- User Information: {user_info}
+Current Step:
+- activity_id: {activity_id}
+- user: {user_email}
+- submitted_output: {output}
 
-- Role Bindings: {role_bindings}
+Runtime Context:
+- next_activities: {next_activities}
+- previous_outputs: {previous_outputs}
+- today: {today}
+- gateway_condition_data: {gateway_condition_data}
+- instance_name_pattern: {instance_name_pattern} // If empty, fallback to key-value based logic from process variables (max 20 characters).
 
-- Currently Running Activities: {current_activity_ids}
+--- OPTIONAL USER FEEDBACK ---
 
-- Currently Running Activity's Form Fields: {form_fields}
+User Feedback (Optional):
+- message_from_user: "{user_feedback_message}"
 
-- Received Message From Current Step:
-    activity id: "{activity_id}",
-    user: "{user_email}",
-    submitted form values: {form_values},
-    submitted answer: "{answer}"    // If no form values have been submitted, assign the values in the form field using the submitted answers. Based on the current running activity form fields. If the readonly="true" fields are not entered, never return an error and ignore it. But if fields with readonly="false" are not entered, return the error "DATA_FIELD_NOT_EXIST",
-    other output: {other_output} // 폼 입력 값이 누락된 경우 이걸 참고해서 폼 입력 값을 채워줄 것.
+If message_from_user is not empty:
+- Carefully interpret the message to determine if any part of the result should be temporarily modified.
+- Common changes include:
+  - Wrong user assignment (e.g., 담당자 잘못 지정)
+  - Incorrect or missing variables
+  - Incorrect description wording
+  - Request for different activity routing
+- Use your best judgment to revise output accordingly.
+- Changes should be applied **provisionally** and marked as feedback-applied.
+- Indicate in the `description` (in Korean) that the result has been adjusted based on user feedback.
+- Do not assume the user wants to override everything — only update what's explicitly or implicitly requested.
 
-- Today is:  {today}
+Instructions:
 
-- Process Instance Name Pattern: "{instance_name_pattern}"  // If there is no process instance name pattern, the key_value format of parameterValue, along with the process definition name, is the default for the instance name pattern. Instance name must be limited to 20 characters or less. e.g. 휴가신청_이름_홍길동_사유_개인일정_시작일_20240701
+Step 1. Merge output variables
+- Merge submitted_output and previous_outputs into a single key-value dictionary called merged_outputs.
+- Use merged_outputs for all condition evaluation and variable extraction.
+- Do not fabricate or infer values that are not present.
 
-Given the current state, tell me which next step activity should be executed. Return the result in a valid json format:
-The data changes should be derived from the user submitted data or attached image OCR.
-By referencing the sequences of the process definition, the next activity step needs to be identified. The target ID of the sequence connected to the current completed activity ID is the ID of the next activity.
-At this point, the data change values must be written in Python format, adhering to the process data types declared in the process definition. For example, if the process variable is declared as boolean, it should be true/false.
-Information about completed activities must be returned.
-When determining nextUserEmail for nextActivities, ALWAYS use the "endpoint" value from roleBindings instead of "default" value. If endpoint is a list, use the first element. If endpoint is different from default, prioritize endpoint value.
-If the person responsible for the next activity is an external customer, the nextUserEmail included in nextActivities must be returned customer email. Customer emails must be found in submitted form values or process instance data. Never write customer emails at will or return non-external ones. Instances will be broken.
-If the condition of the sequence is not met for progression to the next step, it cannot be included in nextActivities and must be reported in cannotProceedErrors.
-startEvent/endEvent is not an activity id. Never be included in completedActivities/nextActivities.
-If the user-submitted data is insufficient, refer to the process data to extract the value.
-When an image is input, the process activity is completed based on the analyzed contents by analyzing the image.
+Step 2. Detect events
+- Check all events in the `events` list that contain a cron-style `expression` field.
+  - Do not restrict to a specific event type (e.g., intermediateThrowEvent).
+  - Supported types may include: "intermediateThrowEvent", "boundaryEvent", "startTimerEvent", etc.
+- Do not rely on predefined expression values.
+- Instead, infer the appropriate cron expression dynamically using merged_outputs and the current date.
+- Identify any date field in merged_outputs that is likely associated with the event (e.g., payment_date, due_date, etc).
+- If today's date matches that value, proceed to the next check.
+- Only consider the event as valid if at least one of the following is true:
+  1. It is reachable from the current activity via the `sequences` graph (forward traversal), or
+  2. It is directly attached to the current activity (via `attached_activities`)
+- When the event is due and valid:
+  - Extract the day and month from the matched field.
+  - Generate a cron expression in the format `"0 0 DD MM *"` (e.g., "0 0 30 7 *").
+  - Use this value as `expression` in both nextActivities and completedActivities (for display only).
+  - Set `interruptByEvent = true`.
+  - Return **only** this event in `nextActivities`, in the following format:
+  - Do **not** evaluate or return any gateway-based activities when an interrupting event is triggered.
 
-CRITICAL INSTRUCTIONS:
-1. Return ONLY the JSON response wrapped in ```json and ``` markers
-2. Do not include any explanation, comments, or additional text before or after the JSON
-3. Ensure all JSON keys and string values are properly quoted with double quotes
-4. Do not include trailing commas in arrays or objects
-5. Use proper JSON escaping for special characters in strings
-6. The response must be valid JSON that can be parsed without errors
+Step 3. If no event overrides, evaluate next activities
+- For each next_activities item, match its sequence condition.
+- Evaluate the condition using merged_outputs.
+- If no condition is matched, return a PROCEED_CONDITION_NOT_MET error.
 
-result should be in this JSON format:
+Step 4. Determine valid next activities (**중요: attachedEvents와의 동시 추가**)
+- For each item in next_activities, check the sequence condition from the current activity.
+- If there is no condition, include the target activity.
+- If a condition exists, evaluate it using merged_outputs.
+  - Example: "stock_quantity >= order_quantity"
+  - Only include the activity if the condition evaluates to true.
+- **When including an activity in nextActivities,**
+  - **If the activity appears as activity_id in attached_activities,**
+    - **For each event_id in its attached_events array,**
+      - **If the event_id is not in completedActivities or cancelledActivities,**
+        - **ALWAYS also add this event as a separate entry in nextActivities (type: "event").**
+    - **즉, nextActivities에 attachedEvents가 있는 액티비티가 다음 액티비티라면, 해당 event들도 반드시 별도의 nextActivity 엔트리로 함께 추가해야 한다.**
+- Same inputs must always produce the same nextActivities. Do not randomly vary this.
+
+Step 5. Assign next user
+- Use roleBindings.endpoint to assign nextUserEmail. If a list, pick the first item.
+- If the target role is an external customer, use email from merged_outputs.
+- If no valid email is found, return DATA_FIELD_NOT_EXIST error.
+
+Step 6. Generate instanceName
+- Use instance_name_pattern if provided.
+- If empty, use a fallback such as "processDefinitionId.key", using a value from submitted_output.
+- Ensure result is 20 characters or less.
+
+Step 7. Compose process description
+- In Korean, explain what activity was completed, what decisions were made, and what happens next.
+- If useful data is available, include a list of reference info at the end in the format:
+  - 주문 상품: 삼성 노트북
+  - 재고 수량: 10
+- Omit the list entirely if no meaningful information is available.
+
+Output format (must be wrapped in ```json and ``` markers):
 {{
-    "instanceId": "{instance_id}",
-    "instanceName": "process instance name",
-    "processDefinitionId": "{process_definition_id}",
-    "fieldMappings":
-    [{{
-        "key": "process data key", // Replace with _ if there is a space, Process Definition 에서 없는 데이터는 추가하지 않음. 프로세스 정의 데이터에 이메일이나 이름 같은 변수가 존재하지만 값이 누락된 경우 역할 바인딩에서 적절한 값을 알아서 지정하여 필드 매핑해줄 것.
-        "name": "process data name",
-        "value": <value for changed data>  // Refer to the data type of this process variable. For example, if the type of the process variable is Date, calculate and assign today's date. If the type of variable is a form, assign the JSON format. 
-    }}],
-    "roleBindings": {role_bindings},
-    "completedActivities":
-    [{{
-        "completedActivityId": "the id of completed activity id",
-        "completedUserEmail": "the email address of completed activity's role",
-        "result": "DONE"
-    }}],
-    "nextActivities":
-    [{{
-        "nextActivityId": "the id of next activity id",
-        "nextUserEmail": "the email address OR agent id of next activity's role",
-        "result": "IN_PROGRESS | PENDING | DONE",
-        "messageToUser": "해당 액티비티를 수행할 유저에게 어떤 입력값을 입력해야 (output_data) 하는지, 준수사항(checkpoint)들은 무엇이 있는지, 어떤 정보를 참고해야 하는지(input_data)"
-    }}],
-    "cannotProceedErrors":   // return errors if cannot proceed to next activity 
-    [{{
-        "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST"
-        "reason": "explanation for the error in Korean"
-    }}],
-    "description": "description of the completed activities and the next activities and what the user who will perform the task should do in Korean"
-
+  "instanceId": "{instance_id}",
+  "instanceName": "process instance name",
+  "processDefinitionId": "{process_definition_id}",
+  "fieldMappings": [
+    {{
+      "key": "process_variable_key",
+      "name": "process_variable_name",
+      "value": <value_matching_type>
+    }}
+  ],
+  "roleBindings": {role_bindings},
+  "completedActivities": [
+    {{
+      "completedActivityId": "activity_id",
+      "completedActivityName": "activity_name",
+      "completedUserEmail": "user_email",
+      "type": "activity",
+      "result": "DONE",
+      "description": "완료된 활동에 대한 설명 (Korean)"
+    }},
+    {{
+      "completedActivityId": "event_id",
+      "completedUserEmail": "email_or_agent_id",
+      "type": "event",
+      "expression": "cron expression",
+      "dueDate": "YYYY-MM-DD",
+      "result": "DONE",
+      "description": "완료된 활동에 대한 설명 (Korean)"
+    }}
+  ],
+  "nextActivities": [
+    {{
+      "nextActivityId": "activity_id",
+      "nextActivityName": "activity_name",
+      "nextUserEmail": "email_or_agent_id",
+      "type": "activity",
+      "result": "IN_PROGRESS",
+      "messageToUser": "Instructions in Korean"
+    }},
+    {{
+      "nextActivityId": "event_id",
+      "nextActivityName": "event_name",
+      "nextUserEmail": "email_or_agent_id",
+      "type": "event",
+      "expression": "cron expression",
+      "dueDate": "YYYY-MM-DD",
+      "result": "IN_PROGRESS",
+      "description": "다음 활동에 대한 설명 (Korean)"
+    }}
+  ],
+  "cancelledActivities": [
+    {{
+      "cancelledActivityId": "activity_id",
+      "cancelledActivityName": "activity_name",
+      "cancelledUserEmail": "user_email",
+      "type": "activity",
+      "result": "CANCELLED"
+    }},
+    {{
+      "cancelledActivityId": "event_id",
+      "cancelledUserEmail": "email_or_agent_id",
+      "type": "event",
+      "result": "CANCELLED"
+    }}
+  ],
+  "cannotProceedErrors": [
+    {{
+      "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST",
+      "reason": "설명 (Korean)"
+    }}
+  ],
+  "referenceInfo": [
+    {{
+      "key": "이전 산출물에서 참조한 키 (in Korean)",
+      "value": "이전 산출물에서 참조한 값 (in Korean)"
+    }}
+  ]
 }}
-
-Remember: Return ONLY the JSON wrapped in ```json and ``` markers, nothing else.
 """
 )
 
 # Pydantic model for process execution
 class Activity(BaseModel):
     nextActivityId: Optional[str] = None
+    nextActivityName: Optional[str] = None
     nextUserEmail: Optional[str] = None
     result: Optional[str] = None
+    description: Optional[str] = None
+    type: Optional[str] = None
+    expression: Optional[str] = None
 
 class CompletedActivity(BaseModel):
     completedActivityId: Optional[str] = None
+    completedActivityName: Optional[str] = None
     completedUserEmail: Optional[str] = None
     result: Optional[str] = None
+    description: Optional[str] = None
 
-
+class ReferenceInfo(BaseModel):
+    key: Optional[str] = None
+    value: Optional[str] = None
 
 class FieldMapping(BaseModel):
     key: str
@@ -254,8 +364,8 @@ class ProcessResult(BaseModel):
     processDefinitionId: str
     result: Optional[str] = None
     cannotProceedErrors: Optional[List[ProceedError]] = None
-    description: str
-
+    referenceInfo: Optional[List[ReferenceInfo]] = None
+    
 # upsert 디바운스 큐 및 쓰레드 정의 (파일 상단에 위치)
 upsert_queue = queue.Queue()
 
@@ -293,7 +403,7 @@ def initialize_role_bindings(process_result_json: dict) -> list:
             initial_role_bindings.append(role_binding)
     return initial_role_bindings
 
-def check_external_customer_and_send_email(activity_obj, user_email, process_instance, process_definition):
+def check_external_customer_and_send_email(activity_obj, process_instance, process_definition):
     """
     Check that the next activity's role is assigned to external customer.
     If the next activity's role is assigned to external customer, send an email to the external customer.
@@ -304,11 +414,27 @@ def check_external_customer_and_send_email(activity_obj, user_email, process_ins
         role_info = next((role for role in process_definition.roles if role.name == role_name), None)
         
         if role_info and role_info.endpoint == "external_customer":
-            # Get customer email from role_info
-            if user_email == "external_customer":
-                customer_email = next((variable["value"] for variable in process_instance.variables_data if variable["key"] == "customer_email"), None)
-            else:
-                customer_email = user_email
+            customer_email = None
+            workitems = fetch_todolist_by_proc_inst_id(process_instance.proc_inst_id)
+            completed_workitems = [workitem for workitem in workitems if workitem.status == "DONE"]
+            completed_outputs = [workitem.output for workitem in completed_workitems]
+            for output in completed_outputs:
+                if output:
+                    try:
+                        output_json = json.loads(output) if isinstance(output, str) else output
+                        # output_json이 딕셔너리인지 확인
+                        if isinstance(output_json, dict):
+                            # 각 폼 필드에서 customer_email 찾기
+                            for form_key, form_data in output_json.items():
+                                if isinstance(form_data, dict) and "customer_email" in form_data:
+                                    customer_email = form_data["customer_email"]
+                                    break
+                            # customer_email을 찾았으면 루프 종료
+                            if customer_email:
+                                break
+                    except (json.JSONDecodeError, TypeError) as e:
+                        print(f"[WARNING] Failed to parse output JSON: {e}")
+                        continue
             
             if customer_email:
                 if (process_instance.tenant_id == "localhost"):
@@ -331,10 +457,14 @@ def check_external_customer_and_send_email(activity_obj, user_email, process_ins
                 # 이메일 템플릿 생성
                 email_template = generate_email_template(activity_obj, external_form_url, additional_info)
                 title = f"'{activity_obj.name}' 를 진행해주세요."
+                print(f"Sending email to {customer_email} with title {title}")
                 # 이메일 전송
                 send_email(subject=title, body=email_template, to_email=customer_email)
                 
                 return True
+            else:
+                print(f"No customer email found for {process_instance.proc_inst_id}")
+                return False
     except Exception as e:
         # Log the error but don't stop the process
         print(f"Failed to send notification to external customer: {str(e)}")
@@ -404,22 +534,25 @@ def _process_next_activities(process_instance: ProcessInstance, process_result: 
             break
             
         if process_definition.find_gateway_by_id(activity.nextActivityId):
-            next_activities = process_definition.find_next_activities(activity.nextActivityId)
-            if next_activities:
-                process_instance.current_activity_ids = [act.id for act in next_activities]
-                process_result_json["nextActivities"] = []
-                next_activity_dicts = [
-                    Activity(
-                        nextActivityId=act.id,
-                        nextUserEmail=activity.nextUserEmail,
-                        result="IN_PROGRESS"
-                    ).model_dump() for act in next_activities
-                ]
-                process_result_json["nextActivities"].extend(next_activity_dicts)
+            if activity.type == "event":
+                process_instance.current_activity_ids = [activity.nextActivityId]
             else:
-                process_instance.current_activity_ids = []
-                process_result_json["nextActivities"] = []
-                break
+                next_activities = process_definition.find_next_activities(activity.nextActivityId, True)
+                if next_activities:
+                    process_instance.current_activity_ids = [act.id for act in next_activities]
+                    process_result_json["nextActivities"] = []
+                    next_activity_dicts = [
+                        Activity(
+                            nextActivityId=act.id,
+                            nextUserEmail=activity.nextUserEmail,
+                            result="IN_PROGRESS"
+                        ).model_dump() for act in next_activities
+                    ]
+                    process_result_json["nextActivities"].extend(next_activity_dicts)
+                else:
+                    process_instance.current_activity_ids = []
+                    process_result_json["nextActivities"] = []
+                    break
                 
         elif activity.result == "IN_PROGRESS" and activity.nextActivityId not in process_instance.current_activity_ids:
             process_instance.current_activity_ids = [activity.nextActivityId]
@@ -428,7 +561,7 @@ def _process_next_activities(process_instance: ProcessInstance, process_result: 
         
         # Check external customer and send email
         activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
-        check_external_customer_and_send_email(activity_obj, activity.nextUserEmail, process_instance, process_definition)
+        check_external_customer_and_send_email(activity_obj, process_instance, process_definition)
 
 def _execute_script_tasks(process_instance: ProcessInstance, process_result: ProcessResult, 
                          process_result_json: dict, process_definition):
@@ -471,35 +604,160 @@ def _execute_script_tasks(process_instance: ProcessInstance, process_result: Pro
                     completedUserEmail=activity.nextUserEmail,
                     result="DONE"
                 )
-                completed_activity_dict = completed_activity.dict()
+                completed_activity_dict = completed_activity.model_dump()
                 process_result_json["completedActivities"].append(completed_activity_dict)
         else:
             result = f"Next activity {activity.nextActivityId} is not a ScriptActivity or not found."
             process_result_json["result"] = result
 
+def _register_event(process_instance: ProcessInstance, process_result: ProcessResult, 
+                   process_result_json: dict, process_definition):
+    """Register intermediate events when process instance is in WAITING status"""
+    try:
+        print(f"[DEBUG] Starting event registration for process instance: {process_instance.proc_inst_id}")
+        
+        # Find intermediate events in current process state
+        events = []
+        
+        # Check current activity IDs for intermediate events
+        if process_result.nextActivities:
+            for activity in process_result.nextActivities:
+                # Check if activity is an intermediate event (gateway with event type)
+                gateway = process_definition.find_gateway_by_id(activity.nextActivityId)
+                if gateway:
+                    events.append({
+                        'event_id': gateway.id,
+                        'event_name': gateway.name,
+                        'event_type': gateway.type,
+                        'condition': gateway.condition,
+                        'expression': activity.expression,
+                        'process_id': process_instance.proc_inst_id,
+                        'properties': gateway.properties
+                    })
+                    print(f"[DEBUG] Found intermediate event: {gateway.id} of type {gateway.type}")
+        
+        # Register events if found
+        if events:
+            for event in events:
+                _register_single_event(process_instance, event, process_result_json)
+                print(f"[INFO] Registered intermediate event: {event['event_id']}")
+        else:
+            print(f"[DEBUG] No intermediate events found for process instance: {process_instance.proc_inst_id}")
+            
+    except Exception as e:
+        print(f"[ERROR] Failed to register events for process instance {process_instance.proc_inst_id}: {str(e)}")
+        # Don't raise exception to avoid breaking the main process flow
+        import traceback
+        print(traceback.format_exc())
+def _is_intermediate_event(gateway) -> bool:
+    """Check if gateway represents an intermediate event"""
+    intermediate_event_types = [
+        "intermediateThrowEvent",
+        "intermediateCatchEvent", 
+        "timerIntermediateEvent",
+        "messageIntermediateEvent",
+        "signalIntermediateEvent",
+        "conditionalIntermediateEvent",
+        "linkIntermediateEvent",
+        "escalationIntermediateEvent",
+        "errorIntermediateEvent",
+        "cancelIntermediateEvent",
+        "compensationIntermediateEvent"
+    ]
+    
+    return gateway.type in intermediate_event_types
+def _register_single_event(process_instance: ProcessInstance, event: dict, process_result_json: dict):
+    """Register a single intermediate event - Implementation placeholder"""
+    # TODO: Implement actual event registration logic here
+    # This could involve:
+    # - Creating event listeners for timer events
+    # - Setting up message subscriptions for message events  
+    # - Registering signal handlers for signal events
+    # - Setting up conditional checks for conditional events
+    # - Storing event metadata in database
+    
+    print(f"[PLACEHOLDER] Event registration logic for {event['event_type']} event {event['event_id']} goes here")
+    
+    # Example structure for what the implementation might look like:
+    _register_timer_event(process_instance, event)
+    # elif event['event_type'] == 'messageIntermediateEvent':
+    #     _register_message_event(process_instance, event)
+    # elif event['event_type'] == 'signalIntermediateEvent':
+    #     _register_signal_event(process_instance, event)
+    # else:
+    #     _register_generic_event(process_instance, event)
+    
+def _register_timer_event(process_instance: ProcessInstance, event: dict):
+    """Register a timer intermediate event"""
+    print(f"[INFO] Registering timer intermediate event: {event['event_id']}")
+    if event['expression']:
+        job_name = f"{event['process_id']}_{event['event_id']}"
+        cron_expr = event['expression']
+        params = {
+            "p_job_name": job_name,
+            "p_cron_expr": cron_expr,
+            "p_input": {
+                "proc_inst_id": event['process_id'],
+                "activity_id": event['event_id']
+            }
+        }
+        result = execute_rpc("register_cron_intermidiated", params)
+    return result
 def _persist_process_data(process_instance: ProcessInstance, process_result: ProcessResult, 
                          process_result_json: dict, process_definition, tenant_id: Optional[str] = None):
     """Persist process data to database and vector store"""
     # Upsert workitems
-    upsert_todo_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
-    completed_workitems = upsert_completed_workitem(process_instance.dict(), process_result_json, process_definition, tenant_id)
-    next_workitems = upsert_next_workitems(process_instance.dict(), process_result_json, process_definition, tenant_id)
+    upsert_todo_workitems(process_instance.model_dump(), process_result_json, process_definition, tenant_id)
+    completed_workitems = upsert_completed_workitem(process_instance.model_dump(), process_result_json, process_definition, tenant_id)
+    upsert_cancelled_workitem(process_instance.model_dump(), process_result_json, process_definition, tenant_id)
+    next_workitems = upsert_next_workitems(process_instance.model_dump(), process_result_json, process_definition, tenant_id)
     
     # Upsert process instance
     if process_instance.status == "NEW":
         process_instance.proc_inst_name = process_result.instanceName
     _, process_instance = upsert_process_instance(process_instance, tenant_id)
     
-    # Send chat message
-    message_json = json.dumps({
-        "role": "system",
-        "content": process_result.description
-    })
-    upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
+    appliedFeedback = False
+    if completed_workitems:
+        for completed_workitem in completed_workitems:
+            user_info = fetch_assignee_info(completed_workitem.user_id)
+            ui_definition = fetch_ui_definition_by_activity_id(completed_workitem.proc_def_id, completed_workitem.activity_id, tenant_id)
+            form_html = ui_definition.html if ui_definition else None
+            form_id = ui_definition.id if ui_definition else None
+            if completed_workitem.output:
+                output = completed_workitem.output.get(form_id)
+            else:
+                output = {}
+            message_data = {
+                "role": "system" if user_info.get("name") == "external_customer" else "user",
+                "name": user_info.get("name"),
+                "email": user_info.get("email"),
+                "profile": user_info.get("info", {}).get("profile", ""),
+                "content": "",
+                "jsonContent": output if output else {},
+                "htmlContent": form_html if form_html else "",
+                "contentType": "html" if form_html else "text"
+            }
+            upsert_chat_message(completed_workitem.proc_inst_id, message_data, tenant_id)
+            if completed_workitem.temp_feedback and completed_workitem.temp_feedback not in [None, ""]:
+                appliedFeedback = True
 
     if process_result.cannotProceedErrors:
         reason = "\n".join(error.reason for error in process_result.cannotProceedErrors)
         message_json = json.dumps({"role": "system", "content": reason})
+        upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
+    else:
+        description = {
+            "referenceInfo": process_result_json.get("referenceInfo", []),
+            "completedActivities": process_result_json.get("completedActivities", []),
+            "nextActivities": process_result_json.get("nextActivities", []),
+            "appliedFeedback": appliedFeedback
+        }
+        message_json = json.dumps({
+            "role": "system",
+            "contentType": "json",
+            "jsonContent": description
+        })
         upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
     
     # Update process_result_json
@@ -516,6 +774,21 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
     vector_store = get_vector_store()
     vector_store.add_documents([Document(page_content=content_str, metadata=metadata)])
 
+def _check_service_tasks(process_instance: ProcessInstance, process_result_json: dict, process_definition):
+    try:
+        for activity in process_result_json.get("nextActivities", []):
+            activity_obj = process_definition.find_activity_by_id(activity.get("nextActivityId"))
+            if activity_obj and activity_obj.type == "serviceTask":
+                next_workitem = fetch_workitem_by_proc_inst_and_activity(process_instance.proc_inst_id, activity_obj.id, process_instance.tenant_id)
+                if next_workitem:
+                    upsert_workitem({
+                        "id": next_workitem.id,
+                        "status": "SUBMITTED",
+                    }, process_instance.tenant_id)
+    except Exception as e:
+        print(f"[ERROR] Failed to check service tasks: {str(e)}")
+        raise e
+    
 def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = None) -> str:
     try:
         process_result = ProcessResult(**process_result_json)
@@ -527,6 +800,7 @@ def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = 
         # Update process variables
         _update_process_variables(process_instance, process_result.fieldMappings)
         
+        
         # Process next activities
         _process_next_activities(process_instance, process_result, process_result_json, process_definition)
         
@@ -535,6 +809,12 @@ def execute_next_activity(process_result_json: dict, tenant_id: Optional[str] = 
         
         # Persist data
         _persist_process_data(process_instance, process_result, process_result_json, process_definition, tenant_id)
+        
+        # Regester event
+        _register_event(process_instance, process_result, process_result_json, process_definition)
+        
+        # Check service tasks
+        _check_service_tasks(process_instance, process_result_json, process_definition)
         
         return json.dumps(process_result_json)
     except Exception as e:
@@ -623,6 +903,123 @@ def update_instance_status_on_error(workitem: dict, is_first: bool, is_last: boo
     except Exception as e:
         print(f"[ERROR] Failed to update instance status for {proc_inst_id}: {str(e)}")
 
+def get_field_value(field_info: str, process_definition: Any, process_instance_id: str, tenant_id: str):
+    """
+    산출물에서 특정 필드의 값을 추출
+    """
+    try:
+        field_value = {}
+        process_definition_id = process_definition.processDefinitionId
+        split_field_info = field_info.split('.')
+        form_id = split_field_info[0]
+        field_id = split_field_info[1]
+        activity_id = form_id.replace("_form", "").replace(f"{process_definition_id}_", "")
+        
+        workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_id, activity_id, tenant_id)
+        if workitem:
+            field_value[form_id] = {}
+            output = workitem.output
+            if output:
+                if output.get(form_id) and output.get(form_id).get(field_id):
+                    field_value[form_id][field_id] = output.get(form_id).get(field_id)
+                else:
+                    return None
+            else:
+                return None
+
+        return field_value
+    except Exception as e:
+        print(f"[ERROR] Failed to get output field value for {field_info}: {str(e)}")
+        return None
+
+def group_fields_by_form(field_values: dict) -> dict:
+    """
+    필드 값들을 폼별로 그룹화하는 공통 함수
+    
+    Args:
+        field_values: {'form_id.field_name': {'form_id': {'field_name': value}}, ...} 형태의 딕셔너리
+    
+    Returns:
+        {'form_id': {'field_name': value, ...}, ...} 형태의 그룹화된 딕셔너리
+    """
+    form_groups = {}
+    
+    for field_key, field_value in field_values.items():
+        if not field_value:
+            continue
+            
+        form_id = field_key.split('.')[0]
+        if form_id not in form_groups:
+            form_groups[form_id] = {}
+        
+        field_id = field_key.split('.')[1] if '.' in field_key else field_key
+        
+        if isinstance(field_value, dict) and form_id in field_value:
+            actual_value = field_value[form_id].get(field_id)
+            if actual_value is not None:
+                form_groups[form_id][field_id] = actual_value
+    
+    return {form_id: fields for form_id, fields in form_groups.items() if fields}
+
+def get_input_data(workitem: dict, process_definition: Any):
+    """
+    워크아이템 실행에 필요한 입력 데이터 추출
+    """
+    try:
+        activity_id = workitem.get('activity_id')
+        activity = process_definition.find_activity_by_id(activity_id)
+
+        if not activity:
+            return None
+        
+        input_data = {}
+        input_fields = activity.inputData
+        if len(input_fields) != 0:
+            # 각 필드의 값을 가져오기
+            field_values = {}
+            for input_field in input_fields:
+                field_value = get_field_value(input_field, process_definition, workitem.get('proc_inst_id'), workitem.get('tenant_id'))
+                if field_value:
+                    field_values[input_field] = field_value
+            
+            # 폼별로 그룹화
+            grouped_data = group_fields_by_form(field_values)
+            input_data.update(grouped_data)
+
+        return input_data
+
+    except Exception as e:
+        print(f"[ERROR] Failed to get selected info for {workitem.get('id')}: {str(e)}")
+        return None
+
+def get_gateway_condition_data(workitem: dict, process_definition: Any, gateway_id: str):
+    """
+    워크아이템 실행에 필요한 게이트웨이 조건 데이터 추출
+    """
+    try:
+        gateway = process_definition.find_gateway_by_id(gateway_id)
+        if not gateway:
+            return None
+        
+        condition_data = {}
+        if gateway.conditionData:
+            process_instance_id = workitem.get('proc_inst_id')
+            # 각 필드의 값을 가져오기
+            field_values = {}
+            for condition_field in gateway.conditionData:
+                field_value = get_field_value(condition_field, process_definition, process_instance_id, workitem.get('tenant_id'))
+                if field_value:
+                    field_values[condition_field] = field_value
+            
+            # 폼별로 그룹화
+            grouped_data = group_fields_by_form(field_values)
+            condition_data.update(grouped_data)
+
+        return condition_data
+    except Exception as e:
+        print(f"[ERROR] Failed to get gateway condition data for {workitem.get('id')}: {str(e)}")
+        return None
+
 async def handle_workitem(workitem):
     # 워크아이템 위치 판별
     is_first, is_last = get_workitem_position(workitem)
@@ -637,8 +1034,8 @@ async def handle_workitem(workitem):
     tenant_id = workitem['tenant_id']
 
     process_definition_json = fetch_process_definition(process_definition_id, tenant_id)
-    process_instance = fetch_process_instance(process_instance_id, tenant_id) if process_instance_id != "new" else None
-    organization_chart = fetch_organization_chart(tenant_id)
+    process_definition = load_process_definition(process_definition_json)
+    
     if workitem['user_id'] != "external_customer":
         if workitem['user_id'] and ',' in workitem['user_id']:
             user_ids = workitem['user_id'].split(',')
@@ -666,10 +1063,9 @@ async def handle_workitem(workitem):
             "email": workitem['user_id'],
             "info": {}
         }
+
     today = datetime.now().strftime("%Y-%m-%d")
     ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id, tenant_id)
-    form_fields = ui_definition.fields_json if ui_definition else None
-    form_html = ui_definition.html if ui_definition else None
     output = {}
     if workitem['output'] and isinstance(workitem['output'], str):
         output = json.loads(workitem['output'])
@@ -678,26 +1074,55 @@ async def handle_workitem(workitem):
     form_id = ui_definition.id if ui_definition else None
     if form_id and output.get(form_id):
         output = output.get(form_id)
-    
+        
     try:
+        next_activities = []
+        gateway_condition_data = None
+        if process_definition:
+            next_activities = [activity.id for activity in process_definition.find_next_activities(activity_id, True)]
+            for act_id in next_activities:
+                if process_definition.find_gateway_by_id(act_id):
+                    try:
+                        gateway_condition_data = get_gateway_condition_data(workitem, process_definition, act_id)
+                    except Exception as e:
+                        print(f"[ERROR] Failed to get gateway condition data for {workitem.get('id')}: {str(e)}")
+                        gateway_condition_data = None
+
+        workitem_input_data = None
+        try:
+            workitem_input_data = get_input_data(workitem, process_definition)
+        except Exception as e:
+            print(f"[ERROR] Failed to get selected info for {workitem.get('id')}: {str(e)}")
+            
+            
+        attached_activities = []
+        for next_activity in next_activities:
+            activity = process_definition.find_activity_by_id(next_activity)
+            if activity:
+                if activity.attachedEvents:
+                    attached_activities.append({
+                        "activity_id": activity.id,
+                        "attached_events": activity.attachedEvents
+                    })
+
         chain_input = {
-            "answer": '',
+            "activities": process_definition.activities,
+            "gateways": process_definition_json.get('gateways', []),
+            "events": process_definition_json.get('events', []),
+            "sequences": process_definition.sequences,
             "instance_id": process_instance_id,
-            "instance_variables_data": process_instance.variables_data if process_instance and process_instance.status == "RUNNING" else '',
-            "role_bindings": workitem.get('assignees', []),
-            "current_activity_ids": activity_id,
-            "participants": workitem['user_id'],
-            "processDefinitionJson": process_definition_json,
+            "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
             "process_definition_id": process_definition_id,
             "activity_id": activity_id,
-            "user_info": user_info,
             "user_email": workitem['user_id'] if not workitem['user_id'] or ',' not in workitem['user_id'] else ','.join(workitem['user_id'].split(',')),
+            "output": output,
             "today": today,
-            "organizationChart": organization_chart,
-            "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
-            "form_fields": form_fields,
-            "form_values": output,
-            "other_output": workitem['output']
+            "role_bindings": workitem.get('assignees', []),
+            "next_activities": next_activities,
+            "previous_outputs": workitem_input_data,
+            "user_feedback_message": workitem.get('temp_feedback', ''),
+            "gateway_condition_data": gateway_condition_data,
+            "attached_activities": attached_activities
         }
         
         collected_text = ""
@@ -757,42 +1182,24 @@ async def handle_workitem(workitem):
         
         result = execute_next_activity(parsed_output, tenant_id)
         result_json = json.loads(result)
+        
     except Exception as e:
         print(f"[ERROR] Error in handle_workitem for workitem {workitem['id']}: {str(e)}")
         raise e
 
-    if result_json.get("instanceId") != "new" and workitem['proc_inst_id'] == "new":
-        instance_id = result_json.get("instanceId")
-        new_workitem = fetch_workitem_by_proc_inst_and_activity(instance_id, activity_id, tenant_id)
-        new_workitem_dict = new_workitem.dict()
-        if new_workitem_dict['id'] != workitem['id']:
+    if result_json:
+        if result_json.get("cannotProceedErrors"):
             upsert_workitem({
                 "id": workitem['id'],
-                "proc_inst_id": instance_id,
-                "status": "DONE",
-                "end_date": new_workitem_dict['end_date'].isoformat() if new_workitem_dict['end_date'] else None,
-                "due_date": new_workitem_dict['due_date'].isoformat() if new_workitem_dict['due_date'] else None
+                "status": "IN_PROGRESS",
             }, tenant_id)
-            delete_workitem(new_workitem_dict['id'], tenant_id)
-
-    else:
-        upsert_workitem({
-            "id": workitem['id'],
-            "status": "DONE",
-        }, tenant_id)
+            return
+        else:
+            upsert_workitem({
+                "id": workitem['id'],
+                "status": "DONE",
+            }, tenant_id)
         
-        if form_html and output:
-            message_data = {
-                "role": "system" if user_info.get("name") == "external_customer" else "user",
-                "name": user_info.get("name"),
-                "email": user_info.get("email"),
-                "profile": user_info.get("info", {}).get("profile", ""),
-                "content": "",
-                "jsonContent": output if output else {},
-                "htmlContent": form_html if form_html else "",
-                "contentType": "html" if form_html else "text"
-            }
-            upsert_chat_message(workitem['proc_inst_id'], message_data, tenant_id)
         try:
             print(f"[DEBUG] process_output for workitem {workitem['id']}")
             process_output(workitem, tenant_id)
@@ -872,9 +1279,171 @@ async def handle_service_workitem(workitem):
         update_instance_status_on_error(workitem, is_first, is_last)
         return
 
+    def extract_tool_results_from_agent_messages(messages):
+        """
+        LangChain agent의 메시지 리스트에서 도구 실행 결과만 추출하여
+        {tool_name: {status, ...}} 형태의 딕셔너리로 반환
+        """
+        tool_results = {}
+        for msg in messages:
+            # ToolMessage: content가 JSON 문자열일 수 있음
+            if hasattr(msg, "name") and hasattr(msg, "content"):
+                try:
+                    content = msg.content
+                    if content and (content.startswith("{") or content.startswith("[")):
+                        parsed = json.loads(content)
+                        if isinstance(parsed, dict) and "status" in parsed:
+                            tool_results[msg.name] = parsed
+                        elif isinstance(parsed, list):
+                            for item in parsed:
+                                if isinstance(item, dict) and "status" in item:
+                                    tool_results[msg.name] = item
+                except Exception:
+                    continue
+            # AIMessage: additional_kwargs에 tool_calls가 있을 수 있음
+            elif hasattr(msg, "additional_kwargs"):
+                tool_calls = msg.additional_kwargs.get("tool_calls", [])
+                for call in tool_calls:
+                    tool_name = call.get("function", {}).get("name")
+                    arguments = call.get("function", {}).get("arguments")
+                    if tool_name and arguments:
+                        try:
+                            args = json.loads(arguments)
+                            tool_results[tool_name] = args
+                        except Exception:
+                            tool_results[tool_name] = arguments
+        return tool_results
+
     try:
         print(f"[DEBUG] Starting service workitem processing for: {workitem['id']}")
+        
+        agent_id = workitem['user_id']
+        tenant_id = workitem['tenant_id']
+        agent_info = None
+        if not agent_id:
+            print(f"[ERROR] No agent ID found in workitem: {workitem['id']}")
+            upsert_workitem({
+                "id": workitem['id'],
+                "log": "No agent ID found"
+            }, tenant_id)
+            return
+        
+        if agent_id and ',' in agent_id:
+            agent_ids = workitem['user_id'].split(',')
+            for agent_id in agent_ids:
+                assignee_info = fetch_assignee_info(agent_id)
+                if assignee_info and assignee_info.get("type") == "agent":
+                    agent_info = fetch_user_info(agent_id)
+                    break
+        else:
+            assignee_info = fetch_assignee_info(agent_id)
+            if assignee_info and assignee_info.get("type") == "agent":
+                agent_info = fetch_user_info(agent_id)
+
+        if not agent_info:
+            print(f"[ERROR] Agent not found: {agent_id}")
+            upsert_workitem({
+                "id": workitem['id'],
+                "log": f"Agent not found: {agent_id}"
+            }, tenant_id)
+            return
+
+        results = await mcp_processor.execute_mcp_tools(workitem, agent_info, tenant_id)
+        messages = results.get("messages", [])
+        
+        if messages:
+            tool_results = extract_tool_results_from_agent_messages(messages)
+        else:
+            tool_results = {}
+
+        if not tool_results:
+            print(f"[ERROR] MCP tools execution failed: No tool results found")
+            upsert_workitem({
+                "id": workitem['id'],
+                "log": "MCP tools execution failed: No tool results found"
+            }, tenant_id)
+            # return
+
+        error_count = 0
+        success_count = 0
+        result_summary = []
+        
+        for tool_name, result in tool_results.items():
+            if isinstance(result, dict) and result.get("status") == "success":
+                success_count += 1
+                connection_type = result.get("connection_type", "unknown")
+                result_summary.append(f"{tool_name} ({connection_type}): 성공")
+            else:
+                error_count += 1
+                connection_type = result.get("connection_type", "unknown") if isinstance(result, dict) else "unknown"
+                error_msg = result.get('error', 'Unknown error') if isinstance(result, dict) else str(result)
+                result_summary.append(f"{tool_name} ({connection_type}): 실패 - {error_msg}")
+        
+        if error_count == 0:
+            log_message = f"모든 MCP 도구 실행 완료: {', '.join(result_summary)}"
+        elif success_count > 0:
+            log_message = f"일부 MCP 도구 실행 완료: {', '.join(result_summary)}"
+        else:
+            log_message = f"모든 MCP 도구 실행 실패: {', '.join(result_summary)}"
+        
+        upsert_workitem({
+            "id": workitem['id'],
+            "status": "DONE",
+            "log": log_message,
+            "output": tool_results
+        }, tenant_id)
+        
+        # 채팅 메시지 추가
+        def summarize_agent_messages(messages):
+            lines = []
+            for msg in messages:
+                role = getattr(msg, 'role', None) or getattr(msg, 'name', None) or msg.__class__.__name__
+                content = getattr(msg, 'content', None)
+                if content:
+                    lines.append(f"[{role}] {content}")
+            return '\n'.join(lines)
+
+        summarized_messages = summarize_agent_messages(messages)
+        # 채팅 메시지 추가
+        def get_last_ai_message_content(messages):
+            last_content = ""
+            for msg in reversed(messages):
+                if msg.__class__.__name__ == "AIMessage" and hasattr(msg, "content"):
+                    last_content = msg.content
+                    break
+            return last_content
+
+        last_ai_content = get_last_ai_message_content(messages)
+        message_data = {
+            "role": "system",
+            "content": last_ai_content,
+            "jsonContent": tool_results
+        }
+        upsert_chat_message(workitem['proc_inst_id'], message_data, tenant_id)
+        
+        # 리소스 정리
+        await mcp_processor.cleanup()
                 
     except Exception as e:
         print(f"[ERROR] Error in handle_service_workitem for workitem {workitem['id']}: {str(e)}")
+        
+        # 에러 상태로 워크아이템 업데이트
+        upsert_workitem({
+            "id": workitem['id'],
+            "log": f"Service workitem processing failed: {str(e)}"
+        }, workitem['tenant_id'])
+        
+        # 에러 메시지를 채팅에 추가
+        error_message = json.dumps({
+            "role": "system",
+            "content": f"서비스 업무 처리 중 오류가 발생했습니다: {str(e)}"
+        })
+        upsert_chat_message(workitem['proc_inst_id'], error_message, workitem['tenant_id'])
+        
+        # 리소스 정리
+        try:
+            await mcp_processor.cleanup()
+        except:
+            pass
+        
         raise e

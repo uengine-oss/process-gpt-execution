@@ -24,7 +24,7 @@ subdomain_var = ContextVar('subdomain', default='localhost')
 def setting_database():
     try:
         if os.getenv("ENV") != "production":
-            load_dotenv()
+            load_dotenv(override=True)
         
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_KEY")
@@ -63,6 +63,17 @@ def execute_sql(sql_query):
     
     except Exception as e:
         return(f"An error occurred while executing the SQL query: {e}")
+    
+def execute_rpc(rpc_name, params):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.rpc(rpc_name, params).execute()
+        return response.data
+    except Exception as e:
+        return(f"An error occurred while executing the RPC: {e}")
 
 
 def fetch_process_definition(def_id, tenant_id: Optional[str] = None):
@@ -118,6 +129,43 @@ def fetch_process_definition_latest_version(def_id, tenant_id: Optional[str] = N
             return None
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"No process definition latest version found with ID {def_id}: {e}")
+
+def fetch_ui_definition(def_id):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        response = supabase.table('form_def').select('*').eq('id', def_id.lower()).eq('tenant_id', subdomain).execute()
+        
+        if response.data:
+            # Assuming the first match is the desired one since ID should be unique
+            ui_definition = UIDefinition(**response.data[0])
+            return ui_definition
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No UI definition found with ID {def_id}: {e}")
+
+def fetch_ui_definitions_by_def_id(def_id, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+            
+        response = supabase.table('form_def').select('*').eq('proc_def_id', def_id).eq('tenant_id', tenant_id).execute()
+        
+        if response.data and len(response.data) > 0:
+            return [UIDefinition(**item) for item in response.data]
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"No UI definitions found with ID {def_id}: {e}")
 
 
 def fetch_ui_definition_by_activity_id(proc_def_id, activity_id, tenant_id: Optional[str] = None):
@@ -184,6 +232,7 @@ class ProcessInstance(BaseModel):
 class WorkItem(BaseModel):
     id: str
     user_id: Optional[str]
+    username: Optional[str] = None
     proc_inst_id: Optional[str] = None
     proc_def_id: Optional[str] = None
     activity_id: str
@@ -203,6 +252,9 @@ class WorkItem(BaseModel):
     consumer: Optional[str] = None
     log: Optional[str] = None
     agent_mode: Optional[str] = None
+    agent_orch: Optional[str] = None
+    feedback: Optional[List[Dict[str, Any]]] = []
+    temp_feedback: Optional[str] = None
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
@@ -285,6 +337,39 @@ def insert_process_instance(process_instance_data: dict, tenant_id: Optional[str
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
+def set_participants_from_workitems(process_instance, tenant_id=None):
+    """
+    proc_inst_id에 해당하는 todolist의 user_id들을 파싱하여 participants를 세팅
+    """
+    workitems = fetch_todolist_by_proc_inst_id(process_instance.proc_inst_id, tenant_id)
+    user_ids = []
+    if workitems:
+        for workitem in workitems:
+            if workitem.user_id:
+                ids = [uid.strip() for uid in workitem.user_id.split(',') if uid.strip()]
+                user_ids.extend(ids)
+    participants = []
+    seen = set()
+    for user_id in user_ids:
+        if (
+            user_id is not None
+            and user_id != ''
+            and user_id != 'undefined'
+            and user_id.strip() != ''
+        ):
+            if user_id == 'external_customer':
+                if user_id not in seen:
+                    participants.append(user_id)
+                    seen.add(user_id)
+            else:
+                assignee_info = fetch_assignee_info(user_id)
+                if assignee_info['type'] not in ['unknown', 'error'] and user_id not in seen:
+                    participants.append(user_id)
+                    seen.add(user_id)
+    process_instance.participants = participants
+    return process_instance
+
+
 def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Optional[str] = None) -> (bool, ProcessInstance):
     process_definition = process_instance.process_definition
     if process_definition is None:
@@ -308,6 +393,10 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
             else:
                 status = 'RUNNING'
     
+    # Set participants from workitems
+    process_instance = set_participants_from_workitems(process_instance, tenant_id)
+    participants = process_instance.participants
+
     process_instance_data = process_instance.dict(exclude={'process_definition'})  # Convert Pydantic model to dict
     process_instance_data = convert_decimal(process_instance_data)
 
@@ -325,22 +414,6 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
         else:
             arcv_id = None
         
-        participants = process_instance.participants
-        
-        # 빈 값들 필터링 및 유효성 검증
-        if participants:
-            valid_user_ids = []
-            for user_id in participants:
-                if user_id is not None and user_id != '' and user_id != 'undefined' and user_id.strip() != '':
-                    # 'external_customer'는 특별 케이스로 허용
-                    if user_id == 'external_customer':
-                        valid_user_ids.append(user_id)
-                    else:
-                        assignee_info = fetch_assignee_info(user_id)
-                        if assignee_info['type'] not in ['unknown', 'error']:
-                            valid_user_ids.append(user_id)
-            participants = valid_user_ids
-
         response = supabase.table('bpm_proc_inst').upsert({
             'proc_inst_id': process_instance.proc_inst_id,
             'proc_inst_name': process_instance.proc_inst_name,
@@ -436,6 +509,24 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
+def fetch_workitem_by_id(workitem_id: str, tenant_id: Optional[str] = None) -> Optional[WorkItem]:
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+            
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+            
+        response = supabase.table('todolist').select("*").eq('id', workitem_id).eq('tenant_id', tenant_id).execute()
+        
+        if response.data and len(response.data) > 0:
+            return WorkItem(**response.data[0])
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 def fetch_workitem_with_submitted_status(limit=10) -> Optional[List[dict]]:
     try:
@@ -587,7 +678,10 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
             if workitem:
                 workitem.status = completed_activity['result']
                 workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul'))
-                workitem.user_id = completed_activity['completedUserEmail']
+                user_info = fetch_assignee_info(completed_activity['completedUserEmail'])
+                if user_info:
+                    workitem.user_id = user_info.get('id')
+                    workitem.username = user_info.get('name')
                 if workitem.assignees and len(workitem.assignees) > 0:
                     for assignee in workitem.assignees:
                         if assignee.get('endpoint') and assignee.get('endpoint') == workitem.user_id:
@@ -608,31 +702,70 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                             user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
+                user_info = None
                 if completed_activity['completedUserEmail'] != user_id:
-                    user_id = completed_activity['completedUserEmail']
+                    user_info = fetch_assignee_info(completed_activity['completedUserEmail'])
 
+                agent_orch = safeget(activity, 'orchestration', None)
+                if agent_orch == 'none':
+                    agent_orch = None
+                    
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=completed_activity['completedActivityId'],
-                    activity_name=activity.name,
-                    user_id=user_id,
+                    activity_name=safeget(activity, 'name', ''),
+                    user_id=user_info.get('id'),
+                    username=user_info.get('name'),
                     status=completed_activity['result'],
-                    tool=activity.tool,
+                    tool=safeget(activity, 'tool', ''),
                     start_date=start_date,
                     end_date=datetime.now(pytz.timezone('Asia/Seoul')) if completed_activity['result'] == 'DONE' else None,
                     due_date=due_date,
                     tenant_id=tenant_id,
                     assignees=assignees,
-                    duration=activity.duration
+                    duration=safeget(activity, 'duration', 0),
+                    description=safeget(activity, 'description', ''),
+                    agent_orch=agent_orch,
+                    agent_mode=safeget(activity, 'agentMode', None)
                 )
             
-            workitem_dict = workitem.dict()
+            
+            workitem_dict = workitem.model_dump()
             workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
             workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
             workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
-
+            
+            process_result_data.setdefault('cancelledActivities', [])
+            activity = process_definition.find_activity_by_id(completed_activity['completedActivityId'])
+            if activity:
+                attached_events = activity.attachedEvents
+                if attached_events:
+                    for attached_event in attached_events:
+                        if attached_event != completed_activity['completedActivityId']:
+                            process_result_data['cancelledActivities'].append({
+                                'cancelledActivityId': attached_event,
+                                'cancelledUserEmail': workitem.user_id,
+                                'result': 'CANCELLED'
+                            })
+                        
+            attached_activity = process_definition.find_attached_activity(completed_activity['completedActivityId'])
+            if attached_activity:
+                process_result_data['cancelledActivities'].append({
+                                'cancelledActivityId': attached_activity.id,
+                                'cancelledUserEmail': workitem.user_id,
+                                'result': 'CANCELLED'
+                            })
+                attached_events = attached_activity.attachedEvents
+                if attached_events:
+                    for attached_event in attached_events:
+                        if attached_event != completed_activity['completedActivityId']:
+                            process_result_data['cancelledActivities'].append({
+                                'cancelledActivityId': attached_event,
+                                'cancelledUserEmail': workitem.user_id,
+                                'result': 'CANCELLED'
+                            })
 
             supabase = supabase_client_var.get()
             if supabase is None:
@@ -645,6 +778,82 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
         print(f"[ERROR] upsert_completed_workitem: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e)) from e
 
+def upsert_cancelled_workitem(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None) -> List[WorkItem]:
+    try:
+        workitems = []
+        for cancelled_activity in process_result_data['cancelledActivities']:
+            workitem = fetch_workitem_by_proc_inst_and_activity(
+                process_instance_data['proc_inst_id'],
+                cancelled_activity['cancelledActivityId'],
+                tenant_id
+            )
+            if workitem:
+                workitem.status = cancelled_activity['result']
+                workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul'))
+                workitem.user_id = cancelled_activity['cancelledUserEmail']
+                if workitem.assignees and len(workitem.assignees) > 0:
+                    for assignee in workitem.assignees:
+                        if assignee.get('endpoint') and assignee.get('endpoint') == workitem.user_id:
+                            assignee = {
+                                'roleName': assignee.get('name'),
+                                'userId': assignee.get('endpoint')
+                            }
+                            break
+            else:
+                activity = process_definition.find_activity_by_id(cancelled_activity['cancelledActivityId'])
+                start_date = datetime.now(pytz.timezone('Asia/Seoul'))
+                due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
+                assignees = []
+                if process_instance_data['role_bindings']:
+                    role_bindings = process_instance_data['role_bindings']
+                    for role_binding in role_bindings:
+                        if role_binding['name'] == activity.role:
+                            user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
+                            assignees.append(role_binding)
+                
+                if cancelled_activity['cancelledUserEmail'] != user_id:
+                    user_id = cancelled_activity['cancelledUserEmail']
+                agent_orch = safeget(activity, 'orchestration', None)
+                if agent_orch == 'none':
+                    agent_orch = None
+                    
+                workitem = WorkItem(
+                    id=f"{str(uuid.uuid4())}",
+                    proc_inst_id=process_instance_data['proc_inst_id'],
+                    proc_def_id=process_result_data['processDefinitionId'].lower(),
+                    activity_id=cancelled_activity['cancelledActivityId'],
+                    activity_name=safeget(activity, 'name', ''),
+                    user_id=user_id,
+                    status="CANCELLED",
+                    tool=safeget(activity, 'tool', ''),
+                    start_date=start_date,
+                    end_date=datetime.now(pytz.timezone('Asia/Seoul')),
+                    due_date=due_date,
+                    tenant_id=tenant_id,
+                    assignees=assignees,
+                    duration=safeget(activity, 'duration', 0),
+                    description=safeget(activity, 'description', ''),
+                    agent_orch=agent_orch,
+                    agent_mode=safeget(activity, 'agentMode', None)
+                )
+                
+            workitem_dict = workitem.model_dump()
+            workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
+            workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
+            workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
+            
+            supabase = supabase_client_var.get()
+            if supabase is None:
+                raise Exception("Supabase client is not configured for this request")
+            supabase.table('todolist').upsert(workitem_dict).execute()
+            workitems.append(workitem)
+        return workitems
+            
+    except Exception as e:
+        print(f"[ERROR] upsert_cancelled_workitem: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e)) from e
+def safeget(obj, attr, default=None):
+    return getattr(obj, attr, default)
 
 def upsert_next_workitems(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None) -> List[WorkItem]:
     workitems = []
@@ -662,10 +871,13 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
             workitem.status = activity_data['result']
             workitem.end_date = datetime.now(pytz.timezone('Asia/Seoul')) if activity_data['result'] == 'DONE' else None
             if workitem.user_id == '' or workitem.user_id == None:
-                workitem.user_id = activity_data['nextUserEmail']
+                user_info = fetch_assignee_info(activity_data['nextUserEmail'])
+                if user_info:
+                    workitem.user_id = user_info.get('id')
+                    workitem.username = user_info.get('name')
             if workitem.agent_mode == None:
                 workitem.agent_mode = determine_agent_mode(workitem.user_id, workitem.agent_mode)
-            print(f"[DEBUG] workitem.agent_mode: {workitem.agent_mode}")
+            # print(f"[DEBUG] workitem.agent_mode: {workitem.agent_mode}")
         else:
             activity = process_definition.find_activity_by_id(activity_data['nextActivityId'])
             if activity:
@@ -676,24 +888,34 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                         start_date = start_date + timedelta(days=prev_activity.duration)
                 due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
                 agent_mode = determine_agent_mode(activity_data['nextUserEmail'], activity.agentMode)
+                
+                agent_orch = safeget(activity, 'orchestration', None)
+                if agent_orch == 'none':
+                    agent_orch = None
+                
+                user_info = fetch_assignee_info(activity_data['nextUserEmail'])
+                
                 workitem = WorkItem(
                     id=str(uuid.uuid4()),
                     proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
-                    activity_id=activity.id,
-                    activity_name=activity.name,
-                    user_id=activity_data['nextUserEmail'],
+                    activity_id=safeget(activity, 'id', ''),
+                    activity_name=safeget(activity, 'name', ''),
+                    user_id=user_info.get('id'),
+                    username=user_info.get('name'),
                     status=activity_data['result'],
                     start_date=start_date,
                     due_date=due_date,
-                    tool=activity.tool,
+                    tool=safeget(activity, 'tool', ''),
                     tenant_id=tenant_id,
-                    agent_mode=agent_mode
+                    agent_mode=agent_mode,
+                    description=safeget(activity, 'description', ''),
+                    agent_orch=agent_orch
                 )
         
         try:
             if workitem:
-                workitem_dict = workitem.dict()
+                workitem_dict = workitem.model_dump()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
                 workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
                 workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
@@ -745,7 +967,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
         if not initial_activity:
             initial_activity = process_definition.find_initial_activity()
 
-        next_activities = [activity for activity in process_definition.activities if activity.id != initial_activity.id]
+        next_activities = process_definition.find_next_activities(initial_activity.id, True)
         for activity in next_activities:
             prev_activities = process_definition.find_prev_activities(activity.id, [])
             start_date = datetime.now(pytz.timezone('Asia/Seoul'))
@@ -780,26 +1002,48 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                             user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
+                username = ''
+                if ',' in user_id:
+                    usernames = []
+                    user_ids = user_id.split(',')
+                    for user_id in user_ids:
+                        user_info = fetch_assignee_info(user_id)
+                        if user_info:
+                            usernames.append(user_info.get('name'))
+                    username = ','.join(usernames)
+                else:
+                    user_info = fetch_assignee_info(user_id)
+                    if user_info:
+                        username = user_info.get('name')
+                
                 agent_mode = determine_agent_mode(user_id, activity.agentMode)
+                agent_orch = safeget(activity, 'orchestration', None)
+                if agent_orch == 'none':
+                    agent_orch = None
+
+                status = "TODO"
 
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     reference_ids=reference_ids if prev_activities else [],
                     proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
-                    activity_id=activity.id,
-                    activity_name=activity.name,
+                    activity_id=safeget(activity, 'id', ''),
+                    activity_name=safeget(activity, 'name', ''),
                     user_id=user_id,
-                    status="TODO",
-                    tool=activity.tool,
+                    username=username,
+                    status=status,
+                    tool=safeget(activity, 'tool', ''),
                     start_date=start_date,
                     due_date=due_date,
                     tenant_id=tenant_id,
                     assignees=assignees if assignees else [],
-                    duration=activity.duration,
-                    agent_mode=agent_mode
+                    duration=safeget(activity, 'duration', 0),
+                    agent_mode=agent_mode,
+                    description=safeget(activity, 'description', ''),
+                    agent_orch=agent_orch
                 )
-                workitem_dict = workitem.dict()
+                workitem_dict = workitem.model_dump()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
                 workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
                 workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
@@ -940,9 +1184,9 @@ def fetch_assignee_info(assignee_id: str) -> Dict[str, str]:
                     type = "a2a"
             return {
                 "type": type,
-                "id": assignee_id,
+                "id": user_info.get("id", assignee_id),
                 "name": user_info.get("username", assignee_id),
-                "email": assignee_id,
+                "email": user_info.get("email", assignee_id),
                 "info": user_info
             }
         except HTTPException as user_error:
