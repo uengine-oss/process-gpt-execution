@@ -173,18 +173,19 @@ async def generate_response(message: str, search_results: List[Dict]) -> str:
 
 def search_memories(agent_id: str, query: str) -> List[Dict]:
     """mem0에서 관련 정보를 검색합니다."""
-    results = memory.search(query, user_id=agent_id)
+    results = memory.search(query, agent_id=agent_id)
     return results["results"][:5]
 
 def store_in_memory(agent_id: str, content: str):
     """유의미한 정보를 mem0에 저장합니다."""
     memory.add(
         content,
-        user_id=agent_id,
+        agent_id=agent_id,
         metadata={
             "type": "information",
             "timestamp": datetime.now().isoformat()
-        }
+        },
+        infer=False
     )
 
 async def process_mem0_message(text: str, agent_id: str, chat_room_id: str = None, is_learning_mode: bool = False):
@@ -206,7 +207,10 @@ async def process_mem0_message(text: str, agent_id: str, chat_room_id: str = Non
             search_results = search_memories(agent_id, search_term)
             
             response = await generate_response(text, search_results)
-            response = json.loads(response)
+            try:
+                response = json.loads(response)
+            except:
+                response = {"content": response}
             response["type"] = intent
             
             return {

@@ -690,6 +690,8 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                                 'userId': assignee.get('endpoint')
                             }
                             break
+                if  completed_activity['cannotProceedErrors'] and len(completed_activity['cannotProceedErrors']) > 0:
+                    workitem.log = "\n".join(f"[{error.get('type', '')}] {error.get('reason', '')}" for error in completed_activity['cannotProceedErrors']);
             else:
                 activity = process_definition.find_activity_by_id(completed_activity['completedActivityId'])
                 start_date = datetime.now(pytz.timezone('Asia/Seoul'))
@@ -709,7 +711,11 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                 agent_orch = safeget(activity, 'orchestration', None)
                 if agent_orch == 'none':
                     agent_orch = None
-                    
+                
+                log = ''
+                if  completed_activity['cannotProceedErrors'] and len(completed_activity['cannotProceedErrors']) > 0:
+                    log = "\n".join(f"[{error.type}] {error.reason}" for error in completed_activity['cannotProceedErrors']);
+                
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     proc_inst_id=process_instance_data['proc_inst_id'],
@@ -728,7 +734,8 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     duration=safeget(activity, 'duration', 0),
                     description=safeget(activity, 'description', ''),
                     agent_orch=agent_orch,
-                    agent_mode=safeget(activity, 'agentMode', None)
+                    agent_mode=safeget(activity, 'agentMode', None),
+                    log=log
                 )
             
             

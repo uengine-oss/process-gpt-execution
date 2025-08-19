@@ -146,8 +146,7 @@ Your task is to analyze the current process state and determine the next executa
 
 Process Definition:
 - activities: {activities}
-- gateways: {gateways}
-- events: {events}
+- events and gateways: {gateways}
 - sequences: {sequences}
 - attached_activities: {attached_activities}
 
@@ -161,12 +160,11 @@ Runtime Context:
 - previous_outputs: {previous_outputs}
 - today: {today}
 - gateway_condition_data: {gateway_condition_data}
-- instance_name_pattern: {instance_name_pattern} // If empty, fallback to key-value based logic from process variables (max 20 characters).
+- sequence_conditions: {sequence_conditions}
+- instance_name_pattern: {instance_name_pattern}
 
 --- OPTIONAL USER FEEDBACK ---
-
-User Feedback (Optional):
-- message_from_user: "{user_feedback_message}"
+- message_from_user: {user_feedback_message}
 
 If message_from_user is not empty:
 - Carefully interpret the message to determine if any part of the result should be temporarily modified.
@@ -230,10 +228,8 @@ Step 5. Assign next user
 - If the target role is an external customer, use email from merged_outputs.
 - If no valid email is found, return DATA_FIELD_NOT_EXIST error.
 
-Step 6. Generate instanceName
-- Use instance_name_pattern if provided.
-- If empty, use a fallback such as "processDefinitionId.key", using a value from submitted_output.
-- Ensure result is 20 characters or less.
+Step 6. Instance Name
+- Use instance_name_pattern if provided; otherwise fallback to "processDefinitionId.key" from submitted_output, with total length ≤ 20 characters.
 
 Step 7. Compose process description
 - In Korean, explain what activity was completed, what decisions were made, and what happens next.
@@ -261,8 +257,14 @@ Output format (must be wrapped in ```json and ``` markers):
       "completedActivityName": "activity_name",
       "completedUserEmail": "user_email",
       "type": "activity",
-      "result": "DONE",
-      "description": "완료된 활동에 대한 설명 (Korean)"
+      "result": "DONE | PENDING", // PENDING when cannotProceedErrors exist
+      "description": "완료된 활동에 대한 설명 (Korean)",
+      "cannotProceedErrors": [
+        {{
+          "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST",
+          "reason": "설명 (Korean)"
+        }}
+      ]
     }},
     {{
       "completedActivityId": "event_id",
@@ -270,8 +272,14 @@ Output format (must be wrapped in ```json and ``` markers):
       "type": "event",
       "expression": "cron expression",
       "dueDate": "YYYY-MM-DD",
-      "result": "DONE",
-      "description": "완료된 활동에 대한 설명 (Korean)"
+      "result": "DONE | PENDING", // PENDING when cannotProceedErrors exist
+      "description": "완료된 활동에 대한 설명 (Korean)",
+      "cannotProceedErrors": [
+        {{
+          "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST",
+          "reason": "설명 (Korean)"
+        }}
+      ]
     }}
   ],
   "nextActivities": [
@@ -309,12 +317,6 @@ Output format (must be wrapped in ```json and ``` markers):
       "result": "CANCELLED"
     }}
   ],
-  "cannotProceedErrors": [
-    {{
-      "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST",
-      "reason": "설명 (Korean)"
-    }}
-  ],
   "referenceInfo": [
     {{
       "key": "이전 산출물에서 참조한 키 (in Korean)",
@@ -326,6 +328,10 @@ Output format (must be wrapped in ```json and ``` markers):
 )
 
 # Pydantic model for process execution
+class ProceedError(BaseModel):
+    type: str
+    reason: str
+
 class Activity(BaseModel):
     nextActivityId: Optional[str] = None
     nextActivityName: Optional[str] = None
@@ -341,6 +347,7 @@ class CompletedActivity(BaseModel):
     completedUserEmail: Optional[str] = None
     result: Optional[str] = None
     description: Optional[str] = None
+    cannotProceedErrors: Optional[List[ProceedError]] = None
 
 class ReferenceInfo(BaseModel):
     key: Optional[str] = None
@@ -351,10 +358,6 @@ class FieldMapping(BaseModel):
     name: str
     value: Any
 
-class ProceedError(BaseModel):
-    type: str
-    reason: Any
-
 class ProcessResult(BaseModel):
     instanceId: str
     instanceName: str
@@ -363,7 +366,6 @@ class ProcessResult(BaseModel):
     completedActivities: Optional[List[CompletedActivity]] = None
     processDefinitionId: str
     result: Optional[str] = None
-    cannotProceedErrors: Optional[List[ProceedError]] = None
     referenceInfo: Optional[List[ReferenceInfo]] = None
     
 # upsert 디바운스 큐 및 쓰레드 정의 (파일 상단에 위치)
@@ -742,23 +744,18 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
             if completed_workitem.temp_feedback and completed_workitem.temp_feedback not in [None, ""]:
                 appliedFeedback = True
 
-    if process_result.cannotProceedErrors:
-        reason = "\n".join(error.reason for error in process_result.cannotProceedErrors)
-        message_json = json.dumps({"role": "system", "content": reason})
-        upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
-    else:
-        description = {
-            "referenceInfo": process_result_json.get("referenceInfo", []),
-            "completedActivities": process_result_json.get("completedActivities", []),
-            "nextActivities": process_result_json.get("nextActivities", []),
-            "appliedFeedback": appliedFeedback
-        }
-        message_json = json.dumps({
-            "role": "system",
-            "contentType": "json",
-            "jsonContent": description
-        })
-        upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
+    description = {
+        "referenceInfo": process_result_json.get("referenceInfo", []),
+        "completedActivities": process_result_json.get("completedActivities", []),
+        "nextActivities": process_result_json.get("nextActivities", []),
+        "appliedFeedback": appliedFeedback
+    }
+    message_json = json.dumps({
+        "role": "system",
+        "contentType": "json",
+        "jsonContent": description
+    })
+    upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
     
     # Update process_result_json
     process_result_json["instanceId"] = process_instance.proc_inst_id
@@ -1020,6 +1017,23 @@ def get_gateway_condition_data(workitem: dict, process_definition: Any, gateway_
         print(f"[ERROR] Failed to get gateway condition data for {workitem.get('id')}: {str(e)}")
         return None
 
+def get_sequence_condition_data(process_definition: Any, next_activities: List[str]):
+    """
+    워크아이템 실행에 필요한 시퀀스 조건 데이터 추출
+    """
+    try:
+        sequence_condition_data = {}
+        for sequence in process_definition.sequences:
+            if sequence.target in next_activities:
+                properties = sequence.properties
+                if properties:
+                    properties_json = json.loads(properties)
+                    sequence_condition_data[sequence.id] = properties_json
+        return sequence_condition_data
+    except Exception as e:
+        print(f"[ERROR] Failed to get sequence condition data: {str(e)}")
+        return None
+
 async def handle_workitem(workitem):
     # 워크아이템 위치 판별
     is_first, is_last = get_workitem_position(workitem)
@@ -1078,6 +1092,8 @@ async def handle_workitem(workitem):
     try:
         next_activities = []
         gateway_condition_data = None
+        sequence_condition_data = None
+
         if process_definition:
             next_activities = [activity.id for activity in process_definition.find_next_activities(activity_id, True)]
             for act_id in next_activities:
@@ -1087,6 +1103,8 @@ async def handle_workitem(workitem):
                     except Exception as e:
                         print(f"[ERROR] Failed to get gateway condition data for {workitem.get('id')}: {str(e)}")
                         gateway_condition_data = None
+        
+            sequence_condition_data = get_sequence_condition_data(process_definition, next_activities)
 
         workitem_input_data = None
         try:
@@ -1104,14 +1122,37 @@ async def handle_workitem(workitem):
                         "activity_id": activity.id,
                         "attached_events": activity.attachedEvents
                     })
+        
+        input_activities = []
+        for activity in process_definition.activities:
+            input_activities.append({
+                "id": activity.id,
+                "type": activity.type,
+                "role": activity.role,
+                "description": activity.description,
+                "inputData": activity.inputData,
+                "checkpoints": activity.checkpoints
+            })
+        input_gateways = []
+        for gateway in process_definition.gateways:
+            input_gateways.append({
+                "id": gateway.id,
+                "type": gateway.type
+            })
+        input_sequences = []
+        for sequence in process_definition.sequences:
+            input_sequences.append({
+                "id": sequence.id,
+                "source": sequence.source,
+                "target": sequence.target
+            })
 
         chain_input = {
-            "activities": process_definition.activities,
-            "gateways": process_definition_json.get('gateways', []),
-            "events": process_definition_json.get('events', []),
-            "sequences": process_definition.sequences,
+            "activities": input_activities,
+            "gateways": input_gateways,
+            "sequences": input_sequences,
             "instance_id": process_instance_id,
-            "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
+            "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "null",
             "process_definition_id": process_definition_id,
             "activity_id": activity_id,
             "user_email": workitem['user_id'] if not workitem['user_id'] or ',' not in workitem['user_id'] else ','.join(workitem['user_id'].split(',')),
@@ -1122,7 +1163,8 @@ async def handle_workitem(workitem):
             "previous_outputs": workitem_input_data,
             "user_feedback_message": workitem.get('temp_feedback', ''),
             "gateway_condition_data": gateway_condition_data,
-            "attached_activities": attached_activities
+            "attached_activities": attached_activities,
+            "sequence_conditions": sequence_condition_data
         }
         
         collected_text = ""
@@ -1180,31 +1222,12 @@ async def handle_workitem(workitem):
         if parsed_output is None:
             raise Exception("Failed to parse JSON response after all retry attempts")
         
-        result = execute_next_activity(parsed_output, tenant_id)
-        result_json = json.loads(result)
+        execute_next_activity(parsed_output, tenant_id)
         
     except Exception as e:
         print(f"[ERROR] Error in handle_workitem for workitem {workitem['id']}: {str(e)}")
         raise e
 
-    if result_json:
-        if result_json.get("cannotProceedErrors"):
-            upsert_workitem({
-                "id": workitem['id'],
-                "status": "IN_PROGRESS",
-            }, tenant_id)
-            return
-        else:
-            upsert_workitem({
-                "id": workitem['id'],
-                "status": "DONE",
-            }, tenant_id)
-        
-        try:
-            print(f"[DEBUG] process_output for workitem {workitem['id']}")
-            process_output(workitem, tenant_id)
-        except Exception as e:
-            print(f"[ERROR] Error in process_output for workitem {workitem['id']}: {str(e)}")
 
 async def handle_agent_workitem(workitem):
     """
