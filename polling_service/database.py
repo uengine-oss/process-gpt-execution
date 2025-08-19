@@ -202,6 +202,7 @@ class ProcessInstance(BaseModel):
     status: str = None
     tenant_id: str
     proc_def_version: Optional[str] = None
+    parent_proc_inst_id: Optional[str] = None
 
 
     class Config:
@@ -234,6 +235,7 @@ class WorkItem(BaseModel):
     user_id: Optional[str]
     username: Optional[str] = None
     proc_inst_id: Optional[str] = None
+    root_proc_inst_id: Optional[str] = None
     proc_def_id: Optional[str] = None
     activity_id: str
     activity_name: str
@@ -313,6 +315,8 @@ def fetch_process_instance(full_id: str, tenant_id: Optional[str] = None) -> Opt
                 process_instance_data['variables_data'] = [process_instance_data['variables_data']]
             
             process_instance = ProcessInstance(**process_instance_data)
+            if process_instance_data.get('root_proc_inst_id') is None:
+                process_instance.root_proc_inst_id = process_instance.proc_inst_id
             process_instance = fetch_and_apply_system_data_sources(process_instance)
             
             return process_instance
@@ -378,7 +382,7 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
 
     end_activity = process_definition.find_end_activity()
     if end_activity:
-        end_workitem = fetch_workitem_by_proc_inst_and_activity(process_instance.proc_inst_id, end_activity.id, tenant_id)
+        end_workitem = fetch_workitem_by_proc_inst_and_activity(process_instance.proc_inst_id, safeget(end_activity, 'id', ''), tenant_id)
         if end_workitem:
             if end_workitem.status == 'DONE':
                 status = 'COMPLETED'
@@ -388,7 +392,7 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
             status = 'RUNNING'
     else:
         if process_instance.current_activity_ids and len(process_instance.current_activity_ids) != 0:
-            if end_activity and end_activity.id in process_instance.current_activity_ids:
+            if end_activity and safeget(end_activity, 'id', '') in process_instance.current_activity_ids:
                 status = 'COMPLETED'
             else:
                 status = 'RUNNING'
@@ -693,12 +697,12 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
             else:
                 activity = process_definition.find_activity_by_id(completed_activity['completedActivityId'])
                 start_date = datetime.now(pytz.timezone('Asia/Seoul'))
-                due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
+                due_date = start_date + timedelta(days=safeget(activity, 'duration', 0)) if safeget(activity, 'duration', 0) else None
                 assignees = []
                 if process_instance_data['role_bindings']:
                     role_bindings = process_instance_data['role_bindings']
                     for role_binding in role_bindings:
-                        if role_binding['name'] == activity.role:
+                        if role_binding['name'] == safeget(activity, 'role', ''):
                             user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
@@ -728,7 +732,8 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     duration=safeget(activity, 'duration', 0),
                     description=safeget(activity, 'description', ''),
                     agent_orch=agent_orch,
-                    agent_mode=safeget(activity, 'agentMode', None)
+                    agent_mode=safeget(activity, 'agentMode', None),
+                    root_proc_inst_id=process_instance_data['root_proc_inst_id']
                 )
             
             
@@ -740,7 +745,7 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
             process_result_data.setdefault('cancelledActivities', [])
             activity = process_definition.find_activity_by_id(completed_activity['completedActivityId'])
             if activity:
-                attached_events = activity.attachedEvents
+                attached_events = safeget(activity, 'attachedEvents', [])
                 if attached_events:
                     for attached_event in attached_events:
                         if attached_event != completed_activity['completedActivityId']:
@@ -753,11 +758,11 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
             attached_activity = process_definition.find_attached_activity(completed_activity['completedActivityId'])
             if attached_activity:
                 process_result_data['cancelledActivities'].append({
-                                'cancelledActivityId': attached_activity.id,
+                                'cancelledActivityId': safeget(attached_activity, 'id', ''),
                                 'cancelledUserEmail': workitem.user_id,
                                 'result': 'CANCELLED'
                             })
-                attached_events = attached_activity.attachedEvents
+                attached_events = safeget(attached_activity, 'attachedEvents', [])
                 if attached_events:
                     for attached_event in attached_events:
                         if attached_event != completed_activity['completedActivityId']:
@@ -802,12 +807,12 @@ def upsert_cancelled_workitem(process_instance_data, process_result_data, proces
             else:
                 activity = process_definition.find_activity_by_id(cancelled_activity['cancelledActivityId'])
                 start_date = datetime.now(pytz.timezone('Asia/Seoul'))
-                due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
+                due_date = start_date + timedelta(days=safeget(activity, 'duration', 0)) if safeget(activity, 'duration', 0) else None
                 assignees = []
                 if process_instance_data['role_bindings']:
                     role_bindings = process_instance_data['role_bindings']
                     for role_binding in role_bindings:
-                        if role_binding['name'] == activity.role:
+                        if role_binding['name'] == safeget(activity, 'role', ''):
                             user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
@@ -834,7 +839,8 @@ def upsert_cancelled_workitem(process_instance_data, process_result_data, proces
                     duration=safeget(activity, 'duration', 0),
                     description=safeget(activity, 'description', ''),
                     agent_orch=agent_orch,
-                    agent_mode=safeget(activity, 'agentMode', None)
+                    agent_mode=safeget(activity, 'agentMode', None),
+                    root_proc_inst_id=process_instance_data['root_proc_inst_id']
                 )
                 
             workitem_dict = workitem.model_dump()
@@ -881,13 +887,13 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
         else:
             activity = process_definition.find_activity_by_id(activity_data['nextActivityId'])
             if activity:
-                prev_activities = process_definition.find_prev_activities(activity.id, [])
+                prev_activities = process_definition.find_prev_activities(safeget(activity, 'id', ''), [])
                 start_date = datetime.now(pytz.timezone('Asia/Seoul'))
                 if prev_activities:
                     for prev_activity in prev_activities:
-                        start_date = start_date + timedelta(days=prev_activity.duration)
-                due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
-                agent_mode = determine_agent_mode(activity_data['nextUserEmail'], activity.agentMode)
+                        start_date = start_date + timedelta(days=safeget(prev_activity, 'duration', 0))
+                due_date = start_date + timedelta(days=safeget(activity, 'duration', 0)) if safeget(activity, 'duration', 0) else None
+                agent_mode = determine_agent_mode(activity_data['nextUserEmail'], safeget(activity, 'agentMode', None))
                 
                 agent_orch = safeget(activity, 'orchestration', None)
                 if agent_orch == 'none':
@@ -910,7 +916,8 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     tenant_id=tenant_id,
                     agent_mode=agent_mode,
                     description=safeget(activity, 'description', ''),
-                    agent_orch=agent_orch
+                    agent_orch=agent_orch,
+                    root_proc_inst_id=process_instance_data['root_proc_inst_id']
                 )
         
         try:
@@ -969,6 +976,9 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
 
         next_activities = process_definition.find_next_activities(initial_activity.id, True)
         for activity in next_activities:
+            if safeget(activity, 'type', '') == 'endEvent':
+                continue
+            
             prev_activities = process_definition.find_prev_activities(activity.id, [])
             start_date = datetime.now(pytz.timezone('Asia/Seoul'))
         
@@ -985,20 +995,20 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     max_duration_activity = max(activities, key=lambda x: x.duration if x.duration is not None else 0)
                     filtered_activities.append(max_duration_activity)
                 
-                reference_ids = fetch_prev_task_ids(process_definition, activity.id, process_instance_data['proc_inst_id'])
+                reference_ids = fetch_prev_task_ids(process_definition, safeget(activity, 'id', ''), process_instance_data['proc_inst_id'])
                 
                 for prev_activity in filtered_activities:
-                    start_date = start_date + timedelta(days=prev_activity.duration)
+                    start_date = start_date + timedelta(days=safeget(prev_activity, 'duration', 0))
             
-            due_date = start_date + timedelta(days=activity.duration) if activity.duration else None
-            workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], activity.id, tenant_id)
+            due_date = start_date + timedelta(days=safeget(activity, 'duration', 0)) if safeget(activity, 'duration', 0) else None
+            workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_data['proc_inst_id'], safeget(activity, 'id', ''), tenant_id)
             if not workitem:
                 user_id = ""
                 assignees = []
                 if process_result_data['roleBindings']:
                     role_bindings = process_result_data['roleBindings']
                     for role_binding in role_bindings:
-                        if role_binding['name'] == activity.role:
+                        if role_binding['name'] == safeget(activity, 'role', ''):
                             user_id = ','.join(role_binding['endpoint']) if isinstance(role_binding['endpoint'], list) else role_binding['endpoint']
                             assignees.append(role_binding)
                 
@@ -1016,7 +1026,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     if user_info:
                         username = user_info.get('name')
                 
-                agent_mode = determine_agent_mode(user_id, activity.agentMode)
+                agent_mode = determine_agent_mode(user_id, safeget(activity, 'agentMode', None))
                 agent_orch = safeget(activity, 'orchestration', None)
                 if agent_orch == 'none':
                     agent_orch = None
@@ -1041,7 +1051,8 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     duration=safeget(activity, 'duration', 0),
                     agent_mode=agent_mode,
                     description=safeget(activity, 'description', ''),
-                    agent_orch=agent_orch
+                    agent_orch=agent_orch,
+                    root_proc_inst_id=process_instance_data['root_proc_inst_id']
                 )
                 workitem_dict = workitem.model_dump()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
