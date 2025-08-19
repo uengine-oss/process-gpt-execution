@@ -261,6 +261,7 @@ Instructions:
 - **없는 key를 만들거나 추론하지 않는다.** 값은 반드시 위 입력 구조 내부에 있어야 한다.
 - 도달 가능성은 `sequences` 그래프와 `next_activities`(직접 outgoings 후보)를 사용해 판정한다. 여러 홉을 건너뛰지 않는다.
 - 진행 불가(값 부재/조건 미결정/조인 미충족 추정/이벤트 미발생) 시 **오류 없이** `nextActivities: []`로 대기.
+- nextActivities에는 오직 activity, event, subProcess, callActivity만 포함되어야 하며, gateway id는 절대 포함하면 안 된다.
 
 1) Interrupt-first (이벤트)
 - 오늘 날짜(`today`)와 `events`/`attached_activities`/`sequences` 상의 정보만으로 **due가 명확한 이벤트**가 있고, 현재 지점에서 **도달 가능**하면:
