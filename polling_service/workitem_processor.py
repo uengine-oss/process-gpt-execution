@@ -200,6 +200,9 @@ Instructions:
 4) Output
 - 반드시 아래 JSON만 출력한다. 추가 설명 금지.
 
+5) InstanceName
+- `instance_name_pattern`을 우선 사용. 비어 있으면 반드시 한글로 `processDefinitionName_key_value` 형식을 따라 20자 이내 생성.
+
 ```json
 {{
   "instanceId": "{instance_id}",
@@ -234,8 +237,7 @@ prompt_next = PromptTemplate.from_template(
 You are a BPMN Next Activity Planner.
 
 Goal:
-- 완료 추출기의 출력(`completedActivities`)을 받아
-  BPMN 2.0 토큰 규칙을 준수하여 **다음으로 활성화될 수 있는 노드만** `nextActivities`에 산출한다.
+- 완료 추출기의 출력(`completedActivities`)을 받아 BPMN 2.0 토큰 규칙을 준수하여 **다음으로 활성화될 수 있는 노드만** `nextActivities`에 산출한다.
 - completedActivities 의 결과 상태 값이 PENDING 으로 존재하는 경우에는 nextActivities 를 산출하지 않는다.
 - **조건/데이터 평가는 오직 아래 입력들 내부에 존재하는 값만** 사용한다.
   - activities / gateways / events / sequences / attached_activities / subProcesses / roleBindings / next_activities / today
@@ -298,12 +300,12 @@ Instructions:
   - 그 `attached_events` 각각을 type="event"로 **별도 엔트리**로 추가한다(이미 완료/취소 제외).
 
 5) Assignment
-- `roleBindings`의 endpoint가 배열이면 첫 값을 사용하여 nextUserEmail을 결정한다.
+- `roleBindings`의 endpoint가 배열이면 `,`으로 조인하여 nextUserEmail을 결정한다.
 - 외부 고객 역할이면 입력 구조 내에서 email을 찾을 수 있을 때만 사용한다(없으면 해당 항목 제외).
 - 유효 email을 결정할 수 없으면 **오류 없이 제외**하고, 나머지 항목은 계속 검토한다.
 
 6) InstanceName
-- `instance_name_pattern`을 우선 사용. 비어있으면 "processDefinitionId.key" 20자 이내 생성.
+- `instance_name_pattern`을 우선 사용. 비어 있으면 반드시 한글로 `processDefinitionName_key_value` 형식을 따라 20자 이내 생성.
 
 7) 출력 형식
 - 반드시 JSON만 출력(설명 금지). 진행 불가 시 `interruptByEvent=false`, `nextActivities: []`.

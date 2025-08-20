@@ -1023,8 +1023,8 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                 if ',' in user_id:
                     usernames = []
                     user_ids = user_id.split(',')
-                    for user_id in user_ids:
-                        user_info = fetch_assignee_info(user_id)
+                    for id in user_ids:
+                        user_info = fetch_assignee_info(id)
                         if user_info:
                             usernames.append(user_info.get('name'))
                     username = ','.join(usernames)
