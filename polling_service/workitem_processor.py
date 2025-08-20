@@ -278,7 +278,7 @@ Instructions:
   - 참으로 판정 가능한 후보만 `nextActivities`에 포함한다. 거짓/판단불가는 제외(대기).
 - target이 `subProcesses`에 존재하면:
   - type="subProcess", nextUserEmail="system",
-  - messageToUser="서브프로세스를 시작합니다. 내부 액티비티는 서브프로세스 컨텍스트에서 할당됩니다."
+  - description="서브프로세스를 시작합니다. 내부 액티비티는 서브프로세스 컨텍스트에서 할당됩니다."
 
 3) Gateways (explicit only; from `gateways.type`)
 - 다음 노드가 `gateways`에 존재하면 그 `type`으로만 동작한다:
@@ -330,7 +330,7 @@ Return ONLY the JSON block below, no extra text, no explanation.
       "expression": "cron if event",
       "dueDate": "YYYY-MM-DD if event",
       "result": "IN_PROGRESS",
-      "messageToUser": "Korean instruction"
+      "description": "Korean description"
     }}
   ],
   "cancelledActivities": [],
@@ -1035,7 +1035,8 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
                 "content": "",
                 "jsonContent": output if output else {},
                 "htmlContent": form_html if form_html else "",
-                "contentType": "html" if form_html else "text"
+                "contentType": "html" if form_html else "text",
+                "activityId": completed_workitem.activity_id
             }
             upsert_chat_message(completed_workitem.proc_inst_id, message_data, tenant_id)
             if completed_workitem.temp_feedback and completed_workitem.temp_feedback not in [None, ""]:
