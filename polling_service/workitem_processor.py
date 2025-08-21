@@ -1267,24 +1267,26 @@ def get_sequence_condition_data(process_definition: Any, next_activities: List[s
         return None
     
 async def run_prompt_and_parse(prompt_tmpl, chain_input, workitem, tenant_id, parser, merged_log=None, log_prefix="[LLM]"):
-    collected_text = merged_log + ""
+    log_text = merged_log + ""
+    collected_text = ""
     num_of_chunk = 0
 
     async for chunk in model.astream(prompt_tmpl.format(**chain_input)):
         token = chunk.content
         collected_text += token
+        log_text += token
 
         # 실시간 로그 적재
         upsert_queue.put((
             {
                 "id": workitem['id'],
-                "log": f"{log_prefix} {collected_text}"
+                "log": f"{log_prefix} {log_text}"
             },
             tenant_id
         ))
         num_of_chunk += 1
         if num_of_chunk % 10 == 0:
-            upsert_workitem({"id": workitem['id'], "log": collected_text}, tenant_id)
+            upsert_workitem({"id": workitem['id'], "log": log_text}, tenant_id)
 
     # 파싱 리트라이
     parsed_output = None
@@ -1317,7 +1319,7 @@ async def run_prompt_and_parse(prompt_tmpl, chain_input, workitem, tenant_id, pa
     if parsed_output is None:
         raise Exception("Failed to parse JSON response after all retry attempts")
 
-    return parsed_output, collected_text
+    return parsed_output, log_text
 
 
 async def handle_workitem(workitem):
