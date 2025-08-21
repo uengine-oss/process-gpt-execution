@@ -219,13 +219,11 @@ class ProcessDefinition(BaseModel):
                         return activity
         return None
 
-    def process_attached_events(self, activity, next_items, include_events=False, visited=None, expected_level=None):
+    def process_attached_events(self, activity, next_items, include_events=False, visited=None):
         if not hasattr(activity, "attachedEvents") or not activity.attachedEvents:
             return
         for attach_id in activity.attachedEvents:
             if visited is not None and attach_id in visited:
-                continue
-            if expected_level is not None and self.get_container_id(attach_id) != expected_level:
                 continue
             attach_sub = self.find_sub_process_by_id(attach_id)
             if attach_sub:
@@ -237,33 +235,29 @@ class ProcessDefinition(BaseModel):
                 if attach_act not in next_items:
                     next_items.append(attach_act)
                 if hasattr(attach_act, "attachedEvents") and attach_act.attachedEvents:
-                    self.process_attached_events(attach_act, next_items, include_events, visited, expected_level)
+                    self.process_attached_events(attach_act, next_items, include_events, visited)
                 continue
 
-    def find_next_through_gateway(self, node_id: str, next_items: List, include_events: bool, visited: set, expected_level=None):
+    def find_next_through_gateway(self, node_id: str, next_items: List, include_events: bool, visited: set):
         if node_id in visited:
             return
         visited.add(node_id)
-        if expected_level is not None and self.get_container_id(node_id) != expected_level:
-            return
         outgoing_sequences = [seq for seq in self.sequences if seq.source == node_id]
         for sequence in outgoing_sequences:
             target_id = sequence.target
-            if expected_level is not None and self.get_container_id(target_id) != expected_level:
-                continue
             target_sub = self.find_sub_process_by_id(target_id)
             if target_sub:
                 if target_sub not in next_items:
                     next_items.append(target_sub)
-                self.process_attached_events(target_sub, next_items, include_events, visited, expected_level)
-                self.find_next_through_gateway(target_sub.id, next_items, include_events, visited, expected_level)
+                self.process_attached_events(target_sub, next_items, include_events, visited)
+                self.find_next_through_gateway(target_sub.id, next_items, include_events, visited)
                 continue
             target_activity = self.find_activity_by_id(target_id)
             if target_activity:
                 if target_activity not in next_items:
                     next_items.append(target_activity)
-                self.process_attached_events(target_activity, next_items, include_events, visited, expected_level)
-                self.find_next_through_gateway(target_activity.id, next_items, include_events, visited, expected_level)
+                self.process_attached_events(target_activity, next_items, include_events, visited)
+                self.find_next_through_gateway(target_activity.id, next_items, include_events, visited)
                 continue
             target_gateway = self.find_gateway_by_id(target_id)
             if target_gateway:
@@ -272,25 +266,19 @@ class ProcessDefinition(BaseModel):
                     if seq2.source == target_gateway.id:
                         ev = self.find_event_by_id(seq2.target)
                         if ev and include_events:
-                            if expected_level is None or self.get_container_id(ev.id) == expected_level:
-                                if ev not in next_items:
-                                    next_items.append(ev)
-                                has_event = True
+                            if ev not in next_items:
+                                next_items.append(ev)
+                            has_event = True
                 if not has_event:
                     for seq2 in self.sequences:
                         if seq2.source == target_gateway.id:
-                            if expected_level is not None and self.get_container_id(seq2.target) != expected_level:
-                                continue
-                            self.find_next_through_gateway(target_gateway.id, next_items, include_events, visited, expected_level)
+                            self.find_next_through_gateway(target_gateway.id, next_items, include_events, visited)
                 continue
 
     def find_next_item(self, current_item_id: str) -> Union[ProcessActivity, ProcessGateway]:
-        expected_level = self.get_container_id(current_item_id)
         for sequence in self.sequences:
             if sequence.source == current_item_id:
                 source_id = sequence.target
-                if expected_level is not None and self.get_container_id(source_id) != expected_level:
-                    continue
                 source_sub = self.find_sub_process_by_id(source_id)
                 if source_sub:
                     return source_sub
@@ -305,29 +293,25 @@ class ProcessDefinition(BaseModel):
     def find_next_activities(self, current_activity_id: str, include_events: bool = True):
         results: List = []
         visited: set = set()
-        expected_level = self.get_container_id(current_activity_id)
         stack: List[str] = []
         for seq in self.sequences:
             if seq.source == current_activity_id:
-                if expected_level is None or self.get_container_id(seq.target) == expected_level:
-                    stack.append(seq.target)
+                stack.append(seq.target)
         while stack:
             node_id = stack.pop()
-            if expected_level is not None and self.get_container_id(node_id) != expected_level:
-                continue
             sub = self.find_sub_process_by_id(node_id)
             if sub:
                 if sub not in results:
                     results.append(sub)
-                self.process_attached_events(sub, results, include_events, visited, expected_level)
-                self.find_next_through_gateway(sub.id, results, include_events, visited, expected_level)
+                self.process_attached_events(sub, results, include_events, visited)
+                self.find_next_through_gateway(sub.id, results, include_events, visited)
                 continue
             act = self.find_activity_by_id(node_id)
             if act:
                 if act not in results:
                     results.append(act)
-                self.process_attached_events(act, results, include_events, visited, expected_level)
-                self.find_next_through_gateway(act.id, results, include_events, visited, expected_level)
+                self.process_attached_events(act, results, include_events, visited)
+                self.find_next_through_gateway(act.id, results, include_events, visited)
                 continue
             gw = self.find_gateway_by_id(node_id)
             if gw:
@@ -336,15 +320,13 @@ class ProcessDefinition(BaseModel):
                     if seq2.source == gw.id:
                         ev = self.find_event_by_id(seq2.target)
                         if ev and include_events:
-                            if expected_level is None or self.get_container_id(ev.id) == expected_level:
-                                if ev not in results:
-                                    results.append(ev)
-                                has_event = True
+                            if ev not in results:
+                                results.append(ev)
+                            has_event = True
                 if not has_event:
                     for seq2 in self.sequences:
                         if seq2.source == gw.id:
-                            if expected_level is None or self.get_container_id(seq2.target) == expected_level:
-                                stack.append(seq2.target)
+                            stack.append(seq2.target)
                 continue
         return results
 
@@ -469,6 +451,20 @@ class ProcessDefinition(BaseModel):
                         prev_activities.append(gw_source)
         
         return prev_activities
+    
+    def get_merged_outputs(self, activity_id: str) -> List[str]:
+        merged_outputs: List[str] = []
+        for sequence in self.sequences:
+            if getattr(sequence, "source", None) == activity_id:
+                next_target = getattr(sequence, "target", None)
+                if not next_target:
+                    continue
+                for sequence1 in self.sequences:
+                    if getattr(sequence1, "target", None) == next_target:
+                        src = getattr(sequence1, "source", None)
+                        if src:
+                            merged_outputs.append(src)
+        return list(dict.fromkeys(merged_outputs))
     
     def build_subprocess_definition(self, sub_process_id: str) -> "ProcessDefinition":
         from copy import deepcopy

@@ -138,120 +138,14 @@ class CustomJsonOutputParser(SimpleJsonOutputParser):
 
 parser = CustomJsonOutputParser()
 
-prompt_completed = PromptTemplate.from_template(
-"""
-You are a BPMN Completion Extractor.
-
-Goal:
-- 이번 스텝에서 **완료된 액티비티/이벤트만** 산출한다.
-- 다음 액티비티는 계산하지 않는다.
-
-Inputs:
-Process Definition:
-- activities: {activities}
-- gateways: {gateways}
-- events: {events}
-- sequences: {sequences}
-- attached_activities: {attached_activities}
-- subProcesses: {subProcesses}
-
-Current Step:
-- activity_id: {activity_id}
-- user: {user_email}
-- submitted_output: {output}
-
-Runtime Context:
-- output: {output}
-- previous_outputs: {previous_outputs}
-- today: {today}
-- gateway_condition_data: {gateway_condition_data}
-- sequence_conditions: {sequence_conditions}
-- instance_name_pattern: {instance_name_pattern}
-
-
---- OPTIONAL USER FEEDBACK ---
-- message_from_user: {user_feedback_message}
-
-Instructions:
-1) 기본 완료 기록
-- 현재 activity_id를 type="activity", result="DONE"으로 completedActivities에 추가한다.
-
-2) 동일 레벨 집합 계산(피드백 제외) — merged_outputs에 채운다
-- 변경된(보수적) 정의:
-  1. 먼저 current의 즉시 타겟 집합 T를 구한다:
-     T = {{ seq.target | seq ∈ sequences AND seq.source == activity_id }}.
-  2. 만약 T에 게이트웨이 ID가 포함되어 있다면(즉 current가 게이트웨이로 이어져 분기를 트리거하는 경우):
-     - 각 게이트웨이 G ∈ T에 대해 G의 타입을 확인한다 (gateways에 정의된 G.type).
-     - **G.type == "parallelGateway"** 인 경우에만, 동일 레벨 집합에 G의 outgoing targets(=브랜치 시작 노드들)를 포함한다:
-         branch_nodes_G = {{ s.target | s ∈ sequences AND s.source == G }}.
-       동일 레벨 집합 = {activity_id} ∪ (⋃ branch_nodes_G over parallel gateways in T).
-     - **G.type == "exclusiveGateway" 또는 "inclusiveGateway"** (또는 기타 조건부 게이트웨이) 인 경우:
-       - 보수적 접근으로 자동 확장을 하지 않는다. 동일 레벨 집합 = {activity_id}.
-  3. 만약 T에 게이트웨이가 없다면(=current가 단순히 다음 노드로 연결되는 경우):
-     동일 레벨 집합 = {activity_id}.
-  4. **중요:** 이전 로직에서 사용하던 역방향 집계(`same_level_sources = {{ seq.source | seq.target ∈ T }}`)는 사용하지 않는다. 이로써 게이트웨이를 통해 연결된 다른 독립 분기(형제 노드)들이 잘못 포함되는 것을 방지한다.
-  5. 동일 레벨 집합에서 activities[id].type == "feedback" 인 항목은 제외한다.
-  6. 이 동일 레벨 집합의 id들로만 merged_outputs 배열을 구성한다(중복 제거).
-  7. 동일 레벨 집합의 id들 중 completedActivities에 아직 없는 항목은 type="activity", result="DONE"으로 추가한다.
-     - description에는 "동일 레벨 완료 세트 추가"라고 표기한다.
-
-(설명: 위 절차는 BPMN 2.0의 분기 의미를 존중합니다. parallel은 병렬 실행의 동등 레벨로 간주될 수 있어 branch 시작 노드를 merged_outputs에 포함할 수 있지만, exclusive/inclusive 등 조건 분기에서는 자동으로 형제 노드를 완료로 처리하면 안 되므로 포함하지 않습니다.)
-
-3) 붙은 이벤트의 완료(오늘 기준)
-- 현재 activity_id에 directly attached된 이벤트(attached_activities)를 확인한다.
-- today 기준으로 도래한 이벤트만 completedActivities에 type="event", result="DONE"으로 추가한다.
-  - expression은 "0 0 DD MM *", dueDate는 "YYYY-MM-DD".
-  - 이 이벤트 id는 merged_outputs에는 **추가하지 않는다**(merged_outputs는 동일 레벨 액티비티 id 전용).
-  
-4) Instance Name
-- Use instance_name_pattern if provided; otherwise fallback to "processDefinitionId.key" from submitted_output, with total length ≤ 20 characters.
-
-5) Output
-- 반드시 아래 JSON만 출력한다. 추가 설명 금지.
-
-```json
-{{
-  "instanceId": "{instance_id}",
-  "instanceName": "process instance name",
-  "processDefinitionId": "{process_definition_id}",
-  "interruptByEvent": false,
-  "fieldMappings": [],
-  "merged_outputs": ["activity_or_event_id"],
-  "roleBindings": {role_bindings},
-  "completedActivities": [
-    {{
-      "completedActivityId": "activity_or_event_id",
-      "completedActivityName": "name_if_available",
-      "completedUserEmail": "{user_email}",
-      "type": "activity" | "event",
-      "expression": "cron expression if event",
-      "dueDate": "YYYY-MM-DD if event",
-      "result": "DONE | PENDING", // PENDING when cannotProceedErrors exist
-      "description": "완료된 활동에 대한 설명 (Korean)",
-      "cannotProceedErrors": [
-        {{
-          "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST",
-          "reason": "설명 (Korean)"
-        }}
-      ]
-    }}
-  ],
-  "nextActivities": [],
-  "cancelledActivities": [],
-  "referenceInfo": []
-}}
-"""
-)
-
 prompt_next = PromptTemplate.from_template(
 """
 You are a BPMN Next Activity Planner.
 
 Goal:
-- 완료 추출기의 출력(`completedActivities`, 'branch_merged_workitems')을 받아
-  BPMN 2.0 토큰 규칙을 준수하여 **다음으로 활성화될 수 있는 노드만** `nextActivities`에 산출한다.
-- **조건/데이터 평가는 오직 아래 입력들 내부에 존재하는 값만** 사용한다.
-  - activities / gateways / events / sequences / attached_activities / subProcesses / roleBindings / next_activities / previous_outputs / branch_merged_workitems / today
+- 완료 추출기의 출력(`completedActivities`)을 받아 BPMN 2.0 토큰 규칙을 준수하여 **다음으로 활성화될 수 있는 노드만** `nextActivities`에 산출한다.
+- completedActivities 의 결과 상태 값이 PENDING 으로 존재하는 경우에는 nextActivities 를 산출하지 않는다.
+- 'nextActivities'는 비어있을 수도 있음
 
 Inputs:
 Process Definition:
@@ -267,11 +161,10 @@ Runtime Context:
 - roleBindings: {role_bindings}
 - instance_name_pattern: {instance_name_pattern}
 - today: {today}
+- output: {output}
 - previous_outputs: {previous_outputs}
 - sequence_conditions: {sequence_conditions}
-- instance_name_pattern: {instance_name_pattern}
-
-From Completion Extractor:
+- user_feedback_message: {user_feedback_message}
 - completedActivities: {completedActivities}
 - branch_merged_workitems: {branch_merged_workitems}
 
@@ -279,107 +172,95 @@ From Completion Extractor:
 - message_from_user: {user_feedback_message}
 
 Instructions:
-0) 안정성 원칙(최우선)
-- 프롬프트 단계에서 게이트웨이를 **자동 확장/평가하지 않는다**. 즉, gateway id는 여기서 풀지 않으며,
-  upstream이 activity/subProcess/event 후보 id를 `next_activities`로 제공해야 한다.
-- nextActivities에는 오직 activity, subProcess, event(및 BPMN 상 callActivity는 subProcess로 간주)만 포함한다.
-  gateway id는 절대 포함하지 않는다.
 
-0.1) Candidate resolution (타입 판정 및 기본 정책)
-- 각 후보 id in `next_activities`에 대해 다음 순서로 존재 여부를 조회하여 타입을 판정:
-  1. activities 에 존재 → type=activity
-  2. subProcesses 에 존재 → type=subProcess  (callActivity도 여기로 간주)
-  3. events 에 존재 → type=event
-  4. 어느 데에도 없으면 무시(또는 cannotProceedErrors에 간단 표기)
-
-- **선택 정책(`subprocess_selection_policy`)**
-  - 기본값: "inclusive"
-    - subProcess가 존재하면 **리스트 상단에 우선 배치**하되,
-      activity/event 후보도 조건을 통과하면 **함께 포함**한다.
-  - "exclusive"
-    - subProcess가 하나 이상 존재하면 **subProcess만** 포함하고,
-      같은 레벨의 activity 후보는 제외한다.
-  - 후보별 오버라이드: next_activities 항목에 `allowCoexist: true`가 있으면,
-    "exclusive"에서도 해당 activity/event는 조건을 만족할 경우 **함께 포함**할 수 있다.
-
-- 출력 정렬/중복:
-  - "inclusive"인 경우 subProcess → activity → event 순으로 정렬.
-  - id 중복은 제거한다(첫 출현만 유지).
+0) 데이터/그래프 원칙
+- **없는 key를 만들거나 추론하지 않는다.** 값은 반드시 위 입력 구조 내부에 있어야 한다.
+- 도달 가능성은 `sequences` 그래프와 `next_activities`(직접 outgoings 후보)를 사용해 판정한다. 여러 홉을 건너뛰지 않는다.
+- 진행 불가(값 부재/조건 미결정/조인 미충족 추정/이벤트 미발생) 시 **오류 없이** `nextActivities: []`로 대기.
+- nextActivities에는 오직 activity, event, subProcess, callActivity만 포함되어야 하며, gateway id는 절대 포함하면 안 된다.
 
 1) Interrupt-first (이벤트)
-- 이벤트(특히 interrupt) 처리 로직은 유지하되,
-  **서브프로세스보다 우선하지 않는다.**
-  - "inclusive" 정책에서는 event도 조건을 통과하면 **함께 포함** 가능.
-  - "exclusive"에서는 서브프로세스가 선택되면 이벤트는 제외되지만,
-    후보 항목의 `allowCoexist: true`가 있으면 포함 가능.
+- 오늘 날짜(`today`)와 `events`/`attached_activities`/`sequences` 상의 정보만으로 **due가 명확한 이벤트**가 있고, 현재 지점에서 **도달 가능**하면:
+  - `interruptByEvent=true`, 해당 이벤트 **하나만** `nextActivities`에 넣고 종료.
+- 판단 불가/미도래면 `interruptByEvent=false`로 두고 진행.
 
-2) Non-gateway 대상 처리 (후보 타입 판정 후)
-- Candidate resolution에서 타입이 activity/subProcess/event로 판정된 후보들에 대해:
-  - 해당 시퀀스의 조건(있다면 `sequences` 또는 `gateways`/`events`에 명시된 표현)을
-    **입력 내부 값으로만** 평가한다. 사용 가능한 데이터 소스: 
-    `previous_outputs`, `branch_merged_workitems`, `roleBindings`, `today`, `next_activities` 메타.
-  - **조건이 명시되어 있지 않다면 자동 포함**으로 간주한다.
-  - 조건이 명시되어 있고 평가가 가능하며 참일 때만 포함한다. 거짓/판단불가는 제외(대기).
-
-- **subProcess 처리:** target이 `subProcesses`에 존재하면 그 항목을 포함하고,
-  `type="subProcess"`, `nextUserEmail="system"`,
-  `description="서브프로세스를 시작합니다. 내부 액티비티는 서브프로세스 컨텍스트에서 할당됩니다."` 로 설정한다.
-  - "exclusive" 정책에서는 subProcess가 하나 이상 선택된 경우,
-    같은 레벨 activity/event는 제외(단, `allowCoexist: true` 예외 허용).
-
-3) Gateways
-- 게이트웨이 자동평가는 제거되었고, gateway id는 처리 대상이 아니다.
-
+2) Non-gateway 대상 처리
+- `next_activities` 후보 중 게이트웨이가 **아닌** 대상(액티비티/서브프로세스/이벤트)에 대해:
+  - 해당 시퀀스의 조건(있다면 `sequences` 또는 `gateways`에 명시된 표현)을 **입력 구조 내부 값으로만** 평가한다.
+  - 참으로 판정 가능한 후보만 `nextActivities`에 포함한다. 거짓/판단불가는 제외(대기).
+- target이 `subProcesses`에 존재하면:
+  - type="subProcess", nextUserEmail="system",
+  - description="서브프로세스를 시작합니다. 내부 액티비티는 서브프로세스 컨텍스트에서 할당됩니다."
+  
+2.1) Implicit AND-Join on Multi-Incoming Targets (암묵 병렬 조인) **반드시 확인**
+- 대상: type이 gateway가 아닌 후보 타겟 T에 들어오는 시퀀스가 2개 이상인 경우
+- 용어:
+  - "T의 선행 소스 목록": sequences에서 target == T 인 모든 시퀀스의 source id 목록
+  - DONE_STATES: ["DONE","SUBMITTED"]
+- 규칙(절차):
+  1) T의 선행 소스 목록을 만든다.
+  2) branch_merged_workitems에서 각 선행 소스 id(=activity_id)에 해당하는 항목의 "최신 상태(status)"만 집계한다.
+     - 새 키를 만들지 말고, 입력에 실제로 존재하는 식별자만 사용한다.
+  3) 다음 중 하나라도 참이면 T는 대기(제외):
+     - 집계된 상태(status) 중 "IN_PROGRESS"가 하나라도 있다.
+     - 선행 소스 중 branch_merged_workitems에 기록이 전혀 없는 것이 있다. (없는 데이터는 추론 금지)
+  4) 위 두 조건에 걸리지 않고, 모든 선행 소스의 상태가 DONE_STATES 안에 있으면 T를 nextActivities에 포함한다.
+  
+3) Gateways (explicit only; from `gateways.type`)
+- 다음 노드가 `gateways`에 존재하면 그 `type`으로만 동작한다:
+  - **exclusiveGateway (XOR)**:
+    - `sequences`/`gateways` 내부의 조건을 입력 구조 값으로 평가해 **참 하나**가 명확하면 그 경로만 진행.
+    - 여러 개가 동시 참이면 모델의 우선순위/디폴트가 명시돼 있을 때만 그 규칙을 적용, 없으면 **대기**.
+    - 전혀 참이 없고 default flow가 명시돼 있으면 default로 진행, 아니면 **대기**.
+  - **inclusiveGateway (OR)**:
+    - 참으로 판정 가능한 모든 아웃고잉을 활성화.
+    - 이후 조인이 필요하면(모델 상 대응 OR-join 존재) **모든 `branch_merged_workitems`의 status가 "IN_PROGRESS"가 아니면** 조인 뒤 1-hop 타겟을 next로 산출, 아니면 **대기**.
+    - **parallelGateway (AND)**:
+    - 전제:
+      - `branch_merged_workitems`는 **현재 병렬 구간(cohort)**에 속한 브랜치들만 포함한다.  
+        (다른 게이트웨이/구간의 워크아이템은 포함되지 않는다.)
+    - 스코프 판정:
+      - outgoings := `sequences`에서 source == 이 게이트웨이 id 인 1-hop 타겟 집합
+      - incomings := `sequences`에서 target == 이 게이트웨이 id 인 1-hop 소스 집합
+      - 타입:
+        - Split: len(incomings) == 1 AND len(outgoings) >= 2
+        - Join:  len(incomings) >= 2 AND len(outgoings) == 1
+    - Split:
+      - 조건 평가 없이 outgoings 중 **activity / event / subProcess / callActivity**만 후보로 본다(게이트웨이로의 1-hop은 대기).
+      - 각 후보 타겟 t에 대해, `branch_merged_workitems`에 **동일 브랜치로 식별되는 항목**이 존재하고 그 상태가
+        ["IN_PROGRESS","DONE","SUBMITTED"] 중 하나라면 **중복 방지로 제외**한다.
+        (동일 브랜치 식별은 입력 구조에서 일관되게 식별 가능한 키를 사용한다. 새로운 키를 만들지 않는다.)
+      - 위에 해당하지 않는, **아직 시작되지 않은 브랜치**만 `nextActivities`에 포함한다.
+      - 다른 브랜치가 IN_PROGRESS여도 미시작 브랜치는 즉시 포함한다. (전역 대기 금지)
+    - Join:
+      - 조인 완료 조건(현재 cohort 한정):
+        - `branch_merged_workitems`에 포함된 **모든 브랜치**의 최신 상태가 ["DONE","SUBMITTED"] 중 하나이고,
+        - 상태가 "IN_PROGRESS"인 항목이 **하나도 없다**.
+      - 위 조건이 참이면 이 게이트웨이의 **1-hop 단일 타겟**을 `nextActivities`에 산출한다. 아니면 **대기**한다.
+      - `branch_merged_workitems`가 cohort의 일부 브랜치만 가지고 있어 브랜치 유무를 판정할 수 없으면 **대기**한다.
+        (없는 키/데이터를 추론하지 않는다.)
+    - 가드 스코프화:
+      - IN_PROGRESS 존재 여부와 완료 판정은 **항상 이 병렬 게이트웨이의 현재 cohort(`branch_merged_workitems`)에만 한정**한다.
+  - **eventBasedGateway**:
+    - 실제 발생한 이벤트가 `events`/`attached_activities`/`sequences`에서 판정 가능할 때만 그 단일 경로 진행. 아니면 **대기**.
+    
 4) Attached Events (simultaneous inclusion)
 - `nextActivities`에 포함된 activity/subProcess가 `attached_activities.activity_id`로 존재하면,
-  - 해당 `attached_events` 각각을 type="event"로 **별도 엔트리**로 추가한다
-    (이미 완료/취소된 이벤트는 제외).
+  - 그 `attached_events` 각각을 type="event"로 **별도 엔트리**로 추가한다(이미 완료/취소 제외).
 
-5) Multi-instance 결정 (유연 탐색, 디버그 권장)
-- 목적: subProcess(callActivity 포함)의 `multiInstanceCount`를 신뢰성 있게 산정.
-- 절차:
-  1. 토큰 추출: 각 서브프로세스 후보의 `subprocessName` 또는 `nextActivityName`에서 핵심 토큰을 추출
-     (공백/특수문자 제거, 소문자화).
-  2. 재귀 탐색: `previous_outputs`와 `branch_merged_workitems` 전체를 재귀적으로 스캔.
-     키 매칭 규칙:
-       a) 정확/부분 매칭(키에 token 포함)  
-       b) 접두/접미 패턴(`*_count`, `*Count`, `*_list`, `*_section`, 복수형, camel/snake 변형)  
-       c) 값 내부(dict/list)의 키/텍스트에 token 포함
-  3. 값 타입 처리(우선순위):
-       - explicit count key(`*_count`, `*Count`)의 숫자
-       - 배열/리스트 길이(len)
-       - 숫자 스칼라(int/float)
-       - 그 다음으로 `next_activities[*].multiInstanceCount`
-       - 실패 시 기본 1
-     0 또는 음수는 제외한다.
-  4. 상한선: 지나치게 큰 값(예: >1000)은 정책상 한도(예: 100)로 캡하거나
-     `cannotProceedErrors`에 경고 기록.
-  5. 기록(권장): 근거 키와 이유를 `referenceInfo`에 간단히 남긴다
-     (예: `"contract_slide_section": "list length 2"`).
-  6. 적용: 산정된 정수값을 `"multiInstanceCount"`에 **문자열**로 기입한다.
+5) Assignment
+- `roleBindings`의 endpoint가 배열이면 `,`으로 조인하여 nextUserEmail을 결정한다.
+- 외부 고객 역할이면 입력 구조 내에서 email을 찾을 수 있을 때만 사용한다(없으면 해당 항목 제외).
+- 유효 email을 결정할 수 없으면 **오류 없이 제외**하고, 나머지 항목은 계속 검토한다.
 
-6) Assignment
-- `roleBindings`의 endpoint가 배열이면 `,`으로 조인하여 `nextUserEmail`을 정한다.
-- 유효 email을 결정할 수 없으면 오류 없이 해당 항목을 제외한다.
-
-7) InstanceName
+6) InstanceName
 - `instance_name_pattern`을 우선 사용. 비어 있으면 반드시 한글로 `processDefinitionName_key_value` 형식을 따라 20자 이내 생성.
 
-8) 출력 형식
-- 반드시 JSON만 출력(설명 금지).
-- 진행 불가 시 `interruptByEvent=false`, `nextActivities: []`, `cannotProceedErrors: []`.
-
-Return ONLY the JSON block below, no extra text, no explanation.
+7) 출력 형식
+- 반드시 JSON만 출력(설명 금지). 진행 불가 시 `interruptByEvent=false`, `nextActivities: []`.
 
 ```json
 {{
-  "instanceId": "{instance_id}",
-  "instanceName": "process instance name",
-  "processDefinitionId": "{process_definition_id}",
-  "interruptByEvent": true | false,
-  "fieldMappings": [],
-  "roleBindings": {role_bindings},
-  "completedActivities": {completedActivities},
   "nextActivities": [
     {{
       "nextActivityId": "id",
@@ -398,14 +279,10 @@ Return ONLY the JSON block below, no extra text, no explanation.
         }}
       ]
     }}
-  ],
-  "cancelledActivities": [],
-  "referenceInfo": []
+  ]
 }}
 """
 )
-
-
 
 # Pydantic model for process execution
 
@@ -1330,6 +1207,8 @@ async def handle_workitem(workitem):
         return
 
     activity_id = workitem['activity_id']
+    activity_name = workitem['activity_name']
+    activity_description = workitem['description']
     process_definition_id = workitem['proc_def_id']
     process_instance_id = workitem['proc_inst_id']
     tenant_id = workitem['tenant_id']
@@ -1441,44 +1320,48 @@ async def handle_workitem(workitem):
             user_email_for_prompt = workitem['user_id']
         else:
             user_email_for_prompt = ','.join(workitem['user_id'].split(','))
+            
+        instance_name = process_definition_json.get("processDefinitionName") + "_" + workitem['id']
+            
+        completed_json = {
+            "instanceId": process_instance_id,
+            "instanceName": process_definition_json.get("instanceNamePattern") or instance_name,
+            "processDefinitionId": process_definition_id,
+            "fieldMappings": [],
+            "roleBindings": workitem.get('assignees', []),
+            "completedActivities": [
+                {
+                    "completedActivityId": activity_id,
+                    "completedActivityName": activity_name,
+                    "completedUserEmail": user_email_for_prompt,
+                    "type": "activity",
+                    "result": "DONE",
+                    "description": activity_description,
+                    "cannotProceedErrors": []
+                }
+            ],
+            "nextActivities": [],
+            "cancelledActivities": [],
+            "referenceInfo": []
+        };
 
-        chain_input_completed = {
-            "activities": process_definition.activities,
-            "gateways": process_definition_json.get('gateways', []),
-            "events": process_definition_json.get('events', []),
-            "subProcesses": process_definition.subProcesses,
-            "sequences": process_definition.sequences,
-            "role_bindings": workitem.get('assignees', []),
-
-            "instance_id": process_instance_id,
-            "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "null",
-            "process_definition_id": process_definition_id,
-            "activity_id": activity_id,
-            "user_email": user_email_for_prompt,
-            "output": output,
-            "user_feedback_message": workitem.get('temp_feedback', ''),
-            "today": today,
-            "previous_outputs": workitem_input_data,
-            "gateway_condition_data": gateway_condition_data,
-            "attached_activities": attached_activities,
-            "sequence_conditions": sequence_condition_data
-        }
-
-        completed_json, completed_log = await run_prompt_and_parse(
-            prompt_completed, chain_input_completed, workitem, tenant_id, parser, "",log_prefix="[COMPLETED]"
-        )
+        merged_workitems_from_step = []
+        merged_outputs = process_definition.get_merged_outputs(activity_id)
+        if merged_outputs:
+            for merged_output in merged_outputs:
+                merged_workitems = fetch_workitem_by_proc_inst_and_activity(process_instance_id, merged_output, tenant_id)
+                merged_item = {
+                    "activity_id": merged_workitems.activity_id,
+                    "activity_name": merged_workitems.activity_name,
+                    "status": merged_workitems.status,
+                }
+                merged_workitems_from_step.append(merged_item)
 
         completed_activities_from_step = (
             completed_json.get("completedActivities")
             or completed_json.get("completedActivitiesDelta")
             or []
         )
-        merged_outputs_from_step = completed_json.get("merged_outputs", None)
-        merged_workitems_from_step = []
-        if merged_outputs_from_step is not None:
-            for merged_output in merged_outputs_from_step:
-                merged_workitems = fetch_workitem_by_proc_inst_and_activity(process_instance_id, merged_output, tenant_id)
-                merged_workitems_from_step.append(merged_workitems)
 
         chain_input_next = {
             "activities": process_definition.activities,
@@ -1487,6 +1370,7 @@ async def handle_workitem(workitem):
             "subProcesses": process_definition.subProcesses,
             "sequences": process_definition.sequences,
             "instance_id": process_instance_id,
+            "activity_id": activity_id,
             "process_definition_id": process_definition_id,
             "output": output,
 
@@ -1505,10 +1389,12 @@ async def handle_workitem(workitem):
         }
 
         next_json, next_log = await run_prompt_and_parse(
-            prompt_next, chain_input_next, workitem, tenant_id, parser, completed_log, log_prefix="[NEXT]"
+            prompt_next, chain_input_next, workitem, tenant_id, parser, "", log_prefix="[NEXT]"
         )
+        completed_json["nextActivities"] = next_json["nextActivities"]
 
-        execute_next_activity(next_json, tenant_id)
+
+        execute_next_activity(completed_json, tenant_id)
 
     except Exception as e:
         print(f"[ERROR] Error in handle_workitem for workitem {workitem['id']}: {str(e)}")
