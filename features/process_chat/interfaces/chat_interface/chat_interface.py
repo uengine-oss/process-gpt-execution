@@ -81,34 +81,60 @@ class ChatInterface:
             
             async def streaming_response():
                 nonlocal result_text
-                async for chunk in response.body_iterator:
-                    parsed = chunk.strip().removeprefix("data: ").removesuffix("\n\n")
-                    try:
-                        obj = json.loads(parsed)
-                        content = obj["choices"][0]["delta"].get("content")
-                        if content:
-                            result_text += content
-                    except:
-                        pass
-                    yield chunk
+                try:
+                    async for chunk in response.body_iterator:
+                        if chunk is None:
+                            continue
+                            
+                        parsed = chunk.strip().removeprefix("data: ").removesuffix("\n\n")
+                        try:
+                            obj = json.loads(parsed)
+                            content = obj["choices"][0]["delta"].get("content")
+                            if content:
+                                result_text += content
+                        except (json.JSONDecodeError, KeyError, IndexError) as e:
+                            # JSON 파싱 오류는 무시하고 계속 진행
+                            print(f"[DEBUG] Chunk parsing error (continuing): {e}")
+                            pass
+                        except Exception as e:
+                            print(f"[ERROR] Unexpected error in streaming: {e}")
+                            # 예상치 못한 오류가 발생해도 스트림은 계속 진행
+                            pass
+                        
+                        yield chunk
 
-                # 스트리밍 완료 후 응답 토큰 계산 및 사용량 기록
-                if result_text:
-                    response_tokens = ChatInterface.count_tokens(vendor, model, [{"role": "assistant", "content": result_text}])
-                    total_tokens = request_tokens + response_tokens
-                    print(f"[DEBUG] Response tokens: {response_tokens}, Total tokens: {total_tokens}")
-                    record_usage(total_tokens, result_text)
-                else:
-                    print(f"[WARNING] No response text in streaming, recording request tokens only")
-                    record_usage(request_tokens, "")
+                    # 스트리밍 완료 후 응답 토큰 계산 및 사용량 기록
+                    if result_text:
+                        response_tokens = ChatInterface.count_tokens(vendor, model, [{"role": "assistant", "content": result_text}])
+                        total_tokens = request_tokens + response_tokens
+                        print(f"[DEBUG] Response tokens: {response_tokens}, Total tokens: {total_tokens}")
+                        record_usage(total_tokens, result_text)
+                    else:
+                        print(f"[WARNING] No response text in streaming, recording request tokens only")
+                        record_usage(request_tokens, "")
 
-                if ENV != "production":
-                    try:
-                        cache.update(prompt, llm_string, [Generation(text=result_text)])
-                    except Exception as e:
-                        print(f"[cache error] {e}")
+                    if ENV != "production":
+                        try:
+                            cache.update(prompt, llm_string, [Generation(text=result_text)])
+                        except Exception as e:
+                            print(f"[cache error] {e}")
+                            
+                except Exception as e:
+                    print(f"[ERROR] Streaming response error: {e}")
+                    # 스트리밍 중 오류가 발생해도 최소한의 응답은 제공
+                    if result_text:
+                        yield f"data: {json.dumps({'choices': [{'delta': {'content': result_text}}]})}\n\n"
+                    yield "data: [DONE]\n\n"
 
-            return StreamingResponse(streaming_response(), media_type="text/event-stream")
+            return StreamingResponse(
+                streaming_response(), 
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"  # Nginx 버퍼링 비활성화
+                }
+            )
 
         else:
             response = await client.invoke(messages=lc_messages, model=model, modelConfig=modelConfig)

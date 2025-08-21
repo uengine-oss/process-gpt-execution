@@ -17,4 +17,5 @@ RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
 
 EXPOSE 80
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 스트리밍 안정성을 위한 설정 추가
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "300", "--workers", "1", "--loop", "asyncio"]

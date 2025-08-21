@@ -7,12 +7,16 @@ from fastapi import HTTPException
 
 def add_routes_to_app(app):
     app.add_api_route(f"{BASE_URL}/sanity-check", sanity_check, methods=["GET"])
+    app.add_api_route(f"{BASE_URL}/health", health_check, methods=["GET"])
     app.add_api_route(f"{BASE_URL}/messages", process_chat_messages, methods=["POST"])
     app.add_api_route(f"{BASE_URL}/count-tokens", count_tokens, methods=["POST"])
     app.add_api_route(f"{BASE_URL}/embeddings", get_embedding_vector, methods=["POST"])
 
 def sanity_check():
     return {"is_sanity_check": True}
+
+def health_check():
+    return {"status": "healthy", "service": "process-chat"}
 
 async def process_chat_messages(chat_request: ChatRequest):
     try:
