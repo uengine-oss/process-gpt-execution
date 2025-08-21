@@ -45,7 +45,7 @@ async def handle_submit(request: Request):
         raise HTTPException(status_code=500, detail=str(e)) from e
     
 
-async def create_process_instance(process_definition, process_instance_id, is_initiate=False, role_bindings=[]):
+async def create_process_instance(process_definition, process_instance_id, is_initiate=False, role_bindings=[], project_id=None):
     try:
         participants = []
         if isinstance(role_bindings, list) and len(role_bindings) > 0:
@@ -62,6 +62,7 @@ async def create_process_instance(process_definition, process_instance_id, is_in
             "proc_inst_id": process_instance_id,
             "proc_inst_name": process_definition.processDefinitionName,
             "proc_def_id": process_definition_id,
+            "project_id": project_id,
             "participants": participants,
             "status": "RUNNING" if is_initiate else "NEW",
             "role_bindings": role_bindings,
@@ -77,6 +78,7 @@ async def submit_workitem(input: dict):
     process_instance_id = input.get('process_instance_id')
     process_definition_id = input.get('process_definition_id')
     activity_id = input.get('activity_id')
+    project_id = input.get('project_id')
     
     process_definition_json = fetch_process_definition(process_definition_id)
     process_definition = load_process_definition(process_definition_json)
@@ -122,7 +124,7 @@ async def submit_workitem(input: dict):
         workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_id, activity_id)
     else:
         process_instance_id = f"{process_definition_id.lower()}.{str(uuid.uuid4())}"
-        await create_process_instance(process_definition, process_instance_id, False, role_bindings)
+        await create_process_instance(process_definition, process_instance_id, False, role_bindings, project_id)
 
     now = datetime.now(pytz.timezone('Asia/Seoul'))
     start_date = now.isoformat()
@@ -167,7 +169,8 @@ async def submit_workitem(input: dict):
             "output": output,
             "retry": 0,
             "consumer": None,
-            "description": activity.description
+            "description": activity.description,
+            "project_id": project_id
         }
     
     upsert_workitem(workitem_data)
@@ -274,6 +277,7 @@ async def initiate_workitem(input: dict):
     process_definition_id = input.get('process_definition_id')
     process_definition_json = fetch_process_definition(process_definition_id)
     process_definition = load_process_definition(process_definition_json)
+    project_id = input.get('project_id')
     
     activity = process_definition.find_initial_activity()
     if activity is not None:
@@ -322,7 +326,8 @@ async def initiate_workitem(input: dict):
         "output": None,
         "retry": 0,
         "consumer": None,
-        "description": activity.description
+        "description": activity.description,
+        "project_id": project_id
     }
 
     upsert_workitem(workitem_data)
