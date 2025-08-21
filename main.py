@@ -45,22 +45,6 @@ app.add_middleware(
     allow_headers=["*"],  # 모든 HTTP 헤더 허용
 )
 
-# 스트리밍 응답을 위한 추가 헤더 설정
-@app.middleware("http")
-async def add_streaming_headers(request: Request, call_next):
-    response = await call_next(request)
-    
-    # 스트리밍 응답인 경우 추가 헤더 설정
-    if response.headers.get("content-type") == "text/event-stream":
-        response.headers["Cache-Control"] = "no-cache"
-        response.headers["Connection"] = "keep-alive"
-        response.headers["X-Accel-Buffering"] = "no"  # Nginx 버퍼링 비활성화
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Headers"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "*"
-    
-    return response
-
 from starlette.middleware.base import BaseHTTPMiddleware
 from database import update_tenant_id
 
@@ -103,10 +87,6 @@ async def start_background_tasks():
     # 알림 실시간 구독 태스크 시작
     # asyncio.create_task(notification_polling_task())
     pass
-
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "service": "process-gpt-execution"}
 
 if __name__ == "__main__":
     import uvicorn
