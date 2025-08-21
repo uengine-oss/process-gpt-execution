@@ -381,6 +381,8 @@ def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Option
         process_instance.process_definition = process_definition
 
     end_activity = process_definition.find_end_activity()
+    
+    status = None
     if end_activity:
         end_workitem = fetch_workitem_by_proc_inst_and_activity(process_instance.proc_inst_id, safeget(end_activity, 'id', ''), tenant_id)
         if end_workitem:
@@ -694,8 +696,9 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                                 'userId': assignee.get('endpoint')
                             }
                             break
-                if  completed_activity['cannotProceedErrors'] and len(completed_activity['cannotProceedErrors']) > 0:
-                    workitem.log = "\n".join(f"[{error.get('type', '')}] {error.get('reason', '')}" for error in completed_activity['cannotProceedErrors']);
+                cannotProceedErrors = safeget(completed_activity, 'cannotProceedErrors', [])
+                if  cannotProceedErrors and len(cannotProceedErrors) > 0:
+                    workitem.log = "\n".join(f"[{error.get('type', '')}] {error.get('reason', '')}" for error in cannotProceedErrors);
             else:
                 activity = process_definition.find_activity_by_id(completed_activity['completedActivityId'])
                 start_date = datetime.now(pytz.timezone('Asia/Seoul'))
@@ -717,8 +720,9 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     agent_orch = None
                 
                 log = ''
-                if  completed_activity['cannotProceedErrors'] and len(completed_activity['cannotProceedErrors']) > 0:
-                    log = "\n".join(f"[{error.type}] {error.reason}" for error in completed_activity['cannotProceedErrors']);
+                cannotProceedErrors = safeget(completed_activity, 'cannotProceedErrors', [])    
+                if  cannotProceedErrors and len(cannotProceedErrors) > 0:
+                    log = "\n".join(f"[{error.get('type', '')}] {error.get('reason', '')}" for error in cannotProceedErrors);
                 
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",

@@ -191,19 +191,25 @@ class ProcessDefinition(BaseModel):
         return prev_activities
     
     
-    # ---------- helpers: subprocess 판별/조회 ----------
     def is_subprocess(self, node) -> bool:
         return getattr(node, "type", None) in ("subProcess", "subprocess", "SubProcess")
 
     def find_sub_process_by_id(self, node_id: str):
-        # activities 컬렉션 안에서만 SubProcess를 찾는다고 가정
         for a in self.activities:
             if getattr(a, "id", None) == node_id and self.is_subprocess(a):
                 return a
         return None
 
-
-    # ---------- 기존 함수 전면 교체(덮어쓰기) ----------
+    def get_container_id(self, node_id: str):
+        node = (
+            self.find_activity_by_id(node_id)
+            or self.find_sub_process_by_id(node_id)
+            or self.find_gateway_by_id(node_id)
+            or self.find_event_by_id(node_id)
+        )
+        if not node:
+            return None
+        return getattr(node, "srcTrg", None)
 
     def find_attached_activity(self, event_id: str) -> Optional[ProcessActivity]:
         for activity in self.activities:
@@ -213,164 +219,134 @@ class ProcessDefinition(BaseModel):
                         return activity
         return None
 
-    def process_attached_events(self, activity, next_items, include_events=False, visited=None):
-        """
-        boundary(attached) 이벤트 처리:
-        - SubProcess: 내부 진입 없이 '노드만' next_items에 추가
-        - Activity: 노드만 next_items에 추가 (필요 시 그 액티비티의 attachedEvents는 재귀 처리)
-        - Gateway는 존재할 수 없으므로 무시 (방어적 체크만)
-        """
+    def process_attached_events(self, activity, next_items, include_events=False, visited=None, expected_level=None):
         if not hasattr(activity, "attachedEvents") or not activity.attachedEvents:
             return
-
         for attach_id in activity.attachedEvents:
             if visited is not None and attach_id in visited:
                 continue
-
-            # SubProcess boundary
+            if expected_level is not None and self.get_container_id(attach_id) != expected_level:
+                continue
             attach_sub = self.find_sub_process_by_id(attach_id)
             if attach_sub:
                 if attach_sub not in next_items:
                     next_items.append(attach_sub)
-                # 내부 진입 금지
                 continue
-
-            # Activity boundary
             attach_act = self.find_activity_by_id(attach_id)
             if attach_act:
                 if attach_act not in next_items:
                     next_items.append(attach_act)
-                # 그 액티비티에 또 boundary가 있으면 재귀 허용(내부 진입 아님)
                 if hasattr(attach_act, "attachedEvents") and attach_act.attachedEvents:
-                    self.process_attached_events(attach_act, next_items, include_events, visited)
+                    self.process_attached_events(attach_act, next_items, include_events, visited, expected_level)
                 continue
 
-            # 방어: 게이트웨이는 attachedEvent로 올 수 없음 → 무시
-            # gw = self.find_gateway_by_id(attach_id)
-            # if gw:
-            #     # print(f"[WARN] Ignored gateway '{attach_id}' in attachedEvents.")
-            #     continue
-
-    def find_next_through_gateway(self, node_id: str, next_items: List, include_events: bool, visited: set):
-        """
-        그래프를 확장해 '모든 다음 작업 노드(액티비티/서브프로세스/이벤트)'를 수집한다.
-
-        정책:
-        - Gateway: 결과에 추가하지 않고 확장만 수행
-        * eventBasedGateway: 직접 연결된 '이벤트'만 결과에 추가하고 거기서 중단
-        * 그 외 게이트웨이: 모든 분기 계속 확장
-        - Activity: 결과에 추가 후 boundary 처리, 그리고 뒤로 계속 확장
-        - SubProcess: 결과에 추가(내부 미진입) + boundary 처리, 그리고 부모 레벨에서 뒤로 계속 확장
-        """
+    def find_next_through_gateway(self, node_id: str, next_items: List, include_events: bool, visited: set, expected_level=None):
         if node_id in visited:
             return
         visited.add(node_id)
-
+        if expected_level is not None and self.get_container_id(node_id) != expected_level:
+            return
         outgoing_sequences = [seq for seq in self.sequences if seq.source == node_id]
-
         for sequence in outgoing_sequences:
             target_id = sequence.target
-
+            if expected_level is not None and self.get_container_id(target_id) != expected_level:
+                continue
             target_sub = self.find_sub_process_by_id(target_id)
             if target_sub:
                 if target_sub not in next_items:
                     next_items.append(target_sub)
-                self.process_attached_events(target_sub, next_items, include_events, visited)
-                self.find_next_through_gateway(target_sub.id, next_items, include_events, visited)
+                self.process_attached_events(target_sub, next_items, include_events, visited, expected_level)
+                self.find_next_through_gateway(target_sub.id, next_items, include_events, visited, expected_level)
                 continue
-
             target_activity = self.find_activity_by_id(target_id)
             if target_activity:
                 if target_activity not in next_items:
                     next_items.append(target_activity)
-                self.process_attached_events(target_activity, next_items, include_events, visited)
-                self.find_next_through_gateway(target_activity.id, next_items, include_events, visited)
+                self.process_attached_events(target_activity, next_items, include_events, visited, expected_level)
+                self.find_next_through_gateway(target_activity.id, next_items, include_events, visited, expected_level)
                 continue
-
             target_gateway = self.find_gateway_by_id(target_id)
             if target_gateway:
+                has_event = False
                 for seq2 in self.sequences:
                     if seq2.source == target_gateway.id:
                         ev = self.find_event_by_id(seq2.target)
-                        if ev and include_events and ev not in next_items:
-                            next_items.append(ev)
-                if not any(self.find_event_by_id(seq2.target) for seq2 in self.sequences if seq2.source == target_gateway.id):
-                    self.find_next_through_gateway(target_gateway.id, next_items, include_events, visited)
+                        if ev and include_events:
+                            if expected_level is None or self.get_container_id(ev.id) == expected_level:
+                                if ev not in next_items:
+                                    next_items.append(ev)
+                                has_event = True
+                if not has_event:
+                    for seq2 in self.sequences:
+                        if seq2.source == target_gateway.id:
+                            if expected_level is not None and self.get_container_id(seq2.target) != expected_level:
+                                continue
+                            self.find_next_through_gateway(target_gateway.id, next_items, include_events, visited, expected_level)
                 continue
 
-
     def find_next_item(self, current_item_id: str) -> Union[ProcessActivity, ProcessGateway]:
+        expected_level = self.get_container_id(current_item_id)
         for sequence in self.sequences:
             if sequence.source == current_item_id:
                 source_id = sequence.target
-
+                if expected_level is not None and self.get_container_id(source_id) != expected_level:
+                    continue
                 source_sub = self.find_sub_process_by_id(source_id)
                 if source_sub:
                     return source_sub
-
                 source_activity = self.find_activity_by_id(source_id)
                 if source_activity:
                     return source_activity
-
                 source_gateway = self.find_gateway_by_id(source_id)
                 if source_gateway:
                     return source_gateway
         return None
 
     def find_next_activities(self, current_activity_id: str, include_events: bool = True):
-        """
-        현재 액티비티에서 도달 가능한 '다음 작업 후보'를 반환.
-
-        정책:
-        - Gateway는 결과에 절대 포함하지 않음(확장 전용).
-        * eventBasedGateway: find_event_by_id로 잡히는 이벤트만 결과에 포함
-        * 그 외 게이트웨이: 모든 분기 확장
-        - Activity/SubProcess는 결과에 포함.
-        - attachedEvents는 동일 레벨로만 추가(게이트웨이 불가).
-        """
         results: List = []
         visited: set = set()
-
+        expected_level = self.get_container_id(current_activity_id)
         stack: List[str] = []
         for seq in self.sequences:
             if seq.source == current_activity_id:
-                stack.append(seq.target)
-
+                if expected_level is None or self.get_container_id(seq.target) == expected_level:
+                    stack.append(seq.target)
         while stack:
             node_id = stack.pop()
-
+            if expected_level is not None and self.get_container_id(node_id) != expected_level:
+                continue
             sub = self.find_sub_process_by_id(node_id)
             if sub:
                 if sub not in results:
                     results.append(sub)
-                self.process_attached_events(sub, results, include_events, visited)
-                self.find_next_through_gateway(sub.id, results, include_events, visited)
+                self.process_attached_events(sub, results, include_events, visited, expected_level)
+                self.find_next_through_gateway(sub.id, results, include_events, visited, expected_level)
                 continue
-
             act = self.find_activity_by_id(node_id)
             if act:
                 if act not in results:
                     results.append(act)
-                self.process_attached_events(act, results, include_events, visited)
-                self.find_next_through_gateway(act.id, results, include_events, visited)
+                self.process_attached_events(act, results, include_events, visited, expected_level)
+                self.find_next_through_gateway(act.id, results, include_events, visited, expected_level)
                 continue
-
             gw = self.find_gateway_by_id(node_id)
             if gw:
                 has_event = False
                 for seq2 in self.sequences:
                     if seq2.source == gw.id:
                         ev = self.find_event_by_id(seq2.target)
-                        if ev and include_events and ev not in results:
-                            results.append(ev)
-                            has_event = True
+                        if ev and include_events:
+                            if expected_level is None or self.get_container_id(ev.id) == expected_level:
+                                if ev not in results:
+                                    results.append(ev)
+                                has_event = True
                 if not has_event:
                     for seq2 in self.sequences:
                         if seq2.source == gw.id:
-                            stack.append(seq2.target)
+                            if expected_level is None or self.get_container_id(seq2.target) == expected_level:
+                                stack.append(seq2.target)
                 continue
         return results
-
 
 
     def find_next_sub_process(self, current_activity_id: str) -> Optional[SubProcess]:
@@ -493,6 +469,198 @@ class ProcessDefinition(BaseModel):
                         prev_activities.append(gw_source)
         
         return prev_activities
+    
+    def build_subprocess_definition(self, sub_process_id: str) -> "ProcessDefinition":
+        from copy import deepcopy
+
+        sp = self.find_sub_process_by_id(sub_process_id)
+        if not sp:
+            raise ValueError(f"SubProcess not found: {sub_process_id}")
+
+        def is_event(t: str) -> bool:
+            t = (t or "").lower()
+            return "event" in t
+
+        def collect_events(owner_id: str):
+            seen = set()
+            out = []
+            for gw in self.gateways or []:
+                if getattr(gw, "process", None) == owner_id and is_event(gw.type):
+                    if gw.id and gw.id not in seen:
+                        seen.add(gw.id)
+                        out.append({
+                            "id": gw.id,
+                            "role": gw.role or "",
+                            "type": gw.type,
+                            "process": owner_id,
+                            "properties": gw.properties if gw.properties is not None else "{}",
+                            "description": gw.description or ""
+                        })
+            return out
+
+        def collect_gateways(owner_id: str):
+            seen = set()
+            out = []
+            for gw in self.gateways or []:
+                if getattr(gw, "process", None) == owner_id and not is_event(gw.type):
+                    if gw.id and gw.id not in seen:
+                        seen.add(gw.id)
+                        out.append({
+                            "id": gw.id,
+                            "name": gw.name or "",
+                            "role": gw.role or "",
+                            "type": gw.type,
+                            "srcTrg": getattr(gw, "srcTrg", None),
+                            "process": owner_id,
+                            "condition": gw.condition or {},
+                            "properties": gw.properties if gw.properties is not None else "{}",
+                            "description": gw.description or ""
+                        })
+            return out
+
+        def seq_to_dict(s):
+            return {
+                "id": s.id,
+                "source": s.source,
+                "target": s.target,
+                "condition": s.condition if s.condition is not None else "",
+                "properties": s.properties if s.properties is not None else "{}"
+            }
+
+        def act_to_dict(owner_id: str, a):
+            return {
+                "id": a.id,
+                "name": a.name,
+                "role": a.role,
+                "tool": a.tool,
+                "type": a.type,
+                "process": owner_id,
+                "duration": a.duration,
+                "agentMode": a.agentMode,
+                "inputData": a.inputData or [],
+                "outputData": a.outputData or [],
+                "properties": a.properties or "{}",
+                "description": a.description,
+                "instruction": a.instruction,
+                "orchestration": a.orchestration,
+                "attachedEvents": a.attachedEvents
+            }
+
+        def sanitize_list(objs):
+            res = []
+            for x in objs or []:
+                if hasattr(x, "dict"):
+                    res.append(x.dict())
+                else:
+                    res.append(deepcopy(x))
+            return res
+
+        def build_children(owner_sp) -> dict:
+            model = owner_sp.children if hasattr(owner_sp, "children") else None
+            if model is None:
+                return {
+                    "data": [],
+                    "roles": [],
+                    "events": collect_events(owner_sp.id),
+                    "gateways": collect_gateways(owner_sp.id),
+                    "sequences": [],
+                    "activities": [],
+                    "subProcesses": [],
+                    "processDefinitionId": owner_sp.id,
+                    "processDefinitionName": owner_sp.name or owner_sp.id,
+                    "description": ""
+                }
+
+            data = sanitize_list(getattr(model, "data", []))
+            roles = sanitize_list(getattr(model, "roles", []))
+            events = collect_events(owner_sp.id)
+            gateways = collect_gateways(owner_sp.id)
+            sequences = [seq_to_dict(s) for s in (getattr(model, "sequences", []) or [])]
+            activities = [act_to_dict(owner_sp.id, a) for a in (getattr(model, "activities", []) or [])]
+            sub_procs = []
+            for s in getattr(model, "subProcesses", []) or []:
+                child_dict = build_children(s)
+                sub_procs.append({
+                    "id": s.id,
+                    "name": s.name,
+                    "role": s.role,
+                    "type": s.type,
+                    "process": owner_sp.id,
+                    "attachedEvents": s.attachedEvents,
+                    "properties": s.properties,
+                    "duration": s.duration,
+                    "srcTrg": s.srcTrg,
+                    "children": child_dict
+                })
+            return {
+                "data": data,
+                "roles": roles,
+                "events": events,
+                "gateways": gateways,
+                "sequences": sequences,
+                "activities": activities,
+                "subProcesses": sub_procs,
+                "processDefinitionId": getattr(model, "processDefinitionId", None) or owner_sp.id,
+                "processDefinitionName": getattr(model, "processDefinitionName", None) or (owner_sp.name or owner_sp.id),
+                "description": getattr(model, "description", None) or ""
+            }
+
+        child = build_children(sp)
+        out = {
+            "data": child.get("data", []),
+            "roles": child.get("roles", []),
+            "events": child.get("events", []),
+            "version": None,
+            "gateways": child.get("gateways", []),
+            "sequences": child.get("sequences", []),
+            "activities": child.get("activities", []),
+            "description": child.get("description", ""),
+            "subProcesses": child.get("subProcesses", []),
+            "processDefinitionId": child.get("processDefinitionId"),
+            "processDefinitionName": child.get("processDefinitionName")
+        }
+        return load_process_definition(out)
+
+
+        if synthesize_when_empty:
+            owner = sp.id
+            start_id = f"{owner}__start"
+            end_id = f"{owner}__end"
+            child = {
+                "data": [],
+                "roles": [],
+                "events": [
+                    {"id": start_id, "role": role_name, "type": "startEvent", "process": owner, "properties": "{}", "description": ""},
+                    {"id": end_id, "role": role_name, "type": "endEvent", "process": owner, "properties": "{}", "description": ""},
+                ],
+                "gateways": [],
+                "sequences": [{"id": f"{owner}__seq", "source": start_id, "target": end_id, "condition": "", "properties": "{}"}],
+                "activities": [],
+                "subProcesses": [],
+                "description": "",
+                "processDefinitionId": owner,
+                "processDefinitionName": sp.name or owner,
+            }
+        else:
+            child = {
+                "data": [],
+                "roles": [],
+                "events": [],
+                "version": None,
+                "gateways": [],
+                "sequences": [],
+                "activities": [],
+                "subProcesses": [],
+                "description": "",
+                "processDefinitionId": sp.id,
+                "processDefinitionName": sp.name or sp.id,
+            }
+        return load_process_definition(child)
+
+
+
+
+
 
 def load_process_definition(definition_json: dict) -> ProcessDefinition:
     # Events를 게이트웨이 리스트에 추가

@@ -149,7 +149,8 @@ Goal:
 Inputs:
 Process Definition:
 - activities: {activities}
-- events and gateways: {gateways}
+- gateways: {gateways}
+- events: {events}
 - sequences: {sequences}
 - attached_activities: {attached_activities}
 - subProcesses: {subProcesses}
@@ -160,15 +161,20 @@ Current Step:
 - submitted_output: {output}
 
 Runtime Context:
+- output: {output}
 - previous_outputs: {previous_outputs}
 - today: {today}
 - gateway_condition_data: {gateway_condition_data}
-- sequence_condition_data: {sequence_conditions}
+- sequence_conditions: {sequence_conditions}
+- instance_name_pattern: {instance_name_pattern}
+
+
+--- OPTIONAL USER FEEDBACK ---
+- message_from_user: {user_feedback_message}
 
 Instructions:
 1) 기본 완료 기록
-- 현재 activity_id를 type="activity", result="DONE" or result="PENDING"으로 completedActivities에 추가한다.
-- result="PENDING"인 경우 cannotProceedErrors에 추가한다.
+- 현재 activity_id를 type="activity", result="DONE"으로 completedActivities에 추가한다.
 
 2) 동일 레벨 집합 계산(피드백 제외) — merged_outputs에 채운다
 - 변경된(보수적) 정의:
@@ -196,12 +202,12 @@ Instructions:
 - today 기준으로 도래한 이벤트만 completedActivities에 type="event", result="DONE"으로 추가한다.
   - expression은 "0 0 DD MM *", dueDate는 "YYYY-MM-DD".
   - 이 이벤트 id는 merged_outputs에는 **추가하지 않는다**(merged_outputs는 동일 레벨 액티비티 id 전용).
+  
+4) Instance Name
+- Use instance_name_pattern if provided; otherwise fallback to "processDefinitionId.key" from submitted_output, with total length ≤ 20 characters.
 
-4) Output
+5) Output
 - 반드시 아래 JSON만 출력한다. 추가 설명 금지.
-
-5) InstanceName
-- `instance_name_pattern`을 우선 사용. 비어 있으면 반드시 한글로 `processDefinitionName_key_value` 형식을 따라 20자 이내 생성.
 
 ```json
 {{
@@ -220,9 +226,14 @@ Instructions:
       "type": "activity" | "event",
       "expression": "cron expression if event",
       "dueDate": "YYYY-MM-DD if event",
-      "result": "DONE",
+      "result": "DONE | PENDING", // PENDING when cannotProceedErrors exist
       "description": "완료된 활동에 대한 설명 (Korean)",
-      "cannotProceedErrors": []
+      "cannotProceedErrors": [
+        {{
+          "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST",
+          "reason": "설명 (Korean)"
+        }}
+      ]
     }}
   ],
   "nextActivities": [],
@@ -237,10 +248,10 @@ prompt_next = PromptTemplate.from_template(
 You are a BPMN Next Activity Planner.
 
 Goal:
-- 완료 추출기의 출력(`completedActivities`)을 받아 BPMN 2.0 토큰 규칙을 준수하여 **다음으로 활성화될 수 있는 노드만** `nextActivities`에 산출한다.
-- completedActivities 의 결과 상태 값이 PENDING 으로 존재하는 경우에는 nextActivities 를 산출하지 않는다.
+- 완료 추출기의 출력(`completedActivities`, 'branch_merged_workitems')을 받아
+  BPMN 2.0 토큰 규칙을 준수하여 **다음으로 활성화될 수 있는 노드만** `nextActivities`에 산출한다.
 - **조건/데이터 평가는 오직 아래 입력들 내부에 존재하는 값만** 사용한다.
-  - activities / gateways / events / sequences / attached_activities / subProcesses / roleBindings / next_activities / today
+  - activities / gateways / events / sequences / attached_activities / subProcesses / roleBindings / next_activities / previous_outputs / branch_merged_workitems / today
 
 Inputs:
 Process Definition:
@@ -256,59 +267,107 @@ Runtime Context:
 - roleBindings: {role_bindings}
 - instance_name_pattern: {instance_name_pattern}
 - today: {today}
+- previous_outputs: {previous_outputs}
+- sequence_conditions: {sequence_conditions}
+- instance_name_pattern: {instance_name_pattern}
 
 From Completion Extractor:
+- completedActivities: {completedActivities}
 - branch_merged_workitems: {branch_merged_workitems}
 
+--- OPTIONAL USER FEEDBACK ---
+- message_from_user: {user_feedback_message}
+
 Instructions:
-0) 데이터/그래프 원칙
-- **없는 key를 만들거나 추론하지 않는다.** 값은 반드시 위 입력 구조 내부에 있어야 한다.
-- 도달 가능성은 `sequences` 그래프와 `next_activities`(직접 outgoings 후보)를 사용해 판정한다. 여러 홉을 건너뛰지 않는다.
-- 진행 불가(값 부재/조건 미결정/조인 미충족 추정/이벤트 미발생) 시 **오류 없이** `nextActivities: []`로 대기.
-- nextActivities에는 오직 activity, event, subProcess, callActivity만 포함되어야 하며, gateway id는 절대 포함하면 안 된다.
+0) 안정성 원칙(최우선)
+- 프롬프트 단계에서 게이트웨이를 **자동 확장/평가하지 않는다**. 즉, gateway id는 여기서 풀지 않으며,
+  upstream이 activity/subProcess/event 후보 id를 `next_activities`로 제공해야 한다.
+- nextActivities에는 오직 activity, subProcess, event(및 BPMN 상 callActivity는 subProcess로 간주)만 포함한다.
+  gateway id는 절대 포함하지 않는다.
+
+0.1) Candidate resolution (타입 판정 및 기본 정책)
+- 각 후보 id in `next_activities`에 대해 다음 순서로 존재 여부를 조회하여 타입을 판정:
+  1. activities 에 존재 → type=activity
+  2. subProcesses 에 존재 → type=subProcess  (callActivity도 여기로 간주)
+  3. events 에 존재 → type=event
+  4. 어느 데에도 없으면 무시(또는 cannotProceedErrors에 간단 표기)
+
+- **선택 정책(`subprocess_selection_policy`)**
+  - 기본값: "inclusive"
+    - subProcess가 존재하면 **리스트 상단에 우선 배치**하되,
+      activity/event 후보도 조건을 통과하면 **함께 포함**한다.
+  - "exclusive"
+    - subProcess가 하나 이상 존재하면 **subProcess만** 포함하고,
+      같은 레벨의 activity 후보는 제외한다.
+  - 후보별 오버라이드: next_activities 항목에 `allowCoexist: true`가 있으면,
+    "exclusive"에서도 해당 activity/event는 조건을 만족할 경우 **함께 포함**할 수 있다.
+
+- 출력 정렬/중복:
+  - "inclusive"인 경우 subProcess → activity → event 순으로 정렬.
+  - id 중복은 제거한다(첫 출현만 유지).
 
 1) Interrupt-first (이벤트)
-- 오늘 날짜(`today`)와 `events`/`attached_activities`/`sequences` 상의 정보만으로 **due가 명확한 이벤트**가 있고, 현재 지점에서 **도달 가능**하면:
-  - `interruptByEvent=true`, 해당 이벤트 **하나만** `nextActivities`에 넣고 종료.
-- 판단 불가/미도래면 `interruptByEvent=false`로 두고 진행.
+- 이벤트(특히 interrupt) 처리 로직은 유지하되,
+  **서브프로세스보다 우선하지 않는다.**
+  - "inclusive" 정책에서는 event도 조건을 통과하면 **함께 포함** 가능.
+  - "exclusive"에서는 서브프로세스가 선택되면 이벤트는 제외되지만,
+    후보 항목의 `allowCoexist: true`가 있으면 포함 가능.
 
-2) Non-gateway 대상 처리
-- `next_activities` 후보 중 게이트웨이가 **아닌** 대상(액티비티/서브프로세스/이벤트)에 대해:
-  - 해당 시퀀스의 조건(있다면 `sequences` 또는 `gateways`에 명시된 표현)을 **입력 구조 내부 값으로만** 평가한다.
-  - 참으로 판정 가능한 후보만 `nextActivities`에 포함한다. 거짓/판단불가는 제외(대기).
-- target이 `subProcesses`에 존재하면:
-  - type="subProcess", nextUserEmail="system",
-  - description="서브프로세스를 시작합니다. 내부 액티비티는 서브프로세스 컨텍스트에서 할당됩니다."
+2) Non-gateway 대상 처리 (후보 타입 판정 후)
+- Candidate resolution에서 타입이 activity/subProcess/event로 판정된 후보들에 대해:
+  - 해당 시퀀스의 조건(있다면 `sequences` 또는 `gateways`/`events`에 명시된 표현)을
+    **입력 내부 값으로만** 평가한다. 사용 가능한 데이터 소스: 
+    `previous_outputs`, `branch_merged_workitems`, `roleBindings`, `today`, `next_activities` 메타.
+  - **조건이 명시되어 있지 않다면 자동 포함**으로 간주한다.
+  - 조건이 명시되어 있고 평가가 가능하며 참일 때만 포함한다. 거짓/판단불가는 제외(대기).
 
-3) Gateways (explicit only; from `gateways.type`)
-- 다음 노드가 `gateways`에 존재하면 그 `type`으로만 동작한다:
-  - **exclusiveGateway (XOR)**:
-    - `sequences`/`gateways` 내부의 조건을 입력 구조 값으로 평가해 **참 하나**가 명확하면 그 경로만 진행.
-    - 여러 개가 동시 참이면 모델의 우선순위/디폴트가 명시돼 있을 때만 그 규칙을 적용, 없으면 **대기**.
-    - 전혀 참이 없고 default flow가 명시돼 있으면 default로 진행, 아니면 **대기**.
-  - **inclusiveGateway (OR)**:
-    - 참으로 판정 가능한 모든 아웃고잉을 활성화.
-    - 이후 조인이 필요하면(모델 상 대응 OR-join 존재) **모든 선택 분기의 즉시 선행이 `branch_merged_workitems`에 존재**할 때만 조인 뒤 1-hop 타겟을 next로 산출. 아니면 **대기**.
-  - **parallelGateway (AND)**:
-    - Split: 조건 평가 없이 **모든 아웃고잉**을 next에 포함.
-    - Join: `branch_merged_workitems`와 `sequences`만으로 **모든 즉시 선행 분기가 완료**되었음이 명확할 때만 조인 뒤 1-hop 타겟을 next로 산출. 불명확/미충족이면 **대기**.
-  - **eventBasedGateway**:
-    - 실제 발생한 이벤트가 `events`/`attached_activities`/`sequences`에서 판정 가능할 때만 그 단일 경로 진행. 아니면 **대기**.
+- **subProcess 처리:** target이 `subProcesses`에 존재하면 그 항목을 포함하고,
+  `type="subProcess"`, `nextUserEmail="system"`,
+  `description="서브프로세스를 시작합니다. 내부 액티비티는 서브프로세스 컨텍스트에서 할당됩니다."` 로 설정한다.
+  - "exclusive" 정책에서는 subProcess가 하나 이상 선택된 경우,
+    같은 레벨 activity/event는 제외(단, `allowCoexist: true` 예외 허용).
+
+3) Gateways
+- 게이트웨이 자동평가는 제거되었고, gateway id는 처리 대상이 아니다.
 
 4) Attached Events (simultaneous inclusion)
 - `nextActivities`에 포함된 activity/subProcess가 `attached_activities.activity_id`로 존재하면,
-  - 그 `attached_events` 각각을 type="event"로 **별도 엔트리**로 추가한다(이미 완료/취소 제외).
+  - 해당 `attached_events` 각각을 type="event"로 **별도 엔트리**로 추가한다
+    (이미 완료/취소된 이벤트는 제외).
 
-5) Assignment
-- `roleBindings`의 endpoint가 배열이면 `,`으로 조인하여 nextUserEmail을 결정한다.
-- 외부 고객 역할이면 입력 구조 내에서 email을 찾을 수 있을 때만 사용한다(없으면 해당 항목 제외).
-- 유효 email을 결정할 수 없으면 **오류 없이 제외**하고, 나머지 항목은 계속 검토한다.
+5) Multi-instance 결정 (유연 탐색, 디버그 권장)
+- 목적: subProcess(callActivity 포함)의 `multiInstanceCount`를 신뢰성 있게 산정.
+- 절차:
+  1. 토큰 추출: 각 서브프로세스 후보의 `subprocessName` 또는 `nextActivityName`에서 핵심 토큰을 추출
+     (공백/특수문자 제거, 소문자화).
+  2. 재귀 탐색: `previous_outputs`와 `branch_merged_workitems` 전체를 재귀적으로 스캔.
+     키 매칭 규칙:
+       a) 정확/부분 매칭(키에 token 포함)  
+       b) 접두/접미 패턴(`*_count`, `*Count`, `*_list`, `*_section`, 복수형, camel/snake 변형)  
+       c) 값 내부(dict/list)의 키/텍스트에 token 포함
+  3. 값 타입 처리(우선순위):
+       - explicit count key(`*_count`, `*Count`)의 숫자
+       - 배열/리스트 길이(len)
+       - 숫자 스칼라(int/float)
+       - 그 다음으로 `next_activities[*].multiInstanceCount`
+       - 실패 시 기본 1
+     0 또는 음수는 제외한다.
+  4. 상한선: 지나치게 큰 값(예: >1000)은 정책상 한도(예: 100)로 캡하거나
+     `cannotProceedErrors`에 경고 기록.
+  5. 기록(권장): 근거 키와 이유를 `referenceInfo`에 간단히 남긴다
+     (예: `"contract_slide_section": "list length 2"`).
+  6. 적용: 산정된 정수값을 `"multiInstanceCount"`에 **문자열**로 기입한다.
 
-6) InstanceName
+6) Assignment
+- `roleBindings`의 endpoint가 배열이면 `,`으로 조인하여 `nextUserEmail`을 정한다.
+- 유효 email을 결정할 수 없으면 오류 없이 해당 항목을 제외한다.
+
+7) InstanceName
 - `instance_name_pattern`을 우선 사용. 비어 있으면 반드시 한글로 `processDefinitionName_key_value` 형식을 따라 20자 이내 생성.
 
-7) 출력 형식
-- 반드시 JSON만 출력(설명 금지). 진행 불가 시 `interruptByEvent=false`, `nextActivities: []`.
+8) 출력 형식
+- 반드시 JSON만 출력(설명 금지).
+- 진행 불가 시 `interruptByEvent=false`, `nextActivities: []`, `cannotProceedErrors: []`.
 
 Return ONLY the JSON block below, no extra text, no explanation.
 
@@ -320,7 +379,7 @@ Return ONLY the JSON block below, no extra text, no explanation.
   "interruptByEvent": true | false,
   "fieldMappings": [],
   "roleBindings": {role_bindings},
-  "completedActivities": {completedActivities}, 
+  "completedActivities": {completedActivities},
   "nextActivities": [
     {{
       "nextActivityId": "id",
@@ -329,8 +388,15 @@ Return ONLY the JSON block below, no extra text, no explanation.
       "type": "activity" | "subProcess" | "event",
       "expression": "cron if event",
       "dueDate": "YYYY-MM-DD if event",
+      "multiInstanceCount": "1",
       "result": "IN_PROGRESS",
-      "description": "Korean description"
+      "description": "Korean instruction",
+      "cannotProceedErrors": [
+        {{
+          "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST",
+          "reason": "설명 (Korean)"
+        }}
+      ]
     }}
   ],
   "cancelledActivities": [],
@@ -339,11 +405,13 @@ Return ONLY the JSON block below, no extra text, no explanation.
 """
 )
 
+
+
 # Pydantic model for process execution
+
 class ProceedError(BaseModel):
     type: str
     reason: str
-
 class Activity(BaseModel):
     nextActivityId: Optional[str] = None
     nextActivityName: Optional[str] = None
@@ -578,289 +646,152 @@ def _process_next_activities(process_instance: ProcessInstance, process_result: 
         activity_obj = process_definition.find_activity_by_id(activity.nextActivityId)
         check_external_customer_and_send_email(activity_obj, process_instance, process_definition)
 
-def _process_sub_processes(process_instance: ProcessInstance, process_result: ProcessResult, 
-                         process_result_json: dict, process_definition):
-    """Process sub processes: spawn child instances for any detected subprocess nodes.
-    Resolution order for child processDefinitionId:
-    1) next_sub_process.properties JSON contains one of [calledElement, processDefinitionId, procDefId]
-    2) Fallback to next_sub_process.id
-    If the child process definition JSON cannot be fetched, we still create the child process instance
-    (NEW) with the parent linkage. Additionally, when child definition is missing, first try to build a
-    full child definition from the subprocess's embedded 'children' definition; if absent, synthesize a
-    minimal start->task->end definition to avoid recursion.
-    """
-    for activity in process_result.nextActivities:
-        # Detect subprocess either as the immediate next node, or as the next-through sequence
+def _process_sub_processes(process_instance: ProcessInstance, process_result: ProcessResult, process_result_json: dict, process_definition):
+    _SENTINEL = object()
+
+    def collect_participants(role_bindings):
+        participants = []
+        last = _SENTINEL
+        for rb in role_bindings or []:
+            endpoint = rb.get("endpoint")
+            if isinstance(endpoint, list):
+                participants.extend(endpoint)
+                if endpoint:
+                    last = endpoint[-1]
+            elif endpoint:
+                participants.append(endpoint)
+                last = endpoint
+        return participants, last
+
+    def create_initial_workitem(child_def, child_proc_inst_id, child_proc_def_id, role_bindings, endpoint, process_instance):
+        start_event = next((gw for gw in (child_def.gateways or []) if getattr(gw, 'type', None) == 'startEvent'), None)
+        if start_event:
+            start_date = datetime.now().isoformat()
+            workitem_data = {
+                "id": str(uuid.uuid4()),
+                "user_id": endpoint,
+                "username": None,
+                "proc_inst_id": child_proc_inst_id,
+                "proc_def_id": child_proc_def_id,
+                "activity_id": start_event.id,
+                "activity_name": start_event.name or 'Start',
+                "start_date": start_date,
+                "due_date": None,
+                "status": "SUBMITTED",
+                "assignees": role_bindings,
+                "reference_ids": [],
+                "duration": None,
+                "tool": None,
+                "output": {},
+                "retry": 0,
+                "consumer": None,
+                "description": start_event.description or '',
+                "tenant_id": process_instance.tenant_id,
+                "root_proc_inst_id": process_instance.root_proc_inst_id,
+            }
+            upsert_workitem(workitem_data, process_instance.tenant_id)
+            print(f"[INFO] Created startEvent workitem for child: {child_proc_inst_id} -> {start_event.id}")
+        else:
+            initial_act = child_def.find_initial_activity() if child_def else None
+            if not initial_act:
+                print(f"[WARN] No initial activity found for child process '{child_proc_def_id}'")
+                return
+            start_date = datetime.now().isoformat()
+            due_date = None
+            if initial_act.duration:
+                try:
+                    from datetime import timedelta
+                    due_date = (datetime.now() + timedelta(days=initial_act.duration)).isoformat()
+                except Exception:
+                    due_date = None
+            workitem_data = {
+                "id": str(uuid.uuid4()),
+                "user_id": endpoint,
+                "username": None,
+                "proc_inst_id": child_proc_inst_id,
+                "proc_def_id": child_proc_def_id,
+                "activity_id": initial_act.id,
+                "activity_name": initial_act.name,
+                "start_date": start_date,
+                "due_date": due_date,
+                "status": "SUBMITTED",
+                "assignees": role_bindings,
+                "reference_ids": [],
+                "duration": initial_act.duration,
+                "tool": initial_act.tool,
+                "output": {},
+                "retry": 0,
+                "consumer": None,
+                "description": initial_act.description,
+                "tenant_id": process_instance.tenant_id,
+                "root_proc_inst_id": process_instance.root_proc_inst_id,
+            }
+            upsert_workitem(workitem_data, process_instance.tenant_id)
+            print(f"[INFO] Created initial activity workitem for child: {child_proc_inst_id} -> {initial_act.id}")
+
+    def resolve_multi_instance_count(activity, process_result_json):
+        raw = getattr(activity, 'multiInstanceCount', None)
+        if raw is None:
+            try:
+                na = process_result_json.get('nextActivities') or []
+                target = next((x for x in na if x.get('nextActivityId') == activity.nextActivityId), None)
+                if target:
+                    raw = target.get('multiInstanceCount')
+            except Exception:
+                raw = None
+        try:
+            cnt = int(str(raw)) if raw is not None else 1
+        except Exception:
+            cnt = 1
+        return 1 if cnt < 1 else cnt
+
+    for activity in process_result.nextActivities or []:
         next_sub_process = process_definition.find_next_sub_process(activity.nextActivityId)
         if not next_sub_process:
             next_sub_process = process_definition.find_sub_process_by_id(activity.nextActivityId)
         if not next_sub_process:
             continue
 
-        # Resolve child processDefinitionId
-        child_proc_def_id = None
-        if getattr(next_sub_process, "properties", None):
-            try:
-                props = next_sub_process.properties
-                if isinstance(props, str):
-                    props_json = json.loads(props)
-                elif isinstance(props, dict):
-                    props_json = props
-                else:
-                    props_json = {}
-                for key in ["calledElement", "processDefinitionId", "procDefId"]:
-                    if props_json.get(key):
-                        child_proc_def_id = props_json.get(key)
-                        break
-                # Fallback: embedded definition provided directly
-                embedded_child_def = props_json.get("embeddedDefinition") or props_json.get("definition") or props_json.get("processDefinition")
-            except Exception:
-                child_proc_def_id = None
-                embedded_child_def = None
-        else:
-            embedded_child_def = None
-        if not child_proc_def_id:
-            child_proc_def_id = next_sub_process.id
-
-        print(f"[DEBUG] Next sub process detected: node={next_sub_process.id}, child_proc_def_id={child_proc_def_id}")
-
-        # Load child process definition if available
-        child_def = None
-        if embedded_child_def:
-            try:
-                child_def = load_process_definition(embedded_child_def if isinstance(embedded_child_def, dict) else json.loads(embedded_child_def))
-            except Exception as e:
-                print(f"[WARN] Failed to load embedded child definition for '{child_proc_def_id}': {e}")
-        # Try to construct from subprocess.children in the parent raw definition JSON
-        if child_def is None:
-            try:
-                parent_def_json = fetch_process_definition(process_instance.get_def_id(), process_instance.tenant_id)
-                if parent_def_json and isinstance(parent_def_json, dict):
-                    sp_entry = next((sp for sp in parent_def_json.get('subProcesses', []) if sp.get('id') == next_sub_process.id), None)
-                    if sp_entry and isinstance(sp_entry.get('children'), dict):
-                        children = sp_entry['children']
-                        child_def_dict = {
-                            'processDefinitionName': next_sub_process.name or f"Subprocess {next_sub_process.id}",
-                            'processDefinitionId': f"{process_instance.process_definition.processDefinitionId}.{next_sub_process.id}",
-                            'description': parent_def_json.get('description'),
-                            'data': children.get('data', []),
-                            'roles': parent_def_json.get('roles', []),
-                            'activities': children.get('activities', []),
-                            'subProcesses': children.get('subProcesses', []),
-                            'sequences': children.get('sequences', []),
-                            'gateways': children.get('events', []),
-                        }
-                        try:
-                            child_def = load_process_definition(child_def_dict)
-                            child_proc_def_id = child_def.processDefinitionId
-                        except Exception as e:
-                            print(f"[WARN] Failed to load child definition from children for '{child_proc_def_id}': {e}")
-            except Exception as e:
-                print(f"[WARN] Failed to construct child from children: {e}")
-        if child_def is None:
-            try:
-                child_def_json = fetch_process_definition(child_proc_def_id, process_instance.tenant_id)
-                child_def = load_process_definition(child_def_json)
-            except Exception as e:
-                print(f"[WARN] Failed to fetch child process definition '{child_proc_def_id}': {e}")
-
-        # If still missing, build minimal synthetic child definition from subprocess
-        if child_def is None:
-            print(f"[INFO] Building synthetic child definition from subprocess node={next_sub_process.id}")
-            # Try to use the first inner activity directly connected from this subprocess
-            # Heuristic: activities whose srcTrg == subprocess.id
-            try:
-                inner_activities = [a for a in (process_instance.process_definition.activities or []) if getattr(a, 'srcTrg', None) == next_sub_process.id]
-            except Exception:
-                inner_activities = []
-
-            parent_roles = process_instance.process_definition.roles or []
-            sub_role_name = getattr(next_sub_process, 'role', None)
-            role_endpoint = None
-            if sub_role_name:
-                for r in parent_roles:
-                    if getattr(r, 'name', None) == sub_role_name:
-                        role_endpoint = getattr(r, 'endpoint', None)
-                        break
-            synthetic_role = [{
-                'name': sub_role_name or 'subprocess_role',
-                'endpoint': role_endpoint,
-                'resolutionRule': None
-            }]
-
-            if inner_activities:
-                first_inner = inner_activities[0]
-                first_act_dict = {
-                    'name': getattr(first_inner, 'name', first_inner.id),
-                    'id': first_inner.id,
-                    'type': getattr(first_inner, 'type', 'userTask'),
-                    'description': getattr(first_inner, 'description', '') or (next_sub_process.name or 'Subprocess task'),
-                    'attachedEvents': getattr(first_inner, 'attachedEvents', []) or [],
-                    'role': getattr(first_inner, 'role', sub_role_name or 'subprocess_role'),
-                    'inputData': getattr(first_inner, 'inputData', []) or [],
-                    'outputData': getattr(first_inner, 'outputData', []) or [],
-                    'checkpoints': getattr(first_inner, 'checkpoints', []) or [],
-                    'pythonCode': getattr(first_inner, 'pythonCode', None),
-                    'tool': getattr(first_inner, 'tool', None),
-                    'properties': getattr(first_inner, 'properties', None),
-                    'duration': getattr(first_inner, 'duration', None),
-                    'srcTrg': None,
-                    'agentMode': getattr(first_inner, 'agentMode', None),
-                    'orchestration': getattr(first_inner, 'orchestration', None)
-                }
-                synthetic_activity_id = first_act_dict['id']
-            else:
-                # Fallback: single userTask if we cannot find an inner activity
-                synthetic_activity_id = f"{next_sub_process.id}_activity"
-                first_act_dict = {
-                    'name': next_sub_process.name or synthetic_activity_id,
-                    'id': synthetic_activity_id,
-                    'type': 'userTask',
-                    'description': next_sub_process.name or 'Subprocess task',
-                    'attachedEvents': [],
-                    'role': sub_role_name or 'subprocess_role',
-                    'inputData': [],
-                    'outputData': [],
-                    'checkpoints': [],
-                    'pythonCode': None,
-                    'tool': None,
-                    'properties': None,
-                    'duration': getattr(next_sub_process, 'duration', None),
-                    'srcTrg': None,
-                    'agentMode': None,
-                    'orchestration': None
-                }
-
-            synthetic_def_dict = {
-                'processDefinitionName': next_sub_process.name or f"Subprocess {next_sub_process.id}",
-                'processDefinitionId': f"{process_instance.process_definition.processDefinitionId}.{next_sub_process.id}",
-                'description': f"Synthetic definition generated from subprocess {next_sub_process.id}",
-                'data': [],
-                'roles': synthetic_role,
-                'activities': [first_act_dict],
-                'subProcesses': [],
-                'sequences': [
-                    {'id': f'seq_start_{synthetic_activity_id}', 'source': 'start_event', 'target': synthetic_activity_id, 'condition': None, 'properties': None},
-                    {'id': f'seq_{synthetic_activity_id}_end', 'source': synthetic_activity_id, 'target': 'end_event', 'condition': None, 'properties': None},
-                ],
-                'gateways': [
-                    {'id': 'start_event', 'name': 'Start', 'role': None, 'type': 'startEvent', 'process': None, 'condition': {}, 'conditionData': None, 'properties': None, 'description': None, 'srcTrg': None, 'duration': None, 'agentMode': None, 'orchestration': None},
-                    {'id': 'end_event', 'name': 'End', 'role': None, 'type': 'endEvent', 'process': None, 'condition': {}, 'conditionData': None, 'properties': None, 'description': None, 'srcTrg': None, 'duration': None, 'agentMode': None, 'orchestration': None},
-                ]
-            }
-            try:
-                child_def = load_process_definition(synthetic_def_dict)
-                child_proc_def_id = child_def.processDefinitionId
-            except Exception as e:
-                print(f"[ERROR] Failed to build synthetic child definition: {e}")
-                continue
-
-        # Create child process instance id
-        parent_def_id = process_instance.process_definition.processDefinitionId
-        child_proc_def_id = parent_def_id
-        child_proc_inst_id = f"{child_proc_def_id.lower()}.{str(uuid.uuid4())}"
-
-        # Collect participants from parent's role_bindings
-        participants = []
-        role_bindings = process_instance.role_bindings or []
-        for rb in role_bindings:
-            endpoint = rb.get("endpoint")
-            if isinstance(endpoint, list):
-                participants.extend(endpoint)
-            elif endpoint:
-                participants.append(endpoint)
-
-        # Insert child process instance with parent link
         try:
-            process_instance_data = {
-                "proc_inst_id": child_proc_inst_id,
-                "proc_inst_name": child_def.processDefinitionName if child_def else child_proc_def_id,
-                "proc_def_id": child_proc_def_id,
-                "participants": participants,
-                "status": "NEW",
-                "role_bindings": role_bindings,
-                "start_date": datetime.now().isoformat(),
-                "tenant_id": process_instance.tenant_id,
-                "parent_proc_inst_id": process_instance.proc_inst_id,
-                "root_proc_inst_id": process_instance.root_proc_inst_id,
-            }
-            insert_process_instance(process_instance_data, process_instance.tenant_id)
-            print(f"[INFO] Spawned child instance: {child_proc_inst_id} (parent={process_instance.proc_inst_id})")
+            child_def = process_definition.build_subprocess_definition(next_sub_process.id)
         except Exception as e:
-            print(f"[ERROR] Failed to insert child process instance '{child_proc_inst_id}': {e}")
+            print(f"[ERROR] Failed to build subprocess definition for '{next_sub_process.id}': {e}")
             continue
 
-        # Create initial workitem for child using resolved child_def
-        try:
-            # Create a startEvent workitem as the first item
-            start_event = next((gw for gw in (child_def.gateways or []) if getattr(gw, 'type', None) == 'startEvent'), None)
-            if start_event:
-                start_date = datetime.now().isoformat()
-                workitem_data = {
-                    "id": str(uuid.uuid4()),
-                    "user_id": endpoint,
-                    "username": None,
+        child_proc_def_id = child_def.processDefinitionId or f"{process_instance.process_definition.processDefinitionId}.{next_sub_process.id}"
+
+        role_bindings = process_instance.role_bindings or []
+        participants, last_endpoint = collect_participants(role_bindings)
+        endpoint = last_endpoint if last_endpoint is not _SENTINEL else None
+
+        mi_count = resolve_multi_instance_count(activity, process_result_json)
+
+        for _ in range(mi_count):
+            child_proc_inst_id = f"{str(child_proc_def_id).lower()}.{str(uuid.uuid4())}"
+            try:
+                process_instance_data = {
                     "proc_inst_id": child_proc_inst_id,
+                    "proc_inst_name": child_def.processDefinitionName if child_def else child_proc_def_id,
                     "proc_def_id": child_proc_def_id,
-                    "activity_id": start_event.id,
-                    "activity_name": start_event.name or 'Start',
-                    "start_date": start_date,
-                    "due_date": None,
-                    "status": "SUBMITTED",
-                    "assignees": role_bindings,
-                    "reference_ids": [],
-                    "duration": None,
-                    "tool": None,
-                    "output": {},
-                    "retry": 0,
-                    "consumer": None,
-                    "description": start_event.description or '',
+                    "participants": participants,
+                    "status": "NEW",
+                    "role_bindings": role_bindings,
+                    "start_date": datetime.now().isoformat(),
                     "tenant_id": process_instance.tenant_id,
+                    "parent_proc_inst_id": process_instance.proc_inst_id,
                     "root_proc_inst_id": process_instance.root_proc_inst_id,
                 }
-                upsert_workitem(workitem_data, process_instance.tenant_id)
-                print(f"[INFO] Created startEvent workitem for child: {child_proc_inst_id} -> {start_event.id}")
-            else:
-                # Fallback: use first activity if no startEvent exists
-                initial_act = child_def.find_initial_activity() if child_def else None
-                if not initial_act:
-                    print(f"[WARN] No initial activity found for child process '{child_proc_def_id}'")
-                else:
-                    start_date = datetime.now().isoformat()
-                    due_date = None
-                    if initial_act.duration:
-                        try:
-                            from datetime import timedelta
-                            due_date = (datetime.now() + timedelta(days=initial_act.duration)).isoformat()
-                        except Exception:
-                            due_date = None
+                insert_process_instance(process_instance_data, process_instance.tenant_id)
+                print(f"[INFO] Spawned child instance: {child_proc_inst_id} (parent={process_instance.proc_inst_id})")
+            except Exception as e:
+                print(f"[ERROR] Failed to insert child process instance '{child_proc_inst_id}': {e}")
+                continue
 
-                    workitem_data = {
-                        "id": str(uuid.uuid4()),
-                        "user_id": endpoint,
-                        "username": None,
-                        "proc_inst_id": child_proc_inst_id,
-                        "proc_def_id": child_proc_def_id,
-                        "activity_id": initial_act.id,
-                        "activity_name": initial_act.name,
-                        "start_date": start_date,
-                        "due_date": due_date,
-                        "status": "SUBMITTED",
-                        "assignees": role_bindings,
-                        "reference_ids": [],
-                        "duration": initial_act.duration,
-                        "tool": initial_act.tool,
-                        "output": {},
-                        "retry": 0,
-                        "consumer": None,
-                        "description": initial_act.description,
-                        "tenant_id": process_instance.tenant_id,
-                        "root_proc_inst_id": process_instance.root_proc_inst_id,
-                    }
-                    upsert_workitem(workitem_data, process_instance.tenant_id)
-                    print(f"[INFO] Created initial activity workitem for child: {child_proc_inst_id} -> {initial_act.id}")
-        except Exception as e:
-            print(f"[ERROR] Failed to create initial workitem for child '{child_proc_inst_id}': {e}")
+            try:
+                create_initial_workitem(child_def, child_proc_inst_id, child_proc_def_id, role_bindings, endpoint, process_instance)
+            except Exception as e:
+                print(f"[ERROR] Failed to create initial workitem for child '{child_proc_inst_id}': {e}")
+                continue
 
 def _execute_script_tasks(process_instance: ProcessInstance, process_result: ProcessResult, 
                          process_result_json: dict, process_definition):
@@ -1042,18 +973,18 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
             if completed_workitem.temp_feedback and completed_workitem.temp_feedback not in [None, ""]:
                 appliedFeedback = True
 
-    description = {
-        "referenceInfo": process_result_json.get("referenceInfo", []),
-        "completedActivities": process_result_json.get("completedActivities", []),
-        "nextActivities": process_result_json.get("nextActivities", []),
-        "appliedFeedback": appliedFeedback
-    }
-    message_json = json.dumps({
-        "role": "system",
-        "contentType": "json",
-        "jsonContent": description
-    })
-    upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
+        description = {
+            "referenceInfo": process_result_json.get("referenceInfo", []),
+            "completedActivities": process_result_json.get("completedActivities", []),
+            "nextActivities": process_result_json.get("nextActivities", []),
+            "appliedFeedback": appliedFeedback
+        }
+        message_json = json.dumps({
+            "role": "system",
+            "contentType": "json",
+            "jsonContent": description
+        })
+        upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
     
     # Update process_result_json
     process_result_json["instanceId"] = process_instance.proc_inst_id
@@ -1318,8 +1249,25 @@ def get_gateway_condition_data(workitem: dict, process_definition: Any, gateway_
         print(f"[ERROR] Failed to get gateway condition data for {workitem.get('id')}: {str(e)}")
         return None
     
-async def run_prompt_and_parse(prompt_tmpl, chain_input, workitem, tenant_id, parser, log_prefix="[LLM]"):
-    collected_text = ""
+def get_sequence_condition_data(process_definition: Any, next_activities: List[str]):
+    """
+    워크아이템 실행에 필요한 시퀀스 조건 데이터 추출
+    """
+    try:
+        sequence_condition_data = {}
+        for sequence in process_definition.sequences:
+            if sequence.target in next_activities:
+                properties = sequence.properties
+                if properties:
+                    properties_json = json.loads(properties)
+                    sequence_condition_data[sequence.id] = properties_json
+        return sequence_condition_data
+    except Exception as e:
+        print(f"[ERROR] Failed to get sequence condition data: {str(e)}")
+        return None
+    
+async def run_prompt_and_parse(prompt_tmpl, chain_input, workitem, tenant_id, parser, merged_log=None, log_prefix="[LLM]"):
+    collected_text = merged_log + ""
     num_of_chunk = 0
 
     async for chunk in model.astream(prompt_tmpl.format(**chain_input)):
@@ -1371,23 +1319,6 @@ async def run_prompt_and_parse(prompt_tmpl, chain_input, workitem, tenant_id, pa
 
     return parsed_output, collected_text
 
-
-def get_sequence_condition_data(process_definition: Any, next_activities: List[str]):
-    """
-    워크아이템 실행에 필요한 시퀀스 조건 데이터 추출
-    """
-    try:
-        sequence_condition_data = {}
-        for sequence in process_definition.sequences:
-            if sequence.target in next_activities:
-                properties = sequence.properties
-                if properties:
-                    properties_json = json.loads(properties)
-                    sequence_condition_data[sequence.id] = properties_json
-        return sequence_condition_data
-    except Exception as e:
-        print(f"[ERROR] Failed to get sequence condition data: {str(e)}")
-        return None
 
 async def handle_workitem(workitem):
     is_first, is_last = get_workitem_position(workitem)
@@ -1452,7 +1383,7 @@ async def handle_workitem(workitem):
         next_activities = []
         gateway_condition_data = None
         sequence_condition_data = None
-
+        
         if process_definition:
             next_activities = [activity.id for activity in process_definition.find_next_activities(activity_id, True)]
             for act_id in next_activities:
@@ -1462,9 +1393,9 @@ async def handle_workitem(workitem):
                     except Exception as e:
                         print(f"[ERROR] Failed to get gateway condition data for {workitem.get('id')}: {str(e)}")
                         gateway_condition_data = None
-
+                        
             sequence_condition_data = get_sequence_condition_data(process_definition, next_activities)
-
+                        
         workitem_input_data = None
         try:
             workitem_input_data = get_input_data(workitem, process_definition)
@@ -1479,6 +1410,30 @@ async def handle_workitem(workitem):
                     "activity_id": activity.id,
                     "attached_events": activity.attachedEvents
                 })
+                
+        input_activities = []
+        for activity in process_definition.activities:
+            input_activities.append({
+                "id": activity.id,
+                "type": activity.type,
+                "role": activity.role,
+                "description": activity.description,
+                "inputData": activity.inputData,
+                "checkpoints": activity.checkpoints
+            })
+        input_gateways = []
+        for gateway in process_definition.gateways:
+            input_gateways.append({
+                "id": gateway.id,
+                "type": gateway.type
+            })
+        input_sequences = []
+        for sequence in process_definition.sequences:
+            input_sequences.append({
+                "id": sequence.id,
+                "source": sequence.source,
+                "target": sequence.target
+            })
 
         if not workitem['user_id'] or ',' not in workitem['user_id']:
             user_email_for_prompt = workitem['user_id']
@@ -1494,11 +1449,12 @@ async def handle_workitem(workitem):
             "role_bindings": workitem.get('assignees', []),
 
             "instance_id": process_instance_id,
+            "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "null",
             "process_definition_id": process_definition_id,
             "activity_id": activity_id,
             "user_email": user_email_for_prompt,
             "output": output,
-
+            "user_feedback_message": workitem.get('temp_feedback', ''),
             "today": today,
             "previous_outputs": workitem_input_data,
             "gateway_condition_data": gateway_condition_data,
@@ -1507,7 +1463,7 @@ async def handle_workitem(workitem):
         }
 
         completed_json, completed_log = await run_prompt_and_parse(
-            prompt_completed, chain_input_completed, workitem, tenant_id, parser, log_prefix="[COMPLETED]"
+            prompt_completed, chain_input_completed, workitem, tenant_id, parser, "",log_prefix="[COMPLETED]"
         )
 
         completed_activities_from_step = (
@@ -1530,29 +1486,33 @@ async def handle_workitem(workitem):
             "sequences": process_definition.sequences,
             "instance_id": process_instance_id,
             "process_definition_id": process_definition_id,
+            "output": output,
 
             "next_activities": next_activities,
             "role_bindings": workitem.get('assignees', []),
             "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
             "today": today,
+            "previous_outputs": workitem_input_data,
+            "user_feedback_message": workitem.get('temp_feedback', ''),
             
             "branch_merged_workitems": merged_workitems_from_step,
 
             "completedActivities": completed_activities_from_step,
-            "attached_activities": attached_activities
+            "attached_activities": attached_activities,
+            "sequence_conditions": sequence_condition_data
         }
 
         next_json, next_log = await run_prompt_and_parse(
-            prompt_next, chain_input_next, workitem, tenant_id, parser, log_prefix="[NEXT]"
+            prompt_next, chain_input_next, workitem, tenant_id, parser, completed_log, log_prefix="[NEXT]"
         )
 
-        result = execute_next_activity(next_json, tenant_id)
-        result_json = json.loads(result)
+        execute_next_activity(next_json, tenant_id)
 
     except Exception as e:
         print(f"[ERROR] Error in handle_workitem for workitem {workitem['id']}: {str(e)}")
         raise e
 
+            
 async def handle_agent_workitem(workitem):
     """
     에이전트 업무를 처리하는 함수
