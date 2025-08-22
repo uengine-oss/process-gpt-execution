@@ -1,7 +1,14 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Union, Optional
 from pydantic import BaseModel, Field, root_validator
+from block_finder import BlockFinder
+
+if TYPE_CHECKING:
+    from block_finder import BlockResult  # 타입체크 전용, 런타임 import 안 됨
+
 
 class DataSource(BaseModel):
     type: str
@@ -190,6 +197,13 @@ class ProcessDefinition(BaseModel):
 
         return prev_activities
     
+    def find_block(self, activity_id: str) -> 'BlockResult':
+        container_id = self.get_container_id(activity_id)
+        if container_id:
+            block_finder = BlockFinder(self)
+            return block_finder.find_block(container_id)
+        return None
+    
     
     def is_subprocess(self, node) -> bool:
         return getattr(node, "type", None) in ("subProcess", "subprocess", "SubProcess")
@@ -274,7 +288,7 @@ class ProcessDefinition(BaseModel):
                         if seq2.source == target_gateway.id:
                             self.find_next_through_gateway(target_gateway.id, next_items, include_events, visited)
                 continue
-
+            
     def find_next_item(self, current_item_id: str) -> Union[ProcessActivity, ProcessGateway]:
         for sequence in self.sequences:
             if sequence.source == current_item_id:
@@ -339,6 +353,20 @@ class ProcessDefinition(BaseModel):
                 if source_sub_process:
                     return source_sub_process
         return None
+    
+    def find_target_containers(self, activity_id: str) -> List[str]:
+        target_containers = []
+        for sequence in self.sequences:
+            if sequence.source == activity_id:
+                target_containers.append(sequence.target)
+        return target_containers
+    
+    def find_source_containers(self, activity_id: str) -> List[str]:
+        source_containers = []
+        for sequence in self.sequences:
+            if sequence.target == activity_id:
+                source_containers.append(sequence.source)
+        return source_containers
     
     def find_end_activity(self) -> Optional[ProcessActivity]:
         """
