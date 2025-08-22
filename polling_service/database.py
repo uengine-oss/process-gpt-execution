@@ -546,7 +546,7 @@ def fetch_workitem_with_submitted_status(limit=10) -> Optional[List[dict]]:
         if env == 'dev':
             response = supabase.table('todolist').select('*').eq('status', 'SUBMITTED').is_('consumer', 'null').eq('tenant_id', 'uengine').limit(limit).execute()
         else:
-            response = supabase.table('todolist').select('*').eq('status', 'SUBMITTED').is_('consumer', 'null').limit(limit).execute()
+            response = supabase.table('todolist').select('*').eq('status', 'SUBMITTED').is_('consumer', 'null').neq('tenant_id', 'uengine').limit(limit).execute()
         
         if not response.data:
             return None
