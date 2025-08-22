@@ -26,9 +26,6 @@ supabase_client_var = ContextVar('supabase', default=None)
 async_supabase_client_var = ContextVar('async_supabase', default=None)
 subdomain_var = ContextVar('subdomain', default='localhost')
 
-jwt_secret_var = ContextVar('jwt_secret', default='')
-algorithm_var = ContextVar('algorithm', default='HS256')
-
 # Firebase 전역 변수 제거 - FCM 서비스로 분리됨
 # firebase_app = None
 
@@ -45,9 +42,6 @@ def setting_database():
         if os.getenv("ENV") != "production":
             load_dotenv(override=True)
 
-        jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
-        jwt_secret_var.set(jwt_secret)
-        
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_KEY")
         supabase: Client = create_client(supabase_url, supabase_key)

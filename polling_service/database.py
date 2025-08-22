@@ -23,9 +23,8 @@ subdomain_var = ContextVar('subdomain', default='localhost')
 
 def setting_database():
     try:
-        if os.getenv("ENV") != "production":
-            load_dotenv(override=True)
-        
+        load_dotenv(override=True)
+
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_KEY")
         supabase: Client = create_client(supabase_url, supabase_key)
@@ -543,7 +542,11 @@ def fetch_workitem_with_submitted_status(limit=10) -> Optional[List[dict]]:
         
         # Supabase Client API를 사용하여 워크아이템 조회 및 업데이트
         # 먼저 SUBMITTED 상태이고 consumer가 NULL인 워크아이템들을 조회
-        response = supabase.table('todolist').select('*').eq('status', 'SUBMITTED').is_('consumer', 'null').limit(limit).execute()
+        env = os.getenv("ENV")
+        if env == 'dev':
+            response = supabase.table('todolist').select('*').eq('status', 'SUBMITTED').is_('consumer', 'null').eq('tenant_id', 'uengine').limit(limit).execute()
+        else:
+            response = supabase.table('todolist').select('*').eq('status', 'SUBMITTED').is_('consumer', 'null').neq('tenant_id', 'uengine').limit(limit).execute()
         
         if not response.data:
             return None

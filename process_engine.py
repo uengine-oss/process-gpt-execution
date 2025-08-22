@@ -145,6 +145,11 @@ async def submit_workitem(input: dict):
         workitem_data['due_date'] = workitem_data['due_date'].isoformat()
         workitem_data['retry'] = 0
         workitem_data['consumer'] = None
+        
+        revert_from = input.get('revert_from')
+        if revert_from:
+            workitem_data['revert_from'] = revert_from
+            workitem_data['id'] = str(uuid.uuid4())
     else:
         workitem_data = {
             "id": str(uuid.uuid4()),
@@ -167,7 +172,7 @@ async def submit_workitem(input: dict):
             "description": activity.description,
             "project_id": project_id
         }
-        
+    
     upsert_workitem(workitem_data)
     return workitem_data
 
@@ -182,13 +187,13 @@ Now, we will create a system that recommends role performers at each stage when 
 
 - My Email: {myEmail}
 
-If the agent is a role performer, enter the agent ID in userId.
+If the agent is a role performer, enter the agent ID in userId (type: uuid).
 
 result should be in this JSON format:
 {{
     "roleBindings": [{{
         "roleName": "role name",
-        "userId": "user email"
+        "userId": "user uuid"
     }}]
 }}
     """
