@@ -187,13 +187,13 @@ Now, we will create a system that recommends role performers at each stage when 
 
 - My Email: {myEmail}
 
-If the agent is a role performer, enter the agent ID in userId.
+If the agent is a role performer, enter the agent ID in userId (type: uuid).
 
 result should be in this JSON format:
 {{
     "roleBindings": [{{
         "roleName": "role name",
-        "userId": "user email"
+        "userId": "user uuid"
     }}]
 }}
     """
