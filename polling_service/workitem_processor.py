@@ -1350,12 +1350,13 @@ async def handle_workitem(workitem):
         if merged_outputs:
             for merged_output in merged_outputs:
                 merged_workitems = fetch_workitem_by_proc_inst_and_activity(process_instance_id, merged_output, tenant_id)
-                merged_item = {
-                    "activity_id": merged_workitems.activity_id,
-                    "activity_name": merged_workitems.activity_name,
-                    "status": merged_workitems.status,
-                }
-                merged_workitems_from_step.append(merged_item)
+                if merged_workitems:
+                    merged_item = {
+                        "activity_id": merged_workitems.activity_id,
+                        "activity_name": merged_workitems.activity_name,
+                        "status": merged_workitems.status,
+                    }
+                    merged_workitems_from_step.append(merged_item)
 
         completed_activities_from_step = (
             completed_json.get("completedActivities")
