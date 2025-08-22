@@ -148,7 +148,8 @@ def insert_usage(usage_data: dict):
     
 
         # Procedure 호출
-        return supabase.rpc("insert_usage_from_payload", usage_data).execute()
+        # return supabase.rpc("insert_usage_from_payload", usage_data).execute()
+        return supabase.rpc("insert_usage_from_payload", {"p_payload": usage_data}).execute()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"사용량 삽입 중 오류가 발생했습니다: {e}")
     
