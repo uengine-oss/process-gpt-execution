@@ -844,7 +844,8 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
                 "jsonContent": output if output else {},
                 "htmlContent": form_html if form_html else "",
                 "contentType": "html" if form_html else "text",
-                "activityId": completed_workitem.activity_id
+                "activityId": completed_workitem.activity_id,
+                "workitemId": completed_workitem.id
             }
             upsert_chat_message(completed_workitem.proc_inst_id, message_data, tenant_id)
             if completed_workitem.temp_feedback and completed_workitem.temp_feedback not in [None, ""]:
