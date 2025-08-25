@@ -144,7 +144,6 @@ You are a BPMN Next Activity Planner.
 
 Goal:
 - 완료 추출기의 출력(`completedActivities`)을 받아 BPMN 2.0 토큰 규칙을 준수하여 **다음으로 활성화될 수 있는 노드만** `nextActivities`에 산출한다.
-- completedActivities 의 결과 상태 값이 PENDING 으로 존재하는 경우에는 nextActivities 를 산출하지 않는다.
 - 'nextActivities'는 비어있을 수도 있음
 
 Inputs:
@@ -172,11 +171,15 @@ Runtime Context:
 - message_from_user: {user_feedback_message}
 
 Instructions:
+0.1) Cohort(현재 병렬 블록) 고정
+- cohort_ids := set(branch_merged_workitems[*].activity_id)
+- 규칙의 스코프는 기본적으로 cohort_ids에 한정한다.
+- branch_merged_workitems가 비어 있으면 **cohort 기반 검사는 생략**하고, 나머지 규칙으로만 판정한다. (전역 대기 금지)
 
 0) 데이터/그래프 원칙
 - **없는 key를 만들거나 추론하지 않는다.** 값은 반드시 위 입력 구조 내부에 있어야 한다.
 - 도달 가능성은 `sequences` 그래프와 `next_activities`(직접 outgoings 후보)를 사용해 판정한다. 여러 홉을 건너뛰지 않는다.
-- 진행 불가(값 부재/조건 미결정/조인 미충족 추정/이벤트 미발생) 시 **오류 없이** `nextActivities: []`로 대기.
+- 진행 불가(값 부재/조건 미결정/조인 미충족 추정/이벤트 미발생) 시 **오류 없이** 해당 후보만 제외하고 계속 평가한다. (전역 대기 금지)
 - nextActivities에는 오직 activity, event, subProcess, callActivity만 포함되어야 하며, gateway id는 절대 포함하면 안 된다.
 
 1) Interrupt-first (이벤트)
@@ -187,35 +190,40 @@ Instructions:
 2) Non-gateway 대상 처리
 - `next_activities` 후보 중 게이트웨이가 **아닌** 대상(액티비티/서브프로세스/이벤트)에 대해:
   - 해당 시퀀스의 조건(있다면 `sequences` 또는 `gateways`에 명시된 표현)을 **입력 구조 내부 값으로만** 평가한다.
-  - 참으로 판정 가능한 후보만 `nextActivities`에 포함한다. 거짓/판단불가는 제외(대기).
+  - 참으로 판정 가능한 후보만 `nextActivities`에 포함한다. 거짓/판단불가는 **그 후보만 제외**한다.
 - target이 `subProcesses`에 존재하면:
   - type="subProcess", nextUserEmail="system",
   - description="서브프로세스를 시작합니다. 내부 액티비티는 서브프로세스 컨텍스트에서 할당됩니다."
   
-2.1) Implicit AND-Join on Multi-Incoming Targets (암묵 병렬 조인) **반드시 확인**
+2.1) Implicit AND-Join on Multi-Incoming Targets (암묵 병렬 조인)
 - 대상: type이 gateway가 아닌 후보 타겟 T에 들어오는 시퀀스가 2개 이상인 경우
 - 용어:
-  - "T의 선행 소스 목록": sequences에서 target == T 인 모든 시퀀스의 source id 목록
-  - DONE_STATES: ["DONE","SUBMITTED"]
-- 규칙(절차):
-  1) T의 선행 소스 목록을 만든다.
-  2) branch_merged_workitems에서 각 선행 소스 id(=activity_id)에 해당하는 항목의 "최신 상태(status)"만 집계한다.
-     - 새 키를 만들지 말고, 입력에 실제로 존재하는 식별자만 사용한다.
-  3) 다음 중 하나라도 참이면 T는 대기(제외):
-     - 집계된 상태(status) 중 "IN_PROGRESS"가 하나라도 있다.
-     - 선행 소스 중 branch_merged_workitems에 기록이 전혀 없는 것이 있다. (없는 데이터는 추론 금지)
-  4) 위 두 조건에 걸리지 않고, 모든 선행 소스의 상태가 DONE_STATES 안에 있으면 T를 nextActivities에 포함한다.
+  - DONE_STATES := ["DONE","SUBMITTED"]
+  - cohort_ids := set(branch_merged_workitems[*].activity_id)
+
+- 절차:
+  1) (필수) cohort 스코프: 
+     predecessors_all := [seq.source for seq in sequences if seq.target == T]
+     predecessors := [p for p in predecessors_all if p in cohort_ids]   # ★ 블록 외 소스 제외
+  2) 만약 predecessors가 비어 있으면 **T만 이번 사이클에서 제외**하고 다른 후보 평가를 계속한다.  
+     (branch_merged_workitems가 비어도 전역 대기하지 않는다.)
+  3) 상태 집계:
+     - 각 p ∈ predecessors에 대해, branch_merged_workitems에서 activity_id==p 인 항목의 **최신 상태(status)**를 집계한다.
+  4) 다음 중 하나라도 참이면 **T만 제외**한다:
+     - 집계된 상태 중 "IN_PROGRESS"가 하나라도 있다.
+     - predecessors 중 branch_merged_workitems에 **기록이 전혀 없는** 것이 있다.  # (데이터 부재는 추론 금지)
+  5) 위 두 조건에 걸리지 않고, 모든 집계 상태가 DONE_STATES 안에 있으면 **T를 nextActivities에 포함**한다.
   
 3) Gateways (explicit only; from `gateways.type`)
 - 다음 노드가 `gateways`에 존재하면 그 `type`으로만 동작한다:
   - **exclusiveGateway (XOR)**:
     - `sequences`/`gateways` 내부의 조건을 입력 구조 값으로 평가해 **참 하나**가 명확하면 그 경로만 진행.
-    - 여러 개가 동시 참이면 모델의 우선순위/디폴트가 명시돼 있을 때만 그 규칙을 적용, 없으면 **대기**.
-    - 전혀 참이 없고 default flow가 명시돼 있으면 default로 진행, 아니면 **대기**.
+    - 여러 개가 동시 참이면 모델의 우선순위/디폴트가 명시돼 있을 때만 그 규칙을 적용, 없으면 **그 후보들은 제외**하고 다른 후보를 평가한다. (전역 대기 금지)
+    - 전혀 참이 없고 default flow가 명시돼 있지 않으면 **제외**한다.
   - **inclusiveGateway (OR)**:
     - 참으로 판정 가능한 모든 아웃고잉을 활성화.
-    - 이후 조인이 필요하면(모델 상 대응 OR-join 존재) **모든 `branch_merged_workitems`의 status가 "IN_PROGRESS"가 아니면** 조인 뒤 1-hop 타겟을 next로 산출, 아니면 **대기**.
-    - **parallelGateway (AND)**:
+    - 이후 조인이 필요하면(모델 상 대응 OR-join 존재) **branch_merged_workitems의 상태가 "IN_PROGRESS"인 브랜치가 없을 때** 조인 뒤 1-hop 타겟을 next로 산출, 있으면 **그 조인 경로만 보류**한다.
+  - **parallelGateway (AND)**:
     - 전제:
       - `branch_merged_workitems`는 **현재 병렬 구간(cohort)**에 속한 브랜치들만 포함한다.  
         (다른 게이트웨이/구간의 워크아이템은 포함되지 않는다.)
@@ -231,18 +239,13 @@ Instructions:
         ["IN_PROGRESS","DONE","SUBMITTED"] 중 하나라면 **중복 방지로 제외**한다.
         (동일 브랜치 식별은 입력 구조에서 일관되게 식별 가능한 키를 사용한다. 새로운 키를 만들지 않는다.)
       - 위에 해당하지 않는, **아직 시작되지 않은 브랜치**만 `nextActivities`에 포함한다.
-      - 다른 브랜치가 IN_PROGRESS여도 미시작 브랜치는 즉시 포함한다. (전역 대기 금지)
     - Join:
       - 조인 완료 조건(현재 cohort 한정):
         - `branch_merged_workitems`에 포함된 **모든 브랜치**의 최신 상태가 ["DONE","SUBMITTED"] 중 하나이고,
         - 상태가 "IN_PROGRESS"인 항목이 **하나도 없다**.
-      - 위 조건이 참이면 이 게이트웨이의 **1-hop 단일 타겟**을 `nextActivities`에 산출한다. 아니면 **대기**한다.
-      - `branch_merged_workitems`가 cohort의 일부 브랜치만 가지고 있어 브랜치 유무를 판정할 수 없으면 **대기**한다.
-        (없는 키/데이터를 추론하지 않는다.)
-    - 가드 스코프화:
-      - IN_PROGRESS 존재 여부와 완료 판정은 **항상 이 병렬 게이트웨이의 현재 cohort(`branch_merged_workitems`)에만 한정**한다.
+      - 위 조건이 참이면 이 게이트웨이의 **1-hop 단일 타겟**을 `nextActivities`에 산출한다. 조건 미충족이면 **이 조인 경로만 보류**한다. (다른 후보에는 영향 없음)
   - **eventBasedGateway**:
-    - 실제 발생한 이벤트가 `events`/`attached_activities`/`sequences`에서 판정 가능할 때만 그 단일 경로 진행. 아니면 **대기**.
+    - 실제 발생한 이벤트가 `events`/`attached_activities`/`sequences`에서 판정 가능할 때만 그 단일 경로 진행. 아니면 **그 경로만 보류**한다.
     
 4) Attached Events (simultaneous inclusion)
 - `nextActivities`에 포함된 activity/subProcess가 `attached_activities.activity_id`로 존재하면,
@@ -257,7 +260,8 @@ Instructions:
 - `instance_name_pattern`을 우선 사용. 비어 있으면 반드시 한글로 `processDefinitionName_key_value` 형식을 따라 20자 이내 생성.
 
 7) 출력 형식
-- 반드시 JSON만 출력(설명 금지). 진행 불가 시 `interruptByEvent=false`, `nextActivities: []`.
+- 반드시 JSON만 출력(설명 금지). 진행 불가한 후보는 제외하고, 가능 후보만 `nextActivities`에 담는다.
+- 전역 대기를 유발하지 말고, **후보 단위로** 판단한다.
 
 ```json
 {{
@@ -1347,17 +1351,34 @@ async def handle_workitem(workitem):
         };
 
         merged_workitems_from_step = []
-        merged_outputs = process_definition.get_merged_outputs(activity_id)
-        if merged_outputs:
-            for merged_output in merged_outputs:
-                merged_workitems = fetch_workitem_by_proc_inst_and_activity(process_instance_id, merged_output, tenant_id)
-                if merged_workitems:
-                    merged_item = {
-                        "activity_id": merged_workitems.activity_id,
-                        "activity_name": merged_workitems.activity_name,
-                        "status": merged_workitems.status,
-                    }
-                    merged_workitems_from_step.append(merged_item)
+        merged_workitems_from_block = []
+        # merged_outputs = process_definition.get_merged_outputs(activity_id)
+        # if merged_outputs:
+        #     for merged_output in merged_outputs:
+        #         merged_workitems = fetch_workitem_by_proc_inst_and_activity(process_instance_id, merged_output, tenant_id)
+        #         if merged_workitems:
+        #             merged_item = {
+        #                 "activity_id": merged_workitems.activity_id,
+        #                 "activity_name": merged_workitems.activity_name,
+        #                 "status": merged_workitems.status,
+        #             }
+        #             merged_workitems_from_step.append(merged_item)
+                    
+        target_containers = process_definition.find_target_containers(activity_id)
+        if target_containers:
+            for target_container in target_containers:
+                block = process_definition.find_block(target_container)
+                if block:
+                    source_containers = block.node_ids
+                    for source_container in source_containers:
+                        merged_workitems = fetch_workitem_by_proc_inst_and_activity(process_instance_id, source_container, tenant_id)
+                        if merged_workitems:
+                            merged_item = {
+                                "activity_id": merged_workitems.activity_id,
+                                "activity_name": merged_workitems.activity_name,
+                                "status": merged_workitems.status,
+                            }
+                            merged_workitems_from_step.append(merged_item)
 
         completed_activities_from_step = (
             completed_json.get("completedActivities")
