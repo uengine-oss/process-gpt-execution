@@ -256,6 +256,7 @@ class WorkItem(BaseModel):
     agent_orch: Optional[str] = None
     feedback: Optional[List[Dict[str, Any]]] = []
     temp_feedback: Optional[str] = None
+    execution_scope: Optional[str] = None
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
@@ -323,6 +324,37 @@ def fetch_process_instance(full_id: str, tenant_id: Optional[str] = None) -> Opt
             return None
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    
+def fetch_child_instances_by_parent(parent_proc_inst_id: str, tenant_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+    """
+    특정 부모(proc_inst_id)를 가진 모든 자식 인스턴스를 조회합니다.
+    경량 조회: proc_inst_id, status, current_activity_ids만 반환.
+    """
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        response = (
+            supabase.table('bpm_proc_inst')
+            .select('proc_inst_id,status,current_activity_ids')
+            .eq('parent_proc_inst_id', parent_proc_inst_id)
+            .eq('tenant_id', tenant_id)
+            .execute()
+        )
+
+        if response.data and len(response.data) > 0:
+            return response.data  # List[{'proc_inst_id':..., 'status':..., 'current_activity_ids': [...]}]
+        else:
+            return None
+
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Failed to fetch child instances for parent {parent_proc_inst_id}: {e}") from e
+
 
 
 def insert_process_instance(process_instance_data: dict, tenant_id: Optional[str] = None):
@@ -373,11 +405,14 @@ def set_participants_from_workitems(process_instance, tenant_id=None):
     return process_instance
 
 
-def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Optional[str] = None) -> (bool, ProcessInstance):
+def upsert_process_instance(process_instance: ProcessInstance, tenant_id: Optional[str] = None, definition: Optional[ProcessDefinition] = None) -> (bool, ProcessInstance):
     process_definition = process_instance.process_definition
     if process_definition is None:
         process_definition = load_process_definition(fetch_process_definition(process_instance.get_def_id(), tenant_id))
         process_instance.process_definition = process_definition
+        
+    if definition is not None:
+        process_definition = definition
 
     end_activity = process_definition.find_end_activity()
     
@@ -677,6 +712,12 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
         if not process_result_data['completedActivities']:
             return
         
+        
+        if process_instance_data['execution_scope']:
+            execution_scope = process_instance_data['execution_scope']
+        else:
+            execution_scope =''
+        
         for completed_activity in process_result_data['completedActivities']:
             workitem = fetch_workitem_by_proc_inst_and_activity(
                 process_instance_data['proc_inst_id'],
@@ -747,7 +788,8 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     agent_orch=agent_orch,
                     agent_mode=safeget(activity, 'agentMode', None),
                     log=log,
-                    root_proc_inst_id=process_instance_data['root_proc_inst_id']
+                    root_proc_inst_id=process_instance_data['root_proc_inst_id'],
+                    execution_scope=execution_scope
                 )
             
             
@@ -800,6 +842,12 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
 def upsert_cancelled_workitem(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None) -> List[WorkItem]:
     try:
         workitems = []
+        
+        if process_instance_data['execution_scope']:
+            execution_scope = process_instance_data['execution_scope']
+        else:
+            execution_scope =''
+        
         for cancelled_activity in process_result_data['cancelledActivities']:
             workitem = fetch_workitem_by_proc_inst_and_activity(
                 process_instance_data['proc_inst_id'],
@@ -854,7 +902,8 @@ def upsert_cancelled_workitem(process_instance_data, process_result_data, proces
                     description=safeget(activity, 'description', ''),
                     agent_orch=agent_orch,
                     agent_mode=safeget(activity, 'agentMode', None),
-                    root_proc_inst_id=process_instance_data['root_proc_inst_id']
+                    root_proc_inst_id=process_instance_data['root_proc_inst_id'],
+                    execution_scope=execution_scope
                 )
                 
             workitem_dict = workitem.model_dump()
@@ -880,6 +929,10 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
     if not tenant_id:
         tenant_id = subdomain_var.get()
 
+    if process_instance_data['execution_scope']:
+        execution_scope = process_instance_data['execution_scope']
+    else:
+        execution_scope =''
 
     for activity_data in process_result_data['nextActivities']:
         if activity_data['nextActivityId'] in ["END_PROCESS", "endEvent", "end_event"]:
@@ -931,7 +984,8 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     agent_mode=agent_mode,
                     description=safeget(activity, 'description', ''),
                     agent_orch=agent_orch,
-                    root_proc_inst_id=process_instance_data['root_proc_inst_id']
+                    root_proc_inst_id=process_instance_data['root_proc_inst_id'],
+                    execution_scope=execution_scope
                 )
         
         try:
@@ -987,6 +1041,11 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
         initial_activity = next((activity for activity in process_definition.activities if process_definition.is_starting_activity(activity.id)), None)
         if not initial_activity:
             initial_activity = process_definition.find_initial_activity()
+            
+        if process_instance_data['execution_scope']:
+            execution_scope = process_instance_data['execution_scope']
+        else:
+            execution_scope =''
 
         next_activities = process_definition.find_next_activities(initial_activity.id, True)
         for activity in next_activities:
@@ -1066,7 +1125,8 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     agent_mode=agent_mode,
                     description=safeget(activity, 'description', ''),
                     agent_orch=agent_orch,
-                    root_proc_inst_id=process_instance_data['root_proc_inst_id']
+                    root_proc_inst_id=process_instance_data['root_proc_inst_id'],
+                    execution_scope=execution_scope
                 )
                 workitem_dict = workitem.model_dump()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
