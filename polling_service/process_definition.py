@@ -375,13 +375,12 @@ class ProcessDefinition(BaseModel):
         Returns:
             Optional[Activity]: The initial activity if found, None otherwise.
         """
-        # Find the sequence with "end_event" as the source
-        end_sequence = next((seq for seq in self.sequences if "end_event" in seq.target.lower()), None)
-        
-        if end_sequence:
-            # Find the activity that matches the target of the start sequence
-            return next((activity for activity in self.activities if activity.id == end_sequence.source), None)
-        
+        # Find the gateway with "endevent" as the type
+        end_id = next((g.id for g in self.gateways if "endevent" in g.type.lower()), None)
+        if end_id:
+            for seq in self.sequences:
+                if seq.target == end_id:
+                    return self.find_activity_by_id(seq.source)
         return None
 
     def find_activity_by_id(self, activity_id: str) -> Optional[ProcessActivity]:
