@@ -747,7 +747,7 @@ def _process_sub_processes(process_instance: ProcessInstance, process_result: Pr
             try:
                 process_instance_data = {
                     "proc_inst_id": child_proc_inst_id,
-                    "proc_inst_name": mi_reason + ":" +execution_scope,
+                    "proc_inst_name": f"{mi_reason}:{execution_scope}",
                     "proc_def_id": child_proc_def_id,
                     "participants": participants,
                     "status": "NEW",
