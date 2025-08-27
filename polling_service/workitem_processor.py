@@ -171,11 +171,13 @@ Runtime Context:
 
 
 --- OPTIONAL USER FEEDBACK ---
-- message_from_user: {user_feedback_message}
+- user feedback message: {user_feedback_message}
 
 Instructions:
-1) 기본 완료 기록
-- 현재 activity_id를 type="activity", result="DONE"으로 completedActivities에 추가한다.
+1) 기본 완료 조건
+- submitted_output 이 activities 의 checkpoints 만족하는지를 기준으로 결과를 "DONE" 과 "PENDING" 중에서 출력한다.
+- 현재 activity_id를 type="activity" 으로 completedActivities에 추가한다.
+- user feedback message 옵션이 빈 값이 아닌 경우 checkpoints 와 마찬가지로 submitted_output 이 user feedback message 를 만족하는지 확인하여 결과를 출력한다.
 
 2) Instance Name
 - Use instance_name_pattern if provided; otherwise fallback to "processDefinitionId.key" from submitted_output, with total length ≤ 20 characters.

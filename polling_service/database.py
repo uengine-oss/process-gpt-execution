@@ -643,7 +643,11 @@ def fetch_workitem_with_agent(limit=5) -> Optional[List[dict]]:
             raise Exception("Supabase client is not configured for this request")
         
         # Supabase Client API를 사용하여 에이전트 워크아이템 조회 및 업데이트
-        response = supabase.table('todolist').select('*').eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').is_('consumer', 'null').limit(limit).execute()
+        env = os.getenv("ENV")
+        if env == 'dev':
+            response = supabase.table('todolist').select('*').eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').is_('consumer', 'null').eq('tenant_id', 'uengine').limit(limit).execute()
+        else:
+            response = supabase.table('todolist').select('*').eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').is_('consumer', 'null').neq('tenant_id', 'uengine').limit(limit).execute()
         
         if not response.data:
             return None
