@@ -530,7 +530,7 @@ def _create_or_get_process_instance(process_result: ProcessResult, process_resul
         )
     else:
         process_instance = fetch_process_instance(process_result.instanceId, tenant_id)
-        if process_instance.status == "NEW":
+        if process_instance.status == "NEW" and process_instance.parent_proc_inst_id == None:
             process_instance.proc_inst_name = process_result.instanceName
         return process_instance
 
