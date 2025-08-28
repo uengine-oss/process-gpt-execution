@@ -1328,5 +1328,187 @@ def check_tenant_owner(tenant_id: str, uid: str) -> bool:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
+def get_vecs_memories(agent_id: Optional[str] = None, limit: int = 100) -> List[Dict]:
+    """
+    vecs 스키마의 memories 테이블에서 데이터를 조회합니다.
+    
+    Args:
+        agent_id (str, optional): 특정 에이전트 ID로 필터링 (metadata에서 검색)
+        limit (int): 조회할 최대 레코드 수 (기본값: 100)
+    
+    Returns:
+        List[Dict]: 조회된 메모리 데이터 리스트
+    """
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        # vecs 스키마의 memories 테이블 조회
+        query = supabase.table("vecs.memories").select("*").limit(limit)
+        
+        # agent_id가 제공된 경우 metadata에서 필터링
+        if agent_id:
+            query = query.eq("metadata->>agent_id", agent_id)
+        
+        response = query.execute()
+        
+        if response.data:
+            return response.data
+        else:
+            return []
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"vecs memories 조회 중 오류 발생: {str(e)}")
+
+
+def delete_vecs_memories(agent_id: str = None, memory_id: str = None) -> bool:
+    """
+    vecs 스키마의 memories 테이블에서 데이터를 삭제합니다.
+    
+    Args:
+        agent_id (str, optional): 특정 에이전트 ID의 모든 메모리 삭제 (metadata에서 검색)
+        memory_id (str, optional): 특정 메모리 ID 삭제
+    
+    Returns:
+        bool: 삭제 성공 여부
+    """
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        if not agent_id and not memory_id:
+            raise HTTPException(status_code=400, detail="agent_id 또는 memory_id 중 하나는 반드시 제공해야 합니다.")
+        
+        # vecs 스키마의 memories 테이블에서 삭제
+        query = supabase.table("vecs.memories").delete()
+        
+        if memory_id:
+            # 특정 메모리 ID 삭제
+            query = query.eq("id", memory_id)
+        elif agent_id:
+            # 특정 에이전트 ID의 모든 메모리 삭제 (metadata에서 검색)
+            query = query.eq("metadata->>agent_id", agent_id)
+        
+        response = query.execute()
+        
+        # 삭제된 레코드 수 확인
+        deleted_count = len(response.data) if response.data else 0
+        
+        if deleted_count > 0:
+            return True
+        else:
+            return False
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"vecs memories 삭제 중 오류 발생: {str(e)}")
+
+
+def search_vecs_memories(agent_id: str = None, limit: int = 10) -> List[Dict]:
+    """
+    vecs 스키마의 memories 테이블에서 모든 메모리를 조회합니다 (검색은 별도 벡터 검색으로 처리).
+    
+    Args:
+        agent_id (str, optional): 특정 에이전트 ID로 필터링 (metadata에서 검색)
+        limit (int): 검색 결과 최대 개수 (기본값: 10)
+    
+    Returns:
+        List[Dict]: 조회된 메모리 데이터 리스트
+    """
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        # vecs 스키마의 memories 테이블에서 조회
+        query = supabase.table("vecs.memories").select("*").limit(limit)
+        
+        # agent_id가 제공된 경우 metadata에서 필터링
+        if agent_id:
+            query = query.eq("metadata->>agent_id", agent_id)
+        
+        response = query.execute()
+        
+        if response.data:
+            return response.data
+        else:
+            return []
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"vecs memories 조회 중 오류 발생: {str(e)}")
+
+
+def get_memory_by_id(memory_id: str) -> Dict:
+    """
+    vecs 스키마의 memories 테이블에서 특정 ID의 메모리를 조회합니다.
+    
+    Args:
+        memory_id (str): 조회할 메모리 ID
+    
+    Returns:
+        Dict: 조회된 메모리 데이터
+    """
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        if not memory_id:
+            raise HTTPException(status_code=400, detail="memory_id가 제공되지 않았습니다.")
+        
+        # vecs 스키마의 memories 테이블에서 특정 ID 조회
+        response = supabase.table("vecs.memories").select("*").eq("id", memory_id).execute()
+        
+        if response.data and len(response.data) > 0:
+            return response.data[0]
+        else:
+            raise HTTPException(status_code=404, detail="메모리를 찾을 수 없습니다.")
+            
+    except Exception as e:
+        if "메모리를 찾을 수 없습니다" in str(e):
+            raise e
+        raise HTTPException(status_code=500, detail=f"vecs memory 조회 중 오류 발생: {str(e)}")
+
+
+def get_memories_by_metadata_filter(metadata_filter: Dict, limit: int = 100) -> List[Dict]:
+    """
+    vecs 스키마의 memories 테이블에서 metadata 필터를 사용하여 조회합니다.
+    
+    Args:
+        metadata_filter (Dict): metadata에서 검색할 키-값 쌍
+        limit (int): 조회할 최대 레코드 수 (기본값: 100)
+    
+    Returns:
+        List[Dict]: 조회된 메모리 데이터 리스트
+    """
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        if not metadata_filter:
+            raise HTTPException(status_code=400, detail="metadata 필터가 제공되지 않았습니다.")
+        
+        # vecs 스키마의 memories 테이블에서 metadata 필터로 조회
+        query = supabase.table("vecs.memories").select("*").limit(limit)
+        
+        # metadata 필터 적용
+        for key, value in metadata_filter.items():
+            query = query.eq(f"metadata->>{key}", value)
+        
+        response = query.execute()
+        
+        if response.data:
+            return response.data
+        else:
+            return []
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"vecs memories metadata 필터 조회 중 오류 발생: {str(e)}")
+
+
+
+
 
 
