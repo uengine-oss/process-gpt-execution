@@ -284,7 +284,7 @@ Instructions:
   
 2-2) subprocess 처리
     - 다음 액티비티로 선택된게 subprocess라면 multiInstanceCount를 추출한다.
-    - 추출 방법은 subprocess.name 이 조건이고 'output', 'previous_outputs'에서 어느정도 의미가 맞는 항목을 추출한다.
+    - 추출 방법은 subprocess.name 이 조건이고 'output', 'previous_outputs'에서 반드시 있다고 생각하고 어느정도 의미가 맞는 항목을 추출한다.
     - ex) subprocess의 이름이 'a의 개수만큼'이면 'output' 또는 'previous_output'에서 a의 의미에 해당하는 항목을 확인하고 배열이라면 해당 배열의 개수가 multiInstanceCount가 된다.
     - 추출 불가능하면 1로 설정한다.
     - multiInstanceReason은 multiInstanceCount를 설정한 근거가 된 값을 output 또는 previous_output에서 추출한 값을 배열로 설정한다.
