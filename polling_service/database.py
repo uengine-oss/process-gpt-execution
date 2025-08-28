@@ -717,8 +717,10 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
             return
         
         
+        scope_name = ''
         if process_instance_data['execution_scope']:
             execution_scope = process_instance_data['execution_scope']
+            scope_name =  f": ({process_instance_data.get('proc_inst_name', '')})"
         else:
             execution_scope =''
         
@@ -777,7 +779,7 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=completed_activity['completedActivityId'],
-                    activity_name=safeget(activity, 'name', ''),
+                    activity_name= f"{safeget(activity, 'name', '')}{scope_name}",
                     user_id=user_info.get('id'),
                     username=user_info.get('name'),
                     status=completed_activity['result'],
@@ -847,11 +849,14 @@ def upsert_cancelled_workitem(process_instance_data, process_result_data, proces
     try:
         workitems = []
         
+       
+        scope_name = ''
         if process_instance_data['execution_scope']:
             execution_scope = process_instance_data['execution_scope']
+            scope_name =  f": ({process_instance_data.get('proc_inst_name', '')})"
         else:
             execution_scope =''
-        
+            
         for cancelled_activity in process_result_data['cancelledActivities']:
             workitem = fetch_workitem_by_proc_inst_and_activity(
                 process_instance_data['proc_inst_id'],
@@ -893,7 +898,7 @@ def upsert_cancelled_workitem(process_instance_data, process_result_data, proces
                     proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=cancelled_activity['cancelledActivityId'],
-                    activity_name=safeget(activity, 'name', ''),
+                    activity_name= f"{safeget(activity, 'name', '')}{scope_name}",
                     user_id=user_id,
                     status="CANCELLED",
                     tool=safeget(activity, 'tool', ''),
@@ -933,11 +938,14 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
     if not tenant_id:
         tenant_id = subdomain_var.get()
 
+    
+    scope_name = ''
     if process_instance_data['execution_scope']:
         execution_scope = process_instance_data['execution_scope']
+        scope_name =  f": ({process_instance_data.get('proc_inst_name', '')})"
     else:
         execution_scope =''
-
+        
     for activity_data in process_result_data['nextActivities']:
         if activity_data['nextActivityId'] in ["END_PROCESS", "endEvent", "end_event"]:
             continue
@@ -977,7 +985,7 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=safeget(activity, 'id', ''),
-                    activity_name=safeget(activity, 'name', ''),
+                    activity_name= f"{safeget(activity, 'name', '')}{scope_name}",
                     user_id=user_info.get('id'),
                     username=user_info.get('name'),
                     status=activity_data['result'],
@@ -1045,9 +1053,11 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
         initial_activity = next((activity for activity in process_definition.activities if process_definition.is_starting_activity(activity.id)), None)
         if not initial_activity:
             initial_activity = process_definition.find_initial_activity()
-            
+        
+        scope_name = ''
         if process_instance_data['execution_scope']:
             execution_scope = process_instance_data['execution_scope']
+            scope_name =  f": ({process_instance_data.get('proc_inst_name', '')})"
         else:
             execution_scope =''
 
@@ -1116,7 +1126,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     proc_inst_id=process_instance_data['proc_inst_id'],
                     proc_def_id=process_result_data['processDefinitionId'].lower(),
                     activity_id=safeget(activity, 'id', ''),
-                    activity_name=safeget(activity, 'name', ''),
+                    activity_name= f"{safeget(activity, 'name', '')}{scope_name}",
                     user_id=user_id,
                     username=username,
                     status=status,
