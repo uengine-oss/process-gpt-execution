@@ -284,11 +284,13 @@ Instructions:
   
 2-2) subprocess 처리
     - 다음 액티비티로 선택된게 subprocess라면 multiInstanceCount를 추출한다.
-    - 추출 방법은 'output', 'previous_outputs'을 확인하고 subprocess의 name에 적합하게 설정한다
+    - 추출 방법은 subprocess.name 이 조건이고 'output', 'previous_outputs'에서 어느정도 의미가 맞는 항목을 추출한다.
     - ex) subprocess의 이름이 'a의 개수만큼'이면 'output' 또는 'previous_output'에서 a의 의미에 해당하는 항목을 확인하고 배열이라면 해당 배열의 개수가 multiInstanceCount가 된다.
     - 추출 불가능하면 1로 설정한다.
     - multiInstanceReason은 multiInstanceCount를 설정한 근거가 된 값을 output 또는 previous_output에서 추출한 값을 배열로 설정한다.
     - multiInstanceReason은 추출 불가능하면 빈 배열로 설정한다.
+    - multiInstanceReason의 배열 개수는 multiInstanceCount와 같다.
+    - multiInstanceReason에서 추출된 값이 json 같은거라면 각 멀티인스턴스에 대한 설명을 어떤 데이터가 들어가있는지 모든 항목에 대해 요약하여 적절히 자연어로 풀어서 설명한다(Korean).
   
 3) Gateways (explicit only; from `gateways.type`)
 - 다음 노드가 `gateways`에 존재하면 그 `type`으로만 동작한다:
@@ -350,7 +352,7 @@ Instructions:
       "expression": "cron if event",
       "dueDate": "YYYY-MM-DD if event",
       "multiInstanceCount": "1",
-      "multiInstanceReason" : ["",""],
+      "multiInstanceReason" : ["a에 대한 정보(1, 2, 3)","b에 대한 정보(4, 5, 6)"],
       "result": "IN_PROGRESS",
       "description": "Korean instruction",
       "cannotProceedErrors": [
@@ -962,6 +964,7 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
             "contentType": "json",
             "jsonContent": description
         })
+        
         upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
     
     # Update process_result_json
