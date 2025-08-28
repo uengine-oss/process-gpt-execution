@@ -229,7 +229,6 @@ Process Definition:
 Runtime Context:
 - next_activities: {next_activities}
 - roleBindings: {role_bindings}
-- instance_name_pattern: {instance_name_pattern}
 - today: {today}
 - output: {output}
 - previous_outputs: {previous_outputs}
@@ -237,8 +236,6 @@ Runtime Context:
 - completedActivities: {completedActivities}
 - branch_merged_workitems: {branch_merged_workitems}
 
---- OPTIONAL USER FEEDBACK ---
-- message_from_user: {user_feedback_message}
 
 Instructions:
 0.1) Cohort(현재 병렬 블록) 고정
@@ -972,14 +969,14 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
     process_result_json["instanceName"] = process_instance.proc_inst_name
     process_result_json["workitemIds"] = [workitem.id for workitem in next_workitems] if next_workitems else []
     
-    # Add to vector store
-    content_str = json.dumps(process_instance.dict(exclude={'process_definition'}), ensure_ascii=False, indent=2)
-    metadata = {
-        "tenant_id": process_instance.tenant_id,
-        "type": "process_instance"
-    }
-    vector_store = get_vector_store()
-    vector_store.add_documents([Document(page_content=content_str, metadata=metadata)])
+    # # Add to vector store
+    # content_str = json.dumps(process_instance.dict(exclude={'process_definition'}), ensure_ascii=False, indent=2)
+    # metadata = {
+    #     "tenant_id": process_instance.tenant_id,
+    #     "type": "process_instance"
+    # }
+    # vector_store = get_vector_store()
+    # vector_store.add_documents([Document(page_content=content_str, metadata=metadata)])
 
 def _check_service_tasks(process_instance: ProcessInstance, process_result_json: dict, process_definition):
     try:
