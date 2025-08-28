@@ -448,6 +448,7 @@ Output format (must be wrapped in ```json and ``` markers. Do not include any ot
             "changed": true/false
         }},
         "conditionExamples": {{
+            "sequenceId": "sequence id",
             "before": {{
                 "good_example": [
                     {{
