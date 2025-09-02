@@ -20,11 +20,11 @@ import time
 from database import (
     fetch_process_definition, fetch_process_instance, fetch_ui_definition,
     fetch_ui_definition_by_activity_id, fetch_user_info, fetch_assignee_info, 
-    get_vector_store, fetch_workitem_by_proc_inst_and_activity, upsert_process_instance, 
+    fetch_workitem_by_proc_inst_and_activity, upsert_process_instance, 
     upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
     upsert_todo_workitems, upsert_workitem, ProcessInstance,
     fetch_todolist_by_proc_inst_id, execute_rpc, upsert_cancelled_workitem, insert_process_instance,
-    fetch_child_instances_by_parent
+    fetch_child_instances_by_parent, fetch_process_instance_source_by_task_id, fetch_process_instance_source_by_id
 )
 from process_definition import load_process_definition
 from code_executor import execute_python_code
@@ -914,7 +914,7 @@ def _register_timer_event(process_instance: ProcessInstance, event: dict):
     return result
 def _persist_process_data(process_instance: ProcessInstance, process_result: ProcessResult, 
                          process_result_json: dict, process_definition, tenant_id: Optional[str] = None):
-    """Persist process data to database and vector store"""
+    """Persist process data to database"""
     # Upsert workitems
     upsert_todo_workitems(process_instance.model_dump(), process_result_json, process_definition, tenant_id)
     completed_workitems = upsert_completed_workitem(process_instance.model_dump(), process_result_json, process_definition, tenant_id)
@@ -972,15 +972,6 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
     process_result_json["instanceName"] = process_instance.proc_inst_name
     process_result_json["workitemIds"] = [workitem.id for workitem in next_workitems] if next_workitems else []
     
-    # # Add to vector store
-    # content_str = json.dumps(process_instance.dict(exclude={'process_definition'}), ensure_ascii=False, indent=2)
-    # metadata = {
-    #     "tenant_id": process_instance.tenant_id,
-    #     "type": "process_instance"
-    # }
-    # vector_store = get_vector_store()
-    # vector_store.add_documents([Document(page_content=content_str, metadata=metadata)])
-
 def _check_service_tasks(process_instance: ProcessInstance, process_result_json: dict, process_definition):
     try:
         for activity in process_result_json.get("nextActivities", []):
