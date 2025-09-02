@@ -1,0 +1,51 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dev-ingress
+  namespace: dev
+  annotations:
+    # GCE Ingress 설정
+    kubernetes.io/ingress.class: gce
+    
+    # SSE 타임아웃 설정
+    cloud.google.com/backend-timeout: "300"
+    cloud.google.com/backend-connection-draining-timeout: "300"
+    
+    # HTTP/1.1 강제 사용 (SSE 호환성)
+    cloud.google.com/http-version: "1.1"
+    
+    # 로드밸런서 타입
+    cloud.google.com/load-balancer-type: "External"
+    
+    # SSL 인증서 (기존과 동일)
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  rules:
+  - host: uengine.process-gpt.io
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: execution-service
+            port:
+              number: 8000
+      - path: /execution
+        pathType: Prefix
+        backend:
+          service:
+            name: execution-service
+            port:
+              number: 8000
+      - path: /execution/
+        pathType: Prefix
+        backend:
+          service:
+            name: execution-service
+            port:
+              number: 8000
+  tls:
+  - hosts:
+    - uengine.process-gpt.io
+    secretName: dev-process-gpt-tls
