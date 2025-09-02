@@ -35,13 +35,13 @@ class ChatInterface:
         def record_usage(total_tokens: int, response_text: str = ""):
             """토큰 사용량을 기록하는 헬퍼 함수"""
             raw_data = {
-                "serviceId":       "CHAT_LLM", 
+                "serviceId":       "chat_llm", 
                 "tenantId":        "localhost", 
                 "userId":          "gpt@gpt.org",
                 "startAt":         "2025-08-06T09:00:00+09:00",
                 "usage": {
-                    "gpt-4.1-2025-04-14": { "request":100, "response":200, "cachedRequest":100 },
-                    "gpt-4o":         { "request":100, "response":200, "cachedRequest":200 }
+                    "gpt-4.1-2025-04-14": { "request":request_tokens, "response": total_tokens - request_tokens },
+                    # "gpt-4o":         { "request":100, "response":200, "cachedRequest":200 }
                 },
                 "process_def_id":  None,
                 "process_inst_id": None,
@@ -83,14 +83,20 @@ class ChatInterface:
                 nonlocal result_text
                 async for chunk in response.body_iterator:
                     parsed = chunk.strip().removeprefix("data: ").removesuffix("\n\n")
+                    print(f"[DEBUG] Parsed: {parsed}")
                     try:
                         obj = json.loads(parsed)
+                        print(f"[DEBUG] Obj: {obj}")
                         content = obj["choices"][0]["delta"].get("content")
+                        print(f"[DEBUG] Content: {content}")
                         if content:
                             result_text += content
+                            print(f"[DEBUG] Result text: {result_text}")
                     except:
                         pass
+                        print(f"[DEBUG] passed Exception")
                     yield chunk
+                    print(f"[DEBUG] Yielded chunk")
 
                 # 스트리밍 완료 후 응답 토큰 계산 및 사용량 기록
                 if result_text:
