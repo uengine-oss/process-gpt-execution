@@ -170,7 +170,8 @@ async def submit_workitem(input: dict):
             "retry": 0,
             "consumer": None,
             "description": activity.description,
-            "project_id": project_id
+            "project_id": project_id,
+            "root_proc_inst_id": process_instance_id
         }
     
     upsert_workitem(workitem_data)
@@ -327,7 +328,8 @@ async def initiate_workitem(input: dict):
         "retry": 0,
         "consumer": None,
         "description": activity.description,
-        "project_id": project_id
+        "project_id": project_id,
+        "root_proc_inst_id": process_instance_id
     }
 
     upsert_workitem(workitem_data)
