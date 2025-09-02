@@ -4,7 +4,7 @@ from langchain_openai import ChatOpenAI
 from langchain.output_parsers.json import SimpleJsonOutputParser
 from datetime import datetime, timedelta
 
-from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, fetch_workitem_by_id, upsert_process_definition, fetch_assignee_info
+from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, fetch_workitem_by_id, upsert_process_definition, fetch_assignee_info, upsert_process_instance_source
 from process_definition import load_process_definition
 
 import traceback
@@ -134,6 +134,17 @@ async def submit_workitem(input: dict):
     user_info = None
     if user_email:
         user_info = fetch_assignee_info(user_email)
+    
+    
+    source_list = input.get('source_list')
+    if source_list and len(source_list) > 0:
+        for source in source_list:
+            source_data = {
+                "id": source.get('id'),
+                "proc_inst_id": process_instance_id,
+            }
+            upsert_process_instance_source(source_data)
+    
     
     if workitem:
         workitem_data = workitem.model_dump()

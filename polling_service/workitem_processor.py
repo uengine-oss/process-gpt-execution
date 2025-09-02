@@ -24,7 +24,7 @@ from database import (
     upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
     upsert_todo_workitems, upsert_workitem, ProcessInstance,
     fetch_todolist_by_proc_inst_id, execute_rpc, upsert_cancelled_workitem, insert_process_instance,
-    fetch_child_instances_by_parent, fetch_process_instance_source_by_task_id, fetch_process_instance_source_by_id
+    fetch_child_instances_by_parent
 )
 from process_definition import load_process_definition
 from code_executor import execute_python_code

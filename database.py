@@ -1328,5 +1328,13 @@ def check_tenant_owner(tenant_id: str, uid: str) -> bool:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
-
+def upsert_process_instance_source(source_data: dict):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        supabase.table("proc_inst_source").upsert(source_data).execute()
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
