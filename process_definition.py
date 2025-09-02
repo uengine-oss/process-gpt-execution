@@ -299,6 +299,15 @@ class ProcessDefinition(BaseModel):
                         prev_activities.append(gw_source)
         
         return prev_activities
+    
+    def find_sequences(self, source_id: Optional[str], target_id: Optional[str]) -> List[ProcessSequence]:
+        sequences = []
+        for seq in self.sequences:
+            if source_id is not None and seq.source == source_id:
+                sequences.append(seq)
+            if target_id is not None and seq.target == target_id:
+                sequences.append(seq)
+        return sequences
 
 def load_process_definition(definition_json: dict) -> ProcessDefinition:
     # Events를 게이트웨이 리스트에 추가

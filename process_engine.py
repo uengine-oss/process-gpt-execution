@@ -145,6 +145,11 @@ async def submit_workitem(input: dict):
         workitem_data['due_date'] = workitem_data['due_date'].isoformat()
         workitem_data['retry'] = 0
         workitem_data['consumer'] = None
+        
+        revert_from = input.get('revert_from')
+        if revert_from:
+            workitem_data['revert_from'] = revert_from
+            workitem_data['id'] = str(uuid.uuid4())
     else:
         workitem_data = {
             "id": str(uuid.uuid4()),
@@ -165,9 +170,10 @@ async def submit_workitem(input: dict):
             "retry": 0,
             "consumer": None,
             "description": activity.description,
-            "project_id": project_id
+            "project_id": project_id,
+            "root_proc_inst_id": process_instance_id
         }
-        
+    
     upsert_workitem(workitem_data)
     return workitem_data
 
@@ -182,13 +188,13 @@ Now, we will create a system that recommends role performers at each stage when 
 
 - My Email: {myEmail}
 
-If the agent is a role performer, enter the agent ID in userId.
+If the agent is a role performer, enter the agent ID in userId (type: uuid).
 
 result should be in this JSON format:
 {{
     "roleBindings": [{{
         "roleName": "role name",
-        "userId": "user email"
+        "userId": "user uuid"
     }}]
 }}
     """
@@ -322,7 +328,8 @@ async def initiate_workitem(input: dict):
         "retry": 0,
         "consumer": None,
         "description": activity.description,
-        "project_id": project_id
+        "project_id": project_id,
+        "root_proc_inst_id": process_instance_id
     }
 
     upsert_workitem(workitem_data)
@@ -398,6 +405,7 @@ Please analyze the activity and feedback to provide a detailed comparison of the
 
 Activities: {activities}
 Gateways: {gateways}
+Sequences: {sequences}
 Feedback: {feedback}
 Feedback Result: {feedback_result}
 
@@ -406,6 +414,7 @@ Based on the feedback, provide the before and after values for the following mod
 - checkpoints: Verification points that need to be completed
 - description: Description of what the activity does
 - instruction: Instructions for completing the activity
+- conditionExamples: Condition examples of the sequence that is related to the activity
 
 Output format (must be wrapped in ```json and ``` markers. Do not include any other text):
 {{
@@ -439,6 +448,42 @@ Output format (must be wrapped in ```json and ``` markers. Do not include any ot
             "before": "original instruction",
             "after": "modified instruction",
             "changed": true/false
+        }},
+        "conditionExamples": {{
+            "sequenceId": "sequence id",
+            "before": {{
+                "good_example": [
+                    {{
+                        "given": "original given value in the sequence condition good_example",
+                        "when": "original when value in the sequence condition good_example",
+                        "then": "original then value in the sequence condition good_example"
+                    }}
+                ],
+                "bad_example": [
+                    {{
+                        "given": "original given value in the sequence condition bad_example",
+                        "when": "original when value in the sequence condition bad_example",
+                        "then": "original then value in the sequence condition bad_example"
+                    }}
+                ]
+            }},
+            "after": {{
+                "good_example": [
+                    {{
+                        "given": "modified given value in the sequence condition good_example",
+                        "when": "modified when value in the sequence condition good_example",
+                        "then": "modified then value in the sequence condition good_example"
+                    }}
+                ],
+                "bad_example": [
+                    {{
+                        "given": "modified given value in the sequence condition bad_example",
+                        "when": "modified when value in the sequence condition bad_example",
+                        "then": "modified then value in the sequence condition bad_example"
+                    }}
+                ]
+            }},
+            "changed": true/false
         }}
     }},
     "summary": "Brief summary of the key changes made based on feedback"
@@ -468,15 +513,22 @@ async def handle_get_feedback_diff(request: Request):
         
         activities = [ activity.model_dump() ]
         gateways = []
+        sequences = []
         next_item = process_definition.find_next_item(activity_id)
         if 'task' not in next_item.type:
             gateways.append(next_item.model_dump())
+            sequences = process_definition.find_sequences(next_item.id, None)
+            sequences = [seq.model_dump() for seq in sequences]
         else:
             activities.append(next_item.model_dump())
+        activity_sequences = process_definition.find_sequences(activity_id, None)
+        if len(activity_sequences) > 0:
+            sequences.extend([seq.model_dump() for seq in activity_sequences])
 
         chain_input = {
             "activities": activities,
             "gateways": gateways,
+            "sequences": sequences,
             "feedback": workitem.temp_feedback,
             "feedback_result": workitem.log
         }
@@ -496,6 +548,7 @@ def add_routes_to_app(app) :
     app.add_api_route("/initiate", handle_initiate, methods=["POST"])
     app.add_api_route("/get-feedback", handle_get_feedback, methods=["POST"])
     app.add_api_route("/get-feedback-diff", handle_get_feedback_diff, methods=["POST"])
+
 
 """
 # try this: 

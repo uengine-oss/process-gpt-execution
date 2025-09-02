@@ -12,42 +12,19 @@ from decimal import Decimal
 from datetime import datetime, timedelta
 import pytz
 from contextvars import ContextVar
-import csv
 from dotenv import load_dotenv
 import socket
-# Firebase 관련 import 제거 - FCM 서비스로 분리됨
-# from firebase_admin import credentials, messaging
-import logging
-import asyncio
-from collections import defaultdict
 
 db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
-async_supabase_client_var = ContextVar('async_supabase', default=None)
 subdomain_var = ContextVar('subdomain', default='localhost')
 
-jwt_secret_var = ContextVar('jwt_secret', default='')
-algorithm_var = ContextVar('algorithm', default='HS256')
-
-# Firebase 전역 변수 제거 - FCM 서비스로 분리됨
-# firebase_app = None
-
-# Realtime 로그 설정
-realtime_logger = logging.getLogger("realtime_subscriber")
-if not realtime_logger.handlers:
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    realtime_logger.addHandler(handler)
-    realtime_logger.setLevel(logging.INFO)
 
 def setting_database():
     try:
         if os.getenv("ENV") != "production":
             load_dotenv(override=True)
 
-        jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
-        jwt_secret_var.set(jwt_secret)
-        
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_KEY")
         supabase: Client = create_client(supabase_url, supabase_key)
@@ -64,24 +41,6 @@ def setting_database():
         
     except Exception as e:
         print(f"Database configuration error: {e}")
-
-async def setting_async_database():
-    """비동기 Supabase 클라이언트 설정"""
-    try:
-        if os.getenv("ENV") != "production":
-            load_dotenv(override=True)
-        
-        supabase_url = os.getenv("SUPABASE_URL")
-        supabase_key = os.getenv("SUPABASE_KEY")
-        
-        async_supabase: AsyncClient = await create_async_client(supabase_url, supabase_key)
-        async_supabase_client_var.set(async_supabase)
-        
-        return async_supabase
-        
-    except Exception as e:
-        realtime_logger.error(f"비동기 Supabase 클라이언트 설정 오류: {e}")
-        return None
 
 setting_database()
 
@@ -150,7 +109,6 @@ def insert_usage(usage_data: dict):
         # Procedure 호출
         # return supabase.rpc("insert_usage_from_payload", usage_data).execute()
         return supabase.rpc("insert_usage_from_payload", {"p_payload": usage_data}).execute()
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"사용량 삽입 중 오류가 발생했습니다: {e}")
     
@@ -812,84 +770,6 @@ def fetch_workitem_by_id(workitem_id: str, tenant_id: Optional[str] = None) -> O
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
-def fetch_workitem_with_submitted_status(limit=5) -> Optional[List[dict]]:
-    try:
-        pod_id = socket.gethostname()
-        db_config = db_config_var.get()
-
-
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-
-        query = """
-            WITH locked_rows AS (
-                SELECT id FROM todolist
-                WHERE status = 'SUBMITTED'
-                    AND consumer IS NULL
-                FOR UPDATE SKIP LOCKED
-                LIMIT %s
-            )
-            UPDATE todolist
-            SET consumer = %s
-            FROM locked_rows
-            WHERE todolist.id = locked_rows.id
-            RETURNING *;
-        """
-
-        cursor.execute(query, (limit, pod_id))
-        rows = cursor.fetchall()
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-        return rows if rows else None
-
-    except Exception as e:
-        print(f"[ERROR] DB fetch failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
-    
-
-def fetch_workitem_with_agent(limit=5) -> Optional[List[dict]]:
-    try:
-        pod_id = socket.gethostname()
-        db_config = db_config_var.get()
-
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-        query = """
-            WITH locked_rows AS (
-                SELECT id FROM todolist
-                WHERE status = 'IN_PROGRESS'
-                    AND consumer IS NULL
-                    AND agent_mode = 'A2A'
-                FOR UPDATE SKIP LOCKED
-                LIMIT %s
-            )
-            UPDATE todolist
-            SET consumer = %s
-            FROM locked_rows
-            WHERE todolist.id = locked_rows.id
-            RETURNING *;
-        """
-
-        cursor.execute(query, (limit, pod_id))
-        rows = cursor.fetchall()
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-        return rows if rows else None
-
-    except Exception as e:
-        print(f"[ERROR] DB fetch failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
-
-
-
 def fetch_prev_task_ids(process_definition, current_activity_id: str, proc_inst_id: str) -> List[str]:
     """
     현재 테스크의 시퀀스 정보를 이용해 바로 직전 테스크의 ID 목록을 반환합니다.
@@ -1237,168 +1117,6 @@ def get_vector_store():
     )
 
 
-def insert_from_csv(csv_file_path, insert_query, value_extractor):
-    tenant_id = subdomain_var.get()
-    db_config = db_config_var.get()
-    
-    connection = psycopg2.connect(**db_config)
-    cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-
-    with open(csv_file_path, mode='r', encoding='utf-8') as file:
-        csv_reader = csv.DictReader(file)
-        for row in csv_reader:
-            values = value_extractor(row, tenant_id)
-            cursor.execute(insert_query, values)
-
-
-    connection.commit()
-    cursor.close()
-    connection.close()
-
-
-def insert_process_definition_from_csv():
-    csv_file_path = './csv/proc_def.csv'
-    insert_query = """
-        INSERT INTO proc_def (id, name, definition, bpmn, tenant_id)
-        VALUES (%s, %s, %s, %s, %s)
-        ON CONFLICT (id, tenant_id) DO UPDATE SET
-            name = EXCLUDED.name,
-            definition = EXCLUDED.definition,
-            bpmn = EXCLUDED.bpmn
-    """
-    
-    def extract_values(row, tenant_id):
-        return (
-            row['id'],
-            row['name'],
-            row['definition'],
-            row['bpmn'],
-            tenant_id
-        )
-
-
-    insert_from_csv(csv_file_path, insert_query, extract_values)
-
-
-def insert_process_form_definition_from_csv():
-    csv_file_path = './csv/form_def.csv'
-    insert_query = """
-        INSERT INTO form_def (id, html, fields_json, proc_def_id, activity_id, tenant_id)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (id, tenant_id) DO UPDATE SET
-            html = EXCLUDED.html,
-            fields_json = EXCLUDED.fields_json,
-            proc_def_id = EXCLUDED.proc_def_id,
-            activity_id = EXCLUDED.activity_id
-    """
-    
-    def extract_values(row, tenant_id):
-        return (
-            row['id'],
-            row['html'],
-            row['fields_json'],
-            row['proc_def_id'],
-            row['activity_id'],
-            tenant_id
-        )
-
-
-    insert_from_csv(csv_file_path, insert_query, extract_values)
-
-
-def merge_proc_map_json(existing, incoming):
-    def find_by_id(obj_list, target_id):
-        return next((item for item in obj_list if item["id"] == target_id), None)
-
-
-    for new_mega in incoming.get("mega_proc_list", []):
-        existing_mega = find_by_id(existing.get("mega_proc_list", []), new_mega["id"])
-        if not existing_mega:
-            existing["mega_proc_list"].append(new_mega)
-            continue
-
-
-        for new_major in new_mega.get("major_proc_list", []):
-            existing_major = find_by_id(existing_mega.get("major_proc_list", []), new_major["id"])
-            if not existing_major:
-                existing_mega["major_proc_list"].append(new_major)
-                continue
-
-
-            for new_sub in new_major.get("sub_proc_list", []):
-                if not any(sub["id"] == new_sub["id"] for sub in existing_major.get("sub_proc_list", [])):
-                    existing_major["sub_proc_list"].append(new_sub)
-
-
-    return existing
-
-
-def insert_configuration_from_csv():
-    csv_file_path = './csv/configuration.csv'
-    tenant_id = subdomain_var.get()
-    db_config = db_config_var.get()
-    
-    connection = psycopg2.connect(**db_config)
-    cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-
-    with open(csv_file_path, mode='r', encoding='utf-8') as file:
-        csv_reader = csv.DictReader(file)
-        for row in csv_reader:
-            key = row['key']
-            raw_value = row['value']
-
-
-            if key == 'proc_map':
-                incoming_value = json.loads(raw_value)
-
-
-                # 기존 데이터 조회
-                cursor.execute("SELECT value FROM configuration WHERE key = %s AND tenant_id = %s", (key, tenant_id))
-                result = cursor.fetchone()
-
-
-                if result:
-                    existing_value = result['value']
-                    merged_value = merge_proc_map_json(existing_value, incoming_value)
-
-
-                    cursor.execute(
-                        "UPDATE configuration SET value = %s WHERE key = %s AND tenant_id = %s",
-                        (json.dumps(merged_value, ensure_ascii=False), key, tenant_id)
-                    )
-                else:
-                    cursor.execute(
-                        "INSERT INTO configuration (key, value, tenant_id) VALUES (%s, %s, %s)",
-                        (key, json.dumps(incoming_value, ensure_ascii=False), tenant_id)
-                    )
-            else:
-                # 일반 키는 단순 upsert
-                cursor.execute(
-                    """
-                    INSERT INTO configuration (key, value, tenant_id)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (key, tenant_id) DO UPDATE SET
-                        value = EXCLUDED.value
-                    """,
-                    (key, raw_value, tenant_id)
-                )
-
-
-    connection.commit()
-    cursor.close()
-    connection.close()
-
-
-def insert_sample_data():
-    insert_configuration_from_csv()
-    insert_process_definition_from_csv()
-    insert_process_form_definition_from_csv()
-
-
-
-
 def update_user_admin(input):
     try:
         user_id = input.get('user_id')
@@ -1610,95 +1328,5 @@ def check_tenant_owner(tenant_id: str, uid: str) -> bool:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
-# fetch_device_token 함수 제거 - FCM 서비스로 분리됨
-# 필요한 경우 fcm_client.get_device_token() 사용
-
-
-# send_fcm_message 함수 제거 - FCM 서비스로 분리됨
-# 필요한 경우 fcm_client.send_fcm_notification() 사용
-
-
-
-
-def handle_new_notification(notification_record):
-    """
-    새로운 알림에 대해 FCM 푸시 알림을 전송하는 핸들러
-    """
-    try:
-        from fcm_client import send_fcm_notification
-        
-        user_id = notification_record.get('user_id')
-        if not user_id:
-            realtime_logger.warning("user_id가 없습니다.")
-            return
-        
-        # FCM 알림 데이터 구성
-        tenant_id = notification_record.get('tenant_id', '')
-        url = notification_record.get('url', '')
-        if tenant_id and url:
-            url = f"https://{tenant_id}.process-gpt.io{url}"
-        else:
-            url = notification_record.get('url', '')
-
-        print(f"url: {url}")
-        
-        notification_data = {
-            'title': notification_record.get('title', '새 알림'),
-            'body': notification_record.get('description', '새로운 알림이 도착했습니다.'),
-            'type': notification_record.get('type', 'general'),
-            'url': url,
-            'from_user_id': notification_record.get('from_user_id', ''),
-            'data': {
-                'notification_id': str(notification_record.get('id', '')),
-                'url': notification_record.get('url', '')
-            }
-        }
-        
-        # FCM 서비스를 통해 메시지 전송
-        result = send_fcm_notification(user_id, notification_data)
-        realtime_logger.info(f"FCM 알림 전송 결과: {result}")
-        
-    except Exception as e:
-        realtime_logger.error(f"알림 처리 중 오류 발생: {e}")
-
-
-def fetch_unprocessed_notifications() -> Optional[List[dict]]:
-    try:
-        pod_id = socket.gethostname()
-        db_config = db_config_var.get()
-
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-        query = """
-            WITH locked_rows AS (
-                SELECT id FROM notifications
-                WHERE consumer IS NULL
-                FOR UPDATE SKIP LOCKED
-            )
-            UPDATE notifications
-            SET consumer = %s
-            FROM locked_rows
-            WHERE notifications.id = locked_rows.id
-            RETURNING *;
-        """
-
-        cursor.execute(query, (pod_id,))
-        affected_count = cursor.rowcount
-        rows = cursor.fetchall()
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-        return rows if affected_count > 0 else None
-
-    except Exception as e:
-        realtime_logger.error(f"미처리 알림 fetch 실패: {str(e)}")
-        return None
-
-
-# check_new_notifications와 notification_polling_task 함수 제거
-# 이제 FCM 서비스에서 폴링 및 알림 처리를 담당합니다.
 
 

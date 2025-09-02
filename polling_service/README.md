@@ -64,7 +64,6 @@ python main.py
 - `OPENAI_API_KEY`: OpenAI API 키
 - `SUPABASE_URL`: Supabase 프로젝트 URL
 - `SUPABASE_KEY`: Supabase API 키
-- `SUPABASE_JWT_SECRET`: JWT 시크릿 키
 - `SMTP_SERVER`: SMTP 서버 주소
 - `SMTP_PORT`: SMTP 포트 번호
 - `SMTP_USERNAME`: SMTP 사용자명
