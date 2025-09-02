@@ -83,20 +83,14 @@ class ChatInterface:
                 nonlocal result_text
                 async for chunk in response.body_iterator:
                     parsed = chunk.strip().removeprefix("data: ").removesuffix("\n\n")
-                    print(f"[DEBUG] Parsed: {parsed}")
                     try:
                         obj = json.loads(parsed)
-                        print(f"[DEBUG] Obj: {obj}")
                         content = obj["choices"][0]["delta"].get("content")
-                        print(f"[DEBUG] Content: {content}")
                         if content:
                             result_text += content
-                            print(f"[DEBUG] Result text: {result_text}")
                     except:
                         pass
-                        print(f"[DEBUG] passed Exception")
                     yield chunk
-                    print(f"[DEBUG] Yielded chunk")
 
                 # 스트리밍 완료 후 응답 토큰 계산 및 사용량 기록
                 if result_text:
