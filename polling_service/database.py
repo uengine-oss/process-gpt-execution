@@ -962,6 +962,8 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     workitem.username = user_info.get('name')
             if workitem.agent_mode == None:
                 workitem.agent_mode = determine_agent_mode(workitem.user_id, workitem.agent_mode)
+                if workitem.agent_mode == 'COMPLETE' and (workitem.agent_orch == 'none' or workitem.agent_orch == None):
+                    workitem.agent_orch = 'crewai-deep-research'
             # print(f"[DEBUG] workitem.agent_mode: {workitem.agent_mode}")
         else:
             activity = process_definition.find_activity_by_id(activity_data['nextActivityId'])
@@ -973,10 +975,11 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                         start_date = start_date + timedelta(days=safeget(prev_activity, 'duration', 0))
                 due_date = start_date + timedelta(days=safeget(activity, 'duration', 0)) if safeget(activity, 'duration', 0) else None
                 agent_mode = determine_agent_mode(activity_data['nextUserEmail'], safeget(activity, 'agentMode', None))
-                
                 agent_orch = safeget(activity, 'orchestration', None)
                 if agent_orch == 'none':
                     agent_orch = None
+                if agent_mode == 'COMPLETE' and (safeget(activity, 'orchestration', None) == 'none' or safeget(activity, 'orchestration', None) == None):
+                    agent_orch = 'crewai-deep-research'
                 
                 user_info = fetch_assignee_info(activity_data['nextUserEmail'])
                 
@@ -1117,6 +1120,8 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                 agent_orch = safeget(activity, 'orchestration', None)
                 if agent_orch == 'none':
                     agent_orch = None
+                if agent_mode == 'COMPLETE' and (safeget(activity, 'orchestration', None) == 'none' or safeget(activity, 'orchestration', None) == None):
+                    agent_orch = 'crewai-deep-research'
 
                 status = "TODO"
 
