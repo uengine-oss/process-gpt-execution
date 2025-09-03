@@ -706,6 +706,60 @@ def cleanup_stale_consumers():
     except Exception as e:
         print(f"[ERROR] Failed to cleanup stale consumers: {str(e)}")
 
+def upsert_workitem_completed_log(completed_workitems: List[WorkItem], process_result_data: dict, tenant_id: Optional[str] = None):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        process_instance_id = None
+        appliedFeedback = False
+        if completed_workitems:
+            for completed_workitem in completed_workitems:
+                if process_instance_id is None:
+                    process_instance_id = completed_workitem.proc_inst_id
+                user_info = fetch_assignee_info(completed_workitem.user_id)
+                ui_definition = fetch_ui_definition_by_activity_id(completed_workitem.proc_def_id, completed_workitem.activity_id, tenant_id)
+                form_html = ui_definition.html if ui_definition else None
+                form_id = ui_definition.id if ui_definition else None
+                if completed_workitem.output:
+                    output = completed_workitem.output.get(form_id)
+                else:
+                    output = {}
+                message_data = {
+                    "role": "system" if user_info.get("name") == "external_customer" else "user",
+                    "name": user_info.get("name"),
+                    "email": user_info.get("email"),
+                    "profile": user_info.get("info", {}).get("profile", ""),
+                    "content": "",
+                    "jsonContent": output if output else {},
+                    "htmlContent": form_html if form_html else "",
+                    "contentType": "html" if form_html else "text",
+                    "activityId": completed_workitem.activity_id,
+                    "workitemId": completed_workitem.id
+                }
+                upsert_chat_message(completed_workitem.proc_inst_id, message_data, tenant_id)
+                if completed_workitem.temp_feedback and completed_workitem.temp_feedback not in [None, ""]:
+                    appliedFeedback = True
+
+            description = {
+                "referenceInfo": process_result_data.get("referenceInfo", []),
+                "completedActivities": process_result_data.get("completedActivities", []),
+                "nextActivities": process_result_data.get("nextActivities", []),
+                "appliedFeedback": appliedFeedback
+            }
+            message_json = json.dumps({
+                "role": "system",
+                "contentType": "json",
+                "jsonContent": description
+            })
+            
+            if process_instance_id:
+                upsert_chat_message(process_instance_id, message_json, tenant_id)
+
+    except Exception as e:
+        print(f"[ERROR] upsert_workitem_completed_log: {str(e)}")
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 def upsert_completed_workitem(process_instance_data, process_result_data, process_definition, tenant_id: Optional[str] = None) -> List[WorkItem]:
     try:
@@ -746,7 +800,7 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                                 'userId': assignee.get('endpoint')
                             }
                             break
-                cannotProceedErrors = safeget(completed_activity, 'cannotProceedErrors', [])
+                cannotProceedErrors = completed_activity.get("cannotProceedErrors", [])
                 if  cannotProceedErrors and len(cannotProceedErrors) > 0:
                     workitem.log = "\n".join(f"[{error.get('type', '')}] {error.get('reason', '')}" for error in cannotProceedErrors);
             else:
@@ -770,7 +824,7 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     agent_orch = None
                 
                 log = ''
-                cannotProceedErrors = safeget(completed_activity, 'cannotProceedErrors', [])    
+                cannotProceedErrors = completed_activity.get("cannotProceedErrors", [])
                 if  cannotProceedErrors and len(cannotProceedErrors) > 0:
                     log = "\n".join(f"[{error.get('type', '')}] {error.get('reason', '')}" for error in cannotProceedErrors);
                 
@@ -837,9 +891,12 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
             supabase = supabase_client_var.get()
             if supabase is None:
                 raise Exception("Supabase client is not configured for this request")
-            supabase.table('todolist').upsert(workitem_dict).execute()
+            
             workitems.append(workitem)
-
+            
+            upsert_workitem_completed_log(workitems, process_result_data, tenant_id)
+            supabase.table('todolist').upsert(workitem_dict).execute()
+            
         return workitems
     except Exception as e:
         print(f"[ERROR] upsert_completed_workitem: {str(e)}")

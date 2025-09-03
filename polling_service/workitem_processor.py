@@ -185,6 +185,10 @@ Instructions:
 3) Output
 - 반드시 아래 JSON만 출력한다. 추가 설명 금지.
 
+4) Reference Info
+- referenceInfo 는 previous_outputs 을 바탕으로 추출한다.
+- referenceInfo 가 없으면 빈 배열로 출력한다.
+
 ```json
 {{
   "completedActivities": [
@@ -203,7 +207,13 @@ Instructions:
           "reason": "설명 (Korean)"
         }}
       ]
-    }}
+    }},
+    referenceInfo: [
+      {{
+        "key": "key (Korean)",
+        "value": "value"
+      }}
+    ]
   ],
 }}
 """
@@ -926,47 +936,6 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
         process_instance.proc_inst_name = process_result.instanceName
     _, process_instance = upsert_process_instance(process_instance, tenant_id, process_definition)
     
-    appliedFeedback = False
-    if completed_workitems:
-        for completed_workitem in completed_workitems:
-            user_info = fetch_assignee_info(completed_workitem.user_id)
-            ui_definition = fetch_ui_definition_by_activity_id(completed_workitem.proc_def_id, completed_workitem.activity_id, tenant_id)
-            form_html = ui_definition.html if ui_definition else None
-            form_id = ui_definition.id if ui_definition else None
-            if completed_workitem.output:
-                output = completed_workitem.output.get(form_id)
-            else:
-                output = {}
-            message_data = {
-                "role": "system" if user_info.get("name") == "external_customer" else "user",
-                "name": user_info.get("name"),
-                "email": user_info.get("email"),
-                "profile": user_info.get("info", {}).get("profile", ""),
-                "content": "",
-                "jsonContent": output if output else {},
-                "htmlContent": form_html if form_html else "",
-                "contentType": "html" if form_html else "text",
-                "activityId": completed_workitem.activity_id,
-                "workitemId": completed_workitem.id
-            }
-            upsert_chat_message(completed_workitem.proc_inst_id, message_data, tenant_id)
-            if completed_workitem.temp_feedback and completed_workitem.temp_feedback not in [None, ""]:
-                appliedFeedback = True
-
-        description = {
-            "referenceInfo": process_result_json.get("referenceInfo", []),
-            "completedActivities": process_result_json.get("completedActivities", []),
-            "nextActivities": process_result_json.get("nextActivities", []),
-            "appliedFeedback": appliedFeedback
-        }
-        message_json = json.dumps({
-            "role": "system",
-            "contentType": "json",
-            "jsonContent": description
-        })
-        
-        upsert_chat_message(process_instance.proc_inst_id, message_json, tenant_id)
-    
     # Update process_result_json
     process_result_json["instanceId"] = process_instance.proc_inst_id
     process_result_json["instanceName"] = process_instance.proc_inst_name
@@ -1289,7 +1258,7 @@ def get_sequence_condition_data(process_definition: Any, next_activities: List[s
         print(f"[ERROR] Failed to get sequence condition data: {str(e)}")
         return None
     
-async def run_prompt_and_parse(prompt_tmpl, chain_input, workitem, tenant_id, parser, merged_log=None, log_prefix="[LLM]"):
+async def run_prompt_and_parse(prompt_tmpl, chain_input, workitem, tenant_id, parser, merged_log=None, log_prefix="[LLM]", enable_logging=True):
     log_text = merged_log + ""
     collected_text = ""
     num_of_chunk = 0
@@ -1299,17 +1268,18 @@ async def run_prompt_and_parse(prompt_tmpl, chain_input, workitem, tenant_id, pa
         collected_text += token
         log_text += token
 
-        # 실시간 로그 적재
-        upsert_queue.put((
-            {
-                "id": workitem['id'],
-                "log": f"{log_prefix} {log_text}"
-            },
-            tenant_id
-        ))
-        num_of_chunk += 1
-        if num_of_chunk % 10 == 0:
-            upsert_workitem({"id": workitem['id'], "log": log_text}, tenant_id)
+        # 실시간 로그 적재 (enable_logging이 True일 때만)
+        if enable_logging:
+            upsert_queue.put((
+                {
+                    "id": workitem['id'],
+                    "log": f"{log_prefix} {log_text}"
+                },
+                tenant_id
+            ))
+            num_of_chunk += 1
+            if num_of_chunk % 10 == 0:
+                upsert_workitem({"id": workitem['id'], "log": log_text}, tenant_id)
 
     # 파싱 리트라이
     parsed_output = None
@@ -1327,7 +1297,7 @@ async def run_prompt_and_parse(prompt_tmpl, chain_input, workitem, tenant_id, pa
                 print(f"[ERROR] All JSON parsing attempts failed. Raw response: {collected_text[:500]}...")
                 upsert_workitem({
                     "id": workitem['id'],
-                    "status": "ERROR",
+                    "status": "PENDING",
                     "log": f"JSON parsing failed after {max_retries} attempts: {str(parse_error)}"
                 }, tenant_id)
                 error_message = json.dumps({
@@ -1353,8 +1323,6 @@ async def handle_workitem(workitem):
         return
 
     activity_id = workitem['activity_id']
-    activity_name = workitem['activity_name']
-    activity_description = workitem['description']
     process_definition_id = workitem['proc_def_id']
     process_instance_id = workitem['proc_inst_id']
     tenant_id = workitem['tenant_id']
@@ -1523,11 +1491,11 @@ async def handle_workitem(workitem):
 
 
         prompt_completed_json, completed_log = await run_prompt_and_parse(
-            prompt_completed, chain_input_completed, workitem, tenant_id, parser, "", log_prefix="[COMPLETED]"
+            prompt_completed, chain_input_completed, workitem, tenant_id, parser, "", log_prefix="[COMPLETED]", enable_logging=True
         )
         
         completed_json["completedActivities"] = prompt_completed_json["completedActivities"]
-        
+        completed_json["referenceInfo"] = prompt_completed_json["referenceInfo"]
         
         completed_activities_from_step = (
             completed_json.get("completedActivities")
@@ -1562,7 +1530,7 @@ async def handle_workitem(workitem):
         }
 
         next_json, next_log = await run_prompt_and_parse(
-            prompt_next, chain_input_next, workitem, tenant_id, parser, completed_log, log_prefix="[NEXT]"
+            prompt_next, chain_input_next, workitem, tenant_id, parser, completed_log, log_prefix="[NEXT]", enable_logging=False
         )
         completed_json["nextActivities"] = next_json["nextActivities"]
 
@@ -1604,7 +1572,7 @@ async def handle_agent_workitem(workitem):
             print(f"[ERROR] Agent not found: {agent_id}")
             upsert_workitem({
                 "id": workitem['id'],
-                "status": "DONE",
+                "status": "PENDING",
                 "description": f"Agent not found: {agent_id}"
             }, workitem['tenant_id'])
             return
