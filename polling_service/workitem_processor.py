@@ -730,6 +730,18 @@ def _process_sub_processes(process_instance: ProcessInstance, process_result: Pr
     for activity in process_result.nextActivities or []:
         if activity.type != "subProcess":
             continue
+        
+        prev_activities = process_definition.find_immediate_prev_activities(activity.nextActivityId)
+        for prev_activity in prev_activities:
+            for completed_activity in process_result.completedActivities:
+                if completed_activity.completedActivityId == prev_activity.id:
+                    completed_activity.result = "PENDING"
+                    break
+            for completed_activity_json in process_result_json.get("completedActivities", []):
+                if completed_activity_json.get("completedActivityId") == prev_activity.id:
+                    completed_activity_json["result"] = "PENDING"
+                    break
+        
         next_sub_process = process_definition.find_next_sub_process(activity.nextActivityId)
         if not next_sub_process:
             next_sub_process = process_definition.find_sub_process_by_id(activity.nextActivityId)
@@ -1783,3 +1795,77 @@ async def handle_service_workitem(workitem):
             pass
         
         raise e
+    
+def handle_pending_workitem(workitem):
+    """
+    [규칙]
+    - 대상: 부모 워크아이템이 subProcess이고 상태가 PENDING일 때만 동작.
+    - 스캔 후, 자식 전체에 SUBMITTED가 하나도 없으면 부모 PENDING 워크아이템을 DONE으로 전환.
+    - 자식 인스턴스의 상태는 변경하지 않는다(승격 금지).
+    """
+    try:
+        wid = workitem.get('id')
+        proc_def_id = workitem.get('proc_def_id')
+        tenant_id   = workitem.get('tenant_id')
+        parent_proc_inst_id = workitem.get('proc_inst_id')
+
+        if not all([wid, proc_def_id, tenant_id, parent_proc_inst_id]):
+            print(f"[WARN] handle_pending_workitem: insufficient keys in workitem id={wid}")
+            return
+
+        # 부모 워크아이템이 PENDING일 때만 실행
+        if (workitem.get('status') or '').upper() != 'PENDING':
+            print(f"[DEBUG] handle_pending_workitem: parent workitem is not PENDING (id={wid})")
+            return
+
+        process_definition_json = fetch_process_definition(proc_def_id, tenant_id)
+        process_definition = load_process_definition(process_definition_json)
+        activity = process_definition.find_activity_by_id(workitem.get('activity_id'))
+        if not activity:
+            print(f"[ERROR] handle_pending_workitem: Activity not found: {workitem.get('activity_id')}")
+            return
+
+        child_instances = fetch_child_instances_by_parent(parent_proc_inst_id, tenant_id) or []
+        if not child_instances:
+            print(f"[DEBUG] No child instances for parent {parent_proc_inst_id}")
+            return
+
+        any_submitted_left = False
+        total_children = 0
+        total_items_scanned = 0
+        total_items_closed  = 0
+
+        for child in child_instances:
+            total_children += 1
+            child_id = child.get("proc_inst_id") if isinstance(child, dict) \
+                       else getattr(child, "proc_inst_id", None)
+            if not child_id:
+                continue
+
+            child_items = fetch_todolist_by_proc_inst_id(child_id) or []
+            for ci in child_items:
+                total_items_scanned += 1
+                status = (ci.get("status") if isinstance(ci, dict) else getattr(ci, "status", None)) or ""
+
+                su = status.upper()
+                if su == "SUBMITTED":
+                    any_submitted_left = True
+                    continue
+
+        if not any_submitted_left:
+            try:
+                upsert_workitem({"id": wid, "status": "DONE"}, tenant_id)
+                print(f"[INFO] Parent pending workitem {wid} -> DONE "
+                      f"(children={total_children}, scanned={total_items_scanned}, closed={total_items_closed})")
+            except Exception as e:
+                print(f"[ERROR] Failed to mark parent workitem {wid} DONE: {e}")
+        else:
+            print(f"[DEBUG] SUBMITTED remains in children; keep parent PENDING "
+                  f"(children={total_children}, scanned={total_items_scanned}, closed={total_items_closed})")
+
+    except Exception as e:
+        print(f"[ERROR] Error in handle_pending_workitem for workitem {workitem.get('id')}: {str(e)}")
+        raise e
+
+    
+    

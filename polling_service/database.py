@@ -677,6 +677,29 @@ def fetch_workitem_with_agent(limit=5) -> Optional[List[dict]]:
     except Exception as e:
         print(f"[ERROR] DB fetch failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
+    
+def fetch_workitem_with_pending_status(limit=5) -> Optional[List[dict]]:
+    try:
+        pod_id = socket.gethostname()
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        env = os.getenv("ENV")
+        if env == 'dev':
+            response = supabase.table('todolist').select('*').eq('status', 'PENDING').is_('consumer', 'null').eq('tenant_id', 'uengine').limit(limit).execute()
+        else:
+            response = supabase.table('todolist').select('*').eq('status', 'PENDING').is_('consumer', 'null').neq('tenant_id', 'uengine').limit(limit).execute()
+        
+        
+        if not response.data:
+            return None
+        
+        return response.data
+    except Exception as e:
+        print(f"[ERROR] DB fetch failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
+    
 
 
 def cleanup_stale_consumers():
@@ -800,7 +823,7 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                                 'userId': assignee.get('endpoint')
                             }
                             break
-                cannotProceedErrors = completed_activity.get("cannotProceedErrors", [])
+                cannotProceedErrors = safeget(completed_activity, 'cannotProceedErrors', [])
                 if  cannotProceedErrors and len(cannotProceedErrors) > 0:
                     workitem.log = "\n".join(f"[{error.get('type', '')}] {error.get('reason', '')}" for error in cannotProceedErrors);
             else:
@@ -824,7 +847,7 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     agent_orch = None
                 
                 log = ''
-                cannotProceedErrors = completed_activity.get("cannotProceedErrors", [])
+                cannotProceedErrors = safeget(completed_activity, 'cannotProceedErrors', [])    
                 if  cannotProceedErrors and len(cannotProceedErrors) > 0:
                     log = "\n".join(f"[{error.get('type', '')}] {error.get('reason', '')}" for error in cannotProceedErrors);
                 
