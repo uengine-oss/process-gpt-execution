@@ -823,7 +823,8 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                                 'userId': assignee.get('endpoint')
                             }
                             break
-                cannotProceedErrors = safeget(completed_activity, 'cannotProceedErrors', [])
+                # completed_activity is dict (not Pydantic model), use .get() instead of safeget()
+                cannotProceedErrors = completed_activity.get('cannotProceedErrors', [])
                 if  cannotProceedErrors and len(cannotProceedErrors) > 0:
                     workitem.log = "\n".join(f"[{error.get('type', '')}] {error.get('reason', '')}" for error in cannotProceedErrors);
             else:
@@ -847,7 +848,8 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     agent_orch = None
                 
                 log = ''
-                cannotProceedErrors = safeget(completed_activity, 'cannotProceedErrors', [])    
+                # completed_activity is dict (not Pydantic model), use .get() instead of safeget()
+                cannotProceedErrors = completed_activity.get('cannotProceedErrors', [])    
                 if  cannotProceedErrors and len(cannotProceedErrors) > 0:
                     log = "\n".join(f"[{error.get('type', '')}] {error.get('reason', '')}" for error in cannotProceedErrors);
                 
