@@ -5,9 +5,9 @@ from typing import Set
 from database import (
     setting_database, fetch_workitem_with_submitted_status, 
     fetch_workitem_with_agent, upsert_workitem, cleanup_stale_consumers,
-    fetch_process_definition
+    fetch_process_definition, fetch_workitem_with_pending_status
 )
-from workitem_processor import handle_workitem, handle_agent_workitem, handle_service_workitem
+from workitem_processor import handle_workitem, handle_agent_workitem, handle_service_workitem, handle_pending_workitem
 
 # 전역 변수로 현재 실행 중인 태스크들을 추적
 running_tasks: Set[asyncio.Task] = set()
@@ -42,6 +42,9 @@ async def safe_handle_workitem(workitem):
         elif workitem['agent_mode'] == "A2A" and workitem['status'] == "IN_PROGRESS":
             print(f"[DEBUG] Starting safe_handle_workitem for agent workitem: {workitem['id']}")
             await handle_agent_workitem(workitem)
+        elif workitem['status'] == "PENDING":
+            print(f"[DEBUG] Starting safe_handle_workitem for pending workitem: {workitem['id']}")
+            await handle_pending_workitem(workitem)
         else:
             print(f"[WARNING] Unknown workitem status: {workitem['status']} for workitem: {workitem['id']}")
 
@@ -94,6 +97,14 @@ async def polling_workitem():
                 print(f"[DEBUG] Found {len(agent_workitems)} agent workitems")
         except Exception as e:
             print(f"[ERROR] Failed to fetch agent workitems: {str(e)}")
+            
+        try:
+            pending_workitems = fetch_workitem_with_pending_status()
+            if pending_workitems:
+                all_workitems.extend(pending_workitems)
+                print(f"[DEBUG] Found {len(pending_workitems)} pending workitems")
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch pending workitems: {str(e)}")
 
         if len(all_workitems) == 0:
             return
@@ -118,6 +129,8 @@ async def polling_workitem():
                     print(f"[ERROR] Task {i} failed: {result}")
                 else:
                     print(f"[DEBUG] Task {i} completed successfully")
+                    
+            
     except Exception as e:
         print(f"[ERROR] Polling workitem failed: {str(e)}")
         # Supabase 연결 오류인 경우 잠시 대기
