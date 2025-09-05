@@ -197,7 +197,7 @@ Now, we will create a system that recommends role performers at each stage when 
 
 - Organization Chart: {organizationChart}
 
-- My Email: {myEmail}
+- My uuid: {myUuid}
 
 If the agent is a role performer, enter the agent ID in userId (type: uuid).
 
@@ -229,7 +229,7 @@ async def handle_role_binding(request: Request):
         json_data = await request.json()
         input = json_data.get('input')
         role_mappings = input.get('roles')
-        my_email = input.get('email')
+        my_uuid = input.get('uuid')
         
         process_definition_id = input.get('proc_def_id')
         
@@ -256,7 +256,7 @@ async def handle_role_binding(request: Request):
             chain_input = {
                 "roles": role_mappings,
                 "organizationChart": organizationChart,
-                "myEmail": my_email
+                "myUuid": my_uuid
             }
 
             result = role_binding_chain.invoke(chain_input)

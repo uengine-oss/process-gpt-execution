@@ -1049,14 +1049,10 @@ def process_output(workitem, tenant_id):
     try:
         if workitem["output"] is None or workitem["output"] == {}:
             return
-        url = f"{MEMENTO_SERVICE_URL}/process/database"
+        url = f"{MEMENTO_SERVICE_URL}/process-output"
         response = requests.post(url, json={
-            "storage_type": "database",
-            "options": {
-                "proc_inst_id": workitem["proc_inst_id"],
-                "activity_id": workitem["activity_id"],
-                "tenant_id": tenant_id
-            }
+            "workitem_id": workitem["id"],
+            "tenant_id": tenant_id
         })
         return response.json()
     except Exception as e:
@@ -1536,6 +1532,12 @@ async def handle_workitem(workitem):
 
 
         execute_next_activity(completed_json, tenant_id)
+        
+        try:
+            process_output(workitem, tenant_id)
+        except Exception as e:
+            print(f"[ERROR] Error in process_output for workitem {workitem['id']}: {str(e)}")
+            raise e
 
     except Exception as e:
         print(f"[ERROR] Error in handle_workitem for workitem {workitem['id']}: {str(e)}")
