@@ -24,7 +24,7 @@ from database import (
     upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
     upsert_todo_workitems, upsert_workitem, ProcessInstance,
     fetch_todolist_by_proc_inst_id, execute_rpc, upsert_cancelled_workitem, insert_process_instance,
-    fetch_child_instances_by_parent
+    fetch_child_instances_by_parent, fetch_organization_chart, fetch_workitems_by_root_proc_inst_id
 )
 from process_definition import load_process_definition
 from code_executor import execute_python_code
@@ -239,6 +239,7 @@ Process Definition:
 Runtime Context:
 - next_activities: {next_activities}
 - roleBindings: {role_bindings}
+- organizations : {organizations}
 - today: {today}
 - output: {output}
 - previous_outputs: {previous_outputs}
@@ -339,9 +340,15 @@ Instructions:
   - 그 `attached_events` 각각을 type="event"로 **별도 엔트리**로 추가한다(이미 완료/취소 제외).
 
 5) Assignment
+- 'roleBindings'은 프로세스 시작 전 기본으로 설정한 role임 'roleBindings'에 없는 역할이면 다음 액티비티의 role기반으로 결정한다.
+- `roleBindings`의 endpoint가 비어있거나 다음 액티비티의 role이 'roleBindings'에 없을 경우
+    - roleBindings의 이름과 유사한 항목을 'output' 또는 'previous_output'에서 찾음
+    - 찾았으면 그 항목에 지정 된 이름 또는 이메일 등의 사용자 정보로 'organizations'에서 검색
+    - 검색 되었으면 그 항목의 id가 nextUserEmail이 됨
+    - 유사한 검색결과도 없을 경우 **오류 없이 제외**하고, 나머지 항목은 계속 검토한다.
 - `roleBindings`의 endpoint가 배열이면 `,`으로 조인하여 nextUserEmail을 결정한다.
-- 외부 고객 역할이면 입력 구조 내에서 email을 찾을 수 있을 때만 사용한다(없으면 해당 항목 제외).
-- 유효 email을 결정할 수 없으면 **오류 없이 제외**하고, 나머지 항목은 계속 검토한다.
+    - 외부 고객 역할이면 입력 구조 내에서 email을 찾을 수 있을 때만 사용한다(없으면 해당 항목 제외).
+    - 유효 email을 결정할 수 없으면 **오류 없이 제외**하고, 나머지 항목은 계속 검토한다.
 
 6) InstanceName
 - `instance_name_pattern`을 우선 사용. 비어 있으면 반드시 한글로 `processDefinitionName_key_value` 형식을 따라 20자 이내 생성.
@@ -1132,34 +1139,121 @@ def update_instance_status_on_error(workitem: dict, is_first: bool, is_last: boo
     except Exception as e:
         print(f"[ERROR] Failed to update instance status for {proc_inst_id}: {str(e)}")
 
+from typing import Any, Dict, List, Optional
+
 def get_field_value(field_info: str, process_definition: Any, process_instance_id: str, tenant_id: str):
     """
-    산출물에서 특정 필드의 값을 추출
+    산출물에서 특정 필드의 값을 추출 (구조 변경 최소화)
+    - (1) 현재 인스턴스 단일 조회 → 값 있으면 단일값으로 반환
+    - (2) 루트 인스턴스 단일 조회(+그룹 인덱싱) → 값 있으면 단일값으로 반환
+    - (3) 루트 기준 다건 조회(fetch_workitems_by_root_proc_inst_id)
+         → 전부 배열로 모아 { form_id: { field_id: ["<scope>:<value>", ...] } } 형태로 반환
     """
     try:
-        field_value = {}
+        field_value: Dict[str, Any] = {}
+
         process_definition_id = process_definition.processDefinitionId
         split_field_info = field_info.split('.')
         form_id = split_field_info[0]
         field_id = split_field_info[1]
         activity_id = form_id.replace("_form", "").replace(f"{process_definition_id}_", "")
-        
-        workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_id, activity_id, tenant_id)
-        if workitem:
-            field_value[form_id] = {}
-            output = workitem.output
-            if output:
-                if output.get(form_id) and output.get(form_id).get(field_id):
-                    field_value[form_id][field_id] = output.get(form_id).get(field_id)
-                else:
-                    return None
-            else:
-                return None
 
-        return field_value
+        def _out(wi: Any) -> Optional[dict]:
+            return getattr(wi, "output", None) or (wi.get("output") if isinstance(wi, dict) else None)
+
+        def _val_from_form(out: dict) -> Optional[Any]:
+            form = out.get(form_id)
+            if isinstance(form, dict):
+                return form.get(field_id)
+            return None
+
+        def _to_int(v: Any, default: int = 0) -> int:
+            try:
+                s = str(v).strip()
+                return int(s) if s != "" else default
+            except Exception:
+                return default
+
+        def _ci_equal(a: Optional[str], b: Optional[str]) -> bool:
+            return (a or "").lower() == (b or "").lower()
+
+        # (1) 현재 인스턴스 단일 조회
+        workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_id, activity_id, tenant_id, True)
+        if workitem:
+            out = _out(workitem)
+            if out:
+                val = _val_from_form(out)
+                if val is not None:
+                    field_value[form_id] = { field_id: val }
+                    return field_value
+
+        # 인스턴스 정보
+        instance = fetch_process_instance(process_instance_id, tenant_id)
+        root_proc_inst_id = getattr(instance, "root_proc_inst_id", None) or (instance.get("root_proc_inst_id") if isinstance(instance, dict) else None)
+        exec_scope_raw = getattr(instance, "execution_scope", None) or (instance.get("execution_scope") if isinstance(instance, dict) else None)
+        exec_scope = _to_int(exec_scope_raw, 0)
+
+        # (2) 루트 인스턴스 단일 조회(+그룹 인덱싱)
+        workitem_root = fetch_workitem_by_proc_inst_and_activity(root_proc_inst_id, activity_id, tenant_id, True)
+        if workitem_root:
+            out = _out(workitem_root)
+            if out:
+                # (a) 직접 필드
+                val = _val_from_form(out)
+                if val is not None:
+                    field_value[form_id] = { field_id: val }
+                    return field_value
+                # (b) 그룹형: form 내부 item_value[exec_scope][field_id]
+                form = out.get(form_id)
+                if isinstance(form, dict):
+                    for _, item_value in form.items():
+                        try:
+                            candidate = item_value[exec_scope][field_id]
+                            if candidate is not None:
+                                field_value[form_id] = { field_id: candidate }
+                                return field_value
+                        except Exception:
+                            pass
+
+        workitems = fetch_workitems_by_root_proc_inst_id(root_proc_inst_id, tenant_id)
+        if not workitems:
+            return None
+
+        filtered: List[Any] = []
+        for wi in workitems:
+            wi_act = getattr(wi, "activity_id", None) or (wi.get("activity_id") if isinstance(wi, dict) else None)
+            if _ci_equal(wi_act, activity_id):
+                filtered.append(wi)
+        if not filtered:
+            return None
+
+        def _sort_key(wi: Any):
+            scope = _to_int(getattr(wi, "execution_scope", None) or (wi.get("execution_scope") if isinstance(wi, dict) else None), 10**9)
+            missing = 1 if scope == 10**9 else 0
+            return (missing, scope)
+
+        filtered.sort(key=_sort_key)
+
+        values: List[str] = []
+        for wi in filtered:
+            out = _out(wi)
+            if not out:
+                continue
+            val = _val_from_form(out)
+            if val is not None:
+                scope_i = _to_int(getattr(wi, "execution_scope", None) or (wi.get("execution_scope") if isinstance(wi, dict) else None), 0)
+                values.append(f"{scope_i}:{val}")
+
+        if values:
+            field_value[form_id] = { field_id: values }
+            return field_value
+
+        return None
+
     except Exception as e:
         print(f"[ERROR] Failed to get output field value for {field_info}: {str(e)}")
         return None
+
 
 def group_fields_by_form(field_values: dict) -> dict:
     """
@@ -1511,6 +1605,7 @@ async def handle_workitem(workitem):
             or []
         )
         
+        organizations = fetch_organization_chart(tenant_id)
 
         chain_input_next = {
             "activities": process_definition.activities,
@@ -1525,6 +1620,7 @@ async def handle_workitem(workitem):
 
             "next_activities": next_activities,
             "role_bindings": workitem.get('assignees', []),
+            "organizations": organizations,
             "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
             "today": today,
             "previous_outputs": workitem_input_data,
@@ -1545,11 +1641,11 @@ async def handle_workitem(workitem):
 
         execute_next_activity(completed_json, tenant_id)
         
-        try:
-            process_output(workitem, tenant_id)
-        except Exception as e:
-            print(f"[ERROR] Error in process_output for workitem {workitem['id']}: {str(e)}")
-            raise e
+        # try:
+        #     process_output(workitem, tenant_id)
+        # except Exception as e:
+        #     print(f"[ERROR] Error in process_output for workitem {workitem['id']}: {str(e)}")
+        #     raise e
 
     except Exception as e:
         print(f"[ERROR] Error in handle_workitem for workitem {workitem['id']}: {str(e)}")
@@ -1798,7 +1894,7 @@ async def handle_service_workitem(workitem):
         
         raise e
     
-def handle_pending_workitem(workitem):
+async def handle_pending_workitem(workitem):
     """
     [규칙]
     - 대상: 부모 워크아이템이 subProcess이고 상태가 PENDING일 때만 동작.

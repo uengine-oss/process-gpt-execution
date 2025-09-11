@@ -202,6 +202,7 @@ class ProcessInstance(BaseModel):
     tenant_id: str
     proc_def_version: Optional[str] = None
     parent_proc_inst_id: Optional[str] = None
+    root_proc_inst_id: Optional[str] = None
 
 
     class Config:
@@ -529,7 +530,7 @@ def fetch_todolist_by_proc_inst_id(proc_inst_id: str, tenant_id: Optional[str] =
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
-def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str, tenant_id: Optional[str] = None) -> Optional[WorkItem]:
+def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str, tenant_id: Optional[str] = None, isLike:bool = False) -> Optional[WorkItem]:
     try:
         supabase = supabase_client_var.get()
         if supabase is None:
@@ -539,8 +540,11 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
         if not tenant_id:
             tenant_id = subdomain
 
-
-        response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('activity_id', activity_id).eq('tenant_id', tenant_id).execute()
+        if isLike:
+            response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).ilike('activity_id', activity_id).eq('tenant_id', tenant_id).execute()
+        else:
+            response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('activity_id', activity_id).eq('tenant_id', tenant_id).execute()
+            
         
         if response.data:
             return WorkItem(**response.data[0])
@@ -548,6 +552,27 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
             return None
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    
+def fetch_workitems_by_root_proc_inst_id(root_proc_inst_id: str, tenant_id: Optional[str] = None) -> Optional[List[WorkItem]]:
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+            
+            
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+            
+        response = supabase.table('todolist').select("*").eq('root_proc_inst_id', root_proc_inst_id).eq('tenant_id', tenant_id).execute()
+        
+        if response.data:
+            return [WorkItem(**item) for item in response.data]
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    
 
 def fetch_workitem_by_id(workitem_id: str, tenant_id: Optional[str] = None) -> Optional[WorkItem]:
     try:
