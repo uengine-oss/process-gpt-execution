@@ -438,6 +438,7 @@ class ProcessInstance(BaseModel):
     status: str = None
     tenant_id: str
     proc_def_version: Optional[str] = None
+    execution_scope: Optional[str] = None
 
 
     class Config:
