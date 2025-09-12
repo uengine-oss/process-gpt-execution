@@ -543,6 +543,7 @@ def _create_or_get_process_instance(process_result: ProcessResult, process_resul
         process_instance = fetch_process_instance(process_result.instanceId, tenant_id)
         if process_instance.status == "NEW" and process_instance.parent_proc_inst_id == None:
             process_instance.proc_inst_name = process_result.instanceName
+            process_instance.root_proc_inst_id = process_result.instanceId
         return process_instance
 
 def _update_process_variables(process_instance: ProcessInstance, field_mappings: List[FieldMapping]):
@@ -1068,7 +1069,8 @@ def process_output(workitem, tenant_id):
         })
         return response.json()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"[ERROR] Error in process_output for workitem {workitem.get('id', 'unknown')}: {str(e)}")
+        return None
 
 
 
@@ -1545,11 +1547,7 @@ async def handle_workitem(workitem):
 
         execute_next_activity(completed_json, tenant_id)
         
-        try:
-            process_output(workitem, tenant_id)
-        except Exception as e:
-            print(f"[ERROR] Error in process_output for workitem {workitem['id']}: {str(e)}")
-            raise e
+        process_output(workitem, tenant_id)
 
     except Exception as e:
         print(f"[ERROR] Error in handle_workitem for workitem {workitem['id']}: {str(e)}")

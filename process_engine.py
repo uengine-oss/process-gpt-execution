@@ -4,7 +4,7 @@ from langchain_openai import ChatOpenAI
 from langchain.output_parsers.json import SimpleJsonOutputParser
 from datetime import datetime, timedelta
 
-from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, fetch_workitem_by_id, upsert_process_definition, fetch_assignee_info, upsert_process_instance_source
+from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, fetch_workitem_by_id, upsert_process_definition, fetch_assignee_info, upsert_process_instance_source, fetch_process_instance
 from process_definition import load_process_definition
 
 import traceback
@@ -79,9 +79,18 @@ async def submit_workitem(input: dict):
     process_definition_id = input.get('process_definition_id')
     activity_id = input.get('activity_id')
     project_id = input.get('project_id')
+    task_id = input.get('task_id')
     
     process_definition_json = fetch_process_definition(process_definition_id)
     process_definition = load_process_definition(process_definition_json)
+    
+    if task_id is not None:
+        workitem = fetch_workitem_by_id(task_id)
+        if workitem is not None:
+            activity_id = workitem.activity_id
+            process_definition_id = workitem.proc_def_id
+            process_instance_id = workitem.proc_inst_id
+            project_id = workitem.project_id
 
     if activity_id is None:
         activity_id = process_definition.find_initial_activity().id
@@ -120,12 +129,16 @@ async def submit_workitem(input: dict):
         user_email = input.get('email')
         
     workitem = None
-    if process_instance_id != "new":
-        workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_id, activity_id)
+    if process_instance_id is not None:
+        process_instance = fetch_process_instance(process_instance_id)
+        if process_instance is not None:
+            workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_id, activity_id)
+        else:
+            process_instance_id = f"{process_definition_id.lower()}.{str(uuid.uuid4())}"
+            await create_process_instance(process_definition, process_instance_id, False, role_bindings, project_id)
     else:
-        process_instance_id = f"{process_definition_id.lower()}.{str(uuid.uuid4())}"
-        await create_process_instance(process_definition, process_instance_id, False, role_bindings, project_id)
-
+        raise HTTPException(status_code=400, detail="Process instance id is required")
+    
     now = datetime.now(pytz.timezone('Asia/Seoul'))
     start_date = now.isoformat()
     due_date = now + timedelta(days=activity.duration) if activity.duration else None
@@ -526,7 +539,7 @@ async def handle_get_feedback_diff(request: Request):
         gateways = []
         sequences = []
         next_item = process_definition.find_next_item(activity_id)
-        if 'task' not in next_item.type:
+        if 'Task' not in next_item.type:
             gateways.append(next_item.model_dump())
             sequences = process_definition.find_sequences(next_item.id, None)
             sequences = [seq.model_dump() for seq in sequences]
@@ -552,6 +565,163 @@ async def handle_get_feedback_diff(request: Request):
 ############# end of feedback ##############
 
 
+############# start of rework complete #############
+async def create_new_workitem(workitem) -> dict:
+    today = datetime.now(pytz.timezone('Asia/Seoul'))
+    due_date = today + timedelta(days=workitem.duration) if workitem.duration else None
+    new_workitem = {
+        "id": str(uuid.uuid4()),
+        "user_id": workitem.user_id,
+        "username": workitem.username,
+        "proc_inst_id": workitem.proc_inst_id,
+        "proc_def_id": workitem.proc_def_id,
+        "activity_id": workitem.activity_id,
+        "activity_name": workitem.activity_name,
+        "start_date": today.isoformat(),
+        "due_date": due_date.isoformat() if due_date else None,
+        "status": 'TODO',
+        "assignees": workitem.assignees,
+        "reference_ids": workitem.reference_ids,
+        "duration": workitem.duration,
+        "tool": workitem.tool,
+        "description": workitem.description,
+        "output": workitem.output,
+        "tenant_id": workitem.tenant_id,
+        "project_id": workitem.project_id,
+        "root_proc_inst_id": workitem.root_proc_inst_id,
+        "agent_mode": workitem.agent_mode,
+        "agent_orch": workitem.agent_orch,
+        "rework_count": workitem.rework_count + 1
+    }
+    return new_workitem
+
+async def get_reference_workitems(workitem):
+    try:
+        reference_workitems = [workitem]
+        
+        # 프로세스 정의 가져오기
+        process_definition_json = fetch_process_definition(workitem.proc_def_id)
+        if not process_definition_json:
+            return reference_workitems
+            
+        process_definition = load_process_definition(process_definition_json)
+        
+        # 현재 워크아이템의 액티비티에서 폼 아이디 생성
+        current_activity = process_definition.find_activity_by_id(workitem.activity_id)
+        if not current_activity:
+            return reference_workitems
+            
+        current_form_id = workitem.tool.replace('formHandler:', '')
+        
+        # 모든 액티비티를 순회하며 현재 액티비티를 참조하는 액티비티들 찾기
+        for activity in process_definition.activities:
+            if not activity.inputData:
+                continue
+                
+            # 이 액티비티의 inputData에 현재 액티비티의 폼 아이디가 포함되어 있는지 확인
+            references_current = False
+            for input_field in activity.inputData:
+                if '.' in input_field:
+                    form_id = input_field.split('.')[0]
+                    if form_id == current_form_id:
+                        references_current = True
+                        break
+            
+            # 현재 액티비티를 참조하는 경우, 해당 액티비티의 워크아이템 찾기
+            if references_current:
+                referenced_workitem = fetch_workitem_by_proc_inst_and_activity(
+                    workitem.proc_inst_id, 
+                    activity.id, 
+                    workitem.tenant_id
+                )
+                
+                if referenced_workitem and referenced_workitem.status == 'DONE':
+                    reference_workitems.append(referenced_workitem)
+        
+        return reference_workitems
+        
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+async def get_all_next_workitems(workitem):
+    try:
+        process_definition_id = workitem.proc_def_id
+        process_definition_json = fetch_process_definition(process_definition_id)
+        process_definition = load_process_definition(process_definition_json)
+
+        next_activities = process_definition.find_all_following_activities(workitem.activity_id)
+        if next_activities is None:
+            return []
+        
+        next_workitems = [workitem]
+        for activity in next_activities:
+            next_workitem = fetch_workitem_by_proc_inst_and_activity(workitem.proc_inst_id, activity.id, workitem.tenant_id, False)
+            if next_workitem is None:
+                continue
+            if isinstance(next_workitem, list):
+                next_workitem = max(next_workitem, key=lambda x: x.rework_count)
+
+            if next_workitem.status == 'DONE':
+                next_workitems.append(next_workitem)
+
+        return next_workitems
+
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+async def handle_get_rework_activities(request: Request):
+    try:
+        body = await request.json()
+        activity_id = body.get('activityId')
+        instance_id = body.get('instanceId')
+        
+        workitem = fetch_workitem_by_proc_inst_and_activity(instance_id, activity_id)
+        if workitem is None:
+            raise HTTPException(status_code=400, detail="No workitem found")
+        
+        result = {
+            'reference': [],
+            'all': []
+        }
+        reference_items = await get_reference_workitems(workitem)
+        result['reference'] = [{'id': item.activity_id, 'name': item.activity_name} for item in reference_items]
+        all_items = await get_all_next_workitems(workitem)
+        result['all'] = [{'id': item.activity_id, 'name': item.activity_name} for item in all_items]
+
+        return result
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+async def handle_rework_complete(request: Request):
+    try:
+        body = await request.json()
+        activities = body.get('activities')
+        instance_id = body.get('instanceId')
+        
+        result = {}
+
+        for activity in activities:
+            activity_id = activity.get('id')
+            workitem = fetch_workitem_by_proc_inst_and_activity(instance_id, activity_id)
+            if workitem is None:
+                raise HTTPException(status_code=400, detail="No workitem found")
+            
+            new_workitem = await create_new_workitem(workitem)
+            db_result = upsert_workitem(new_workitem)
+            if db_result and hasattr(db_result, 'data') and db_result.data:
+                result[activity_id] = db_result.data[0]
+            else:
+                raise Exception(f"Failed to upsert workitem {new_workitem.get('id', 'unknown')} to database")
+        
+        return result
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e)) from e
+############# end of rework complete #############
+
 def add_routes_to_app(app) :
     app.add_api_route("/complete", handle_submit, methods=["POST"])
     app.add_api_route("/vision-complete", handle_submit, methods=["POST"])
@@ -559,6 +729,8 @@ def add_routes_to_app(app) :
     app.add_api_route("/initiate", handle_initiate, methods=["POST"])
     app.add_api_route("/get-feedback", handle_get_feedback, methods=["POST"])
     app.add_api_route("/get-feedback-diff", handle_get_feedback_diff, methods=["POST"])
+    app.add_api_route("/get-rework-activities", handle_get_rework_activities, methods=["POST"])
+    app.add_api_route("/rework-complete", handle_rework_complete, methods=["POST"])
 
 
 """

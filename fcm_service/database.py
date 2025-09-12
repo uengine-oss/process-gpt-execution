@@ -16,12 +16,8 @@ import firebase_admin
 import logging
 import asyncio
 
-db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
 subdomain_var = ContextVar('subdomain', default='localhost')
-
-jwt_secret_var = ContextVar('jwt_secret', default='')
-algorithm_var = ContextVar('algorithm', default='HS256')
 
 # 전역 변수로 변경
 firebase_app = None
@@ -38,23 +34,11 @@ def setting_database():
     try:
         if os.getenv("ENV") != "production":
             load_dotenv()
-
-        jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
-        jwt_secret_var.set(jwt_secret)
         
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_KEY")
         supabase: Client = create_client(supabase_url, supabase_key)
         supabase_client_var.set(supabase)
-        
-        db_config = {
-            "dbname": os.getenv("DB_NAME"),
-            "user": os.getenv("DB_USER"),
-            "password": os.getenv("DB_PASSWORD"),
-            "host": os.getenv("DB_HOST"),
-            "port": os.getenv("DB_PORT")
-        }
-        db_config_var.set(db_config)
         
     except Exception as e:
         print(f"Database configuration error: {e}")
@@ -241,34 +225,69 @@ def handle_new_notification(notification_record):
 def fetch_unprocessed_notifications() -> Optional[List[dict]]:
     try:
         pod_id = socket.gethostname()
-        db_config = db_config_var.get()
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        env = os.getenv("ENV")
 
-        connection = psycopg2.connect(**db_config)
-        cursor = connection.cursor(cursor_factory=RealDictCursor)
-
-        query = """
-            WITH locked_rows AS (
-                SELECT id FROM notifications
-                WHERE consumer IS NULL
-                FOR UPDATE SKIP LOCKED
-            )
-            UPDATE notifications
-            SET consumer = %s
-            FROM locked_rows
-            WHERE notifications.id = locked_rows.id
-            RETURNING *;
-        """
-
-        cursor.execute(query, (pod_id,))
-        affected_count = cursor.rowcount
-        rows = cursor.fetchall()
-
-        connection.commit()
-        cursor.close()
-        connection.close()
-
-        return rows if affected_count > 0 else None
-
+        # 1) ENV 기반 tenant 필터 적용 후 조회
+        if env == 'dev':
+            response = supabase.table('notifications') \
+                .select('*') \
+                .is_('consumer', 'null') \
+                .eq('tenant_id', 'uengine') \
+                .limit(10) \
+                .execute()
+        else:
+            response = supabase.table('notifications') \
+                .select('*') \
+                .is_('consumer', 'null') \
+                .neq('tenant_id', 'uengine') \
+                .limit(10) \
+                .execute()
+        
+        if not response.data:
+            return None
+        
+        # 2) 배치 업데이트 시도
+        notification_ids = [item['id'] for item in response.data]
+        updated_notifications = []
+        
+        try:
+            batch_update_response = supabase.table('notifications').update({
+                'consumer': pod_id,
+                'updated_at': datetime.now().isoformat()
+            }).in_('id', notification_ids).is_('consumer', 'null').execute()
+            
+            if batch_update_response.data:
+                updated_notifications = batch_update_response.data
+                realtime_logger.info(f"Successfully claimed {len(updated_notifications)} notifications for pod {pod_id}")
+            else:
+                realtime_logger.info("No notifications were claimed in batch update")
+                
+        except Exception as batch_error:
+            realtime_logger.warning(f"Batch update failed, falling back to individual updates: {batch_error}")
+            
+            # 3) 폴백: 개별 업데이트
+            for notification in response.data:
+                try:
+                    update_response = supabase.table('notifications').update({
+                        'consumer': pod_id,
+                        'updated_at': datetime.now().isoformat()
+                    }).eq('id', notification['id']).is_('consumer', 'null').execute()
+                    
+                    if update_response.data:
+                        updated_notifications.append(update_response.data[0])
+                        realtime_logger.info(f"Successfully claimed notification {notification['id']} for pod {pod_id}")
+                    else:
+                        realtime_logger.info(f"Notification {notification['id']} was already claimed by another pod")
+                except Exception as e:
+                    realtime_logger.warning(f"Failed to update notification {notification['id']}: {e}")
+                    continue
+        
+        return updated_notifications if updated_notifications else None
+        
     except Exception as e:
         realtime_logger.error(f"미처리 알림 fetch 실패: {str(e)}")
         return None

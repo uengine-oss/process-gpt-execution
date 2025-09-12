@@ -2,7 +2,7 @@ import os
 from supabase import create_client, Client
 from supabase.client import AsyncClient, create_async_client
 from pydantic import BaseModel, validator
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import uuid
 from process_definition import ProcessDefinition, load_process_definition, UIDefinition
 import psycopg2
@@ -491,6 +491,10 @@ class WorkItem(BaseModel):
     agent_orch: Optional[str] = None
     feedback: Optional[List[Dict[str, Any]]] = []
     temp_feedback: Optional[str] = None
+    execution_scope: Optional[str] = None
+    rework_count: Optional[int] = 0
+    project_id: Optional[str] = None
+    root_proc_inst_id: Optional[str] = None
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
@@ -506,22 +510,6 @@ class WorkItem(BaseModel):
         json_encoders = {
             datetime: lambda dt: dt.strftime("%Y-%m-%d %H:%M:%S")
         }
-
-
-def fetch_and_apply_system_data_sources(process_instance: ProcessInstance) -> None:
-    # 프로세스 정의에서 데이터스가 'system'인 변수를 처리
-    for variable in process_instance.process_definition.data:
-        if variable.dataSource and variable.dataSource.type == 'database':
-            sql_query = variable.dataSource.sql
-            if sql_query:
-                # SQL리 실행
-                result = execute_sql(sql_query)
-                if result:
-                    #리 결과를 프로세스 인스턴스 데이터에 추가
-                    setattr(process_instance, variable.name, result[0]['result'])
-
-
-    return process_instance
 
 
 def fetch_process_instance(full_id: str, tenant_id: Optional[str] = None) -> Optional[ProcessInstance]:
@@ -544,13 +532,7 @@ def fetch_process_instance(full_id: str, tenant_id: Optional[str] = None) -> Opt
 
         if response.data:
             process_instance_data = response.data[0]
-
-            if isinstance(process_instance_data.get('variables_data'), dict):
-                process_instance_data['variables_data'] = [process_instance_data['variables_data']]
-            
             process_instance = ProcessInstance(**process_instance_data)
-            process_instance = fetch_and_apply_system_data_sources(process_instance)
-            
             return process_instance
         else:
             return None
@@ -731,7 +713,12 @@ def fetch_todolist_by_proc_inst_id(proc_inst_id: str, tenant_id: Optional[str] =
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
-def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str, tenant_id: Optional[str] = None) -> Optional[WorkItem]:
+def fetch_workitem_by_proc_inst_and_activity(
+    proc_inst_id: str, 
+    activity_id: str, 
+    tenant_id: Optional[str] = None, 
+    recent_only: Optional[bool] = True
+) -> Union[WorkItem, List[WorkItem], None]:
     try:
         supabase = supabase_client_var.get()
         if supabase is None:
@@ -745,9 +732,31 @@ def fetch_workitem_by_proc_inst_and_activity(proc_inst_id: str, activity_id: str
         response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('activity_id', activity_id).eq('tenant_id', tenant_id).execute()
         
         if response.data:
-            return WorkItem(**response.data[0])
-        else:
-            return None
+            if len(response.data) > 1 and recent_only:
+                # updated_at이 가장 최근이거나, updated_at이 같으면 rework_count가 가장 큰 항목을 최근 워크아이템으로 간주
+                def get_recent_key(item):
+                    updated_at = item.get('updated_at')
+                    rework_count = item.get('rework_count', 0)
+                    
+                    if updated_at:
+                        try:
+                            if isinstance(updated_at, str):
+                                updated_at = datetime.fromisoformat(updated_at.replace('Z', '+00:00')).replace(tzinfo=None)
+                            elif hasattr(updated_at, 'replace'):
+                                updated_at = updated_at.replace(tzinfo=None)
+                        except:
+                            updated_at = None
+                    
+                    return (updated_at or datetime.min, rework_count)
+                
+                most_recent_item = max(response.data, key=get_recent_key)
+                return WorkItem(**most_recent_item)
+            elif len(response.data) > 1 and not recent_only:
+                return [WorkItem(**item) for item in response.data]
+            elif len(response.data) == 1:
+                return WorkItem(**response.data[0])
+            else:
+                return None
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 

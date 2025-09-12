@@ -308,6 +308,65 @@ class ProcessDefinition(BaseModel):
             if target_id is not None and seq.target == target_id:
                 sequences.append(seq)
         return sequences
+    
+    def find_all_following_activities(self, activity_id: str, visited: Optional[set] = None) -> List[ProcessActivity]:
+        """
+        특정 액티비티 이후에 진행될 모든 액티비티 목록을 재귀적으로 추출합니다.
+        
+        Args:
+            activity_id (str): 기준이 되는 액티비티 ID
+            visited (Optional[set]): 순환 참조 방지를 위한 방문한 노드 집합
+            
+        Returns:
+            List[ProcessActivity]: 해당 액티비티 이후에 진행될 모든 액티비티 목록
+        """
+        if visited is None:
+            visited = set()
+            
+        # 순환 참조 방지
+        if activity_id in visited:
+            return []
+            
+        visited.add(activity_id)
+        subsequent_activities = []
+        
+        # 현재 액티비티에서 나가는 모든 시퀀스 찾기
+        outgoing_sequences = [seq for seq in self.sequences if seq.source == activity_id]
+        
+        for sequence in outgoing_sequences:
+            target_id = sequence.target
+            
+            # 타겟이 액티비티인 경우
+            target_activity = self.find_activity_by_id(target_id)
+            if target_activity:
+                if target_activity not in subsequent_activities:
+                    subsequent_activities.append(target_activity)
+                # 재귀적으로 해당 액티비티 이후의 모든 액티비티 찾기
+                subsequent_activities.extend(self.find_all_following_activities(target_id, visited.copy()))
+                continue
+            
+            # 타겟이 게이트웨이인 경우
+            target_gateway = self.find_gateway_by_id(target_id)
+            if target_gateway:
+                # 게이트웨이에서 나가는 모든 시퀀스 찾기
+                gateway_outgoing = [seq for seq in self.sequences if seq.source == target_gateway.id]
+                for gw_seq in gateway_outgoing:
+                    gw_target_activity = self.find_activity_by_id(gw_seq.target)
+                    if gw_target_activity:
+                        if gw_target_activity not in subsequent_activities:
+                            subsequent_activities.append(gw_target_activity)
+                        # 재귀적으로 해당 액티비티 이후의 모든 액티비티 찾기
+                        subsequent_activities.extend(self.find_all_following_activities(gw_seq.target, visited.copy()))
+        
+        # 중복 제거
+        unique_activities = []
+        seen_ids = set()
+        for activity in subsequent_activities:
+            if activity.id not in seen_ids:
+                unique_activities.append(activity)
+                seen_ids.add(activity.id)
+                
+        return unique_activities
 
 def load_process_definition(definition_json: dict) -> ProcessDefinition:
     # Events를 게이트웨이 리스트에 추가
