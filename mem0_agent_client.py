@@ -4,12 +4,12 @@ import os
 from typing import Dict, List, Optional, Tuple, Any
 import json
 from datetime import datetime
-from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.schema.output_parser import StrOutputParser
 from langchain.schema.runnable import RunnablePassthrough
 from fastapi import HTTPException
 from database import fetch_chat_history
+from llm_factory import create_llm
 
 if os.getenv("ENV") != "production":
     load_dotenv(override=True)
@@ -22,11 +22,8 @@ DB_NAME = os.getenv("DB_NAME")
 
 connection_string = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
-openai_api_key = os.getenv("OPENAI_API_KEY")
-if not openai_api_key:
-    raise ValueError("OPENAI_API_KEY가 설정되지 않았습니다. .env 파일을 확인해주세요.")
-
-llm = ChatOpenAI(openai_api_key=openai_api_key, model="gpt-4o")
+# LLM 객체 생성 (공통 팩토리 사용)
+llm = create_llm(model="gpt-4o", streaming=True)
 
 intent_analysis_prompt = PromptTemplate.from_template(
     """이전 대화 내역과 사용자의 메시지를 바탕으로 다음 사용자의 의도를 분석해주세요.

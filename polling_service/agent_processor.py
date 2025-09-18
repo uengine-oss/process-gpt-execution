@@ -1,6 +1,6 @@
 from langchain.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
 from langchain.output_parsers.json import SimpleJsonOutputParser
+from llm_factory import create_llm
 from fastapi import HTTPException
 from dotenv import load_dotenv
 import json
@@ -24,8 +24,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ChatOpenAI 객체 생성
-model = ChatOpenAI(model="gpt-4o", streaming=True)
+# LLM 객체 생성 (공통 팩토리 사용)
+model = create_llm(model="gpt-4o", streaming=True)
 
 # parser 생성
 class CustomJsonOutputParser(SimpleJsonOutputParser):

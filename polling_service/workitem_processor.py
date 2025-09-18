@@ -1,7 +1,7 @@
 from langchain.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
 from langchain.schema import Document
 from langchain.output_parsers.json import SimpleJsonOutputParser
+from llm_factory import create_llm
 from pydantic import BaseModel
 from typing import List, Optional, Any, Tuple
 import json
@@ -36,8 +36,8 @@ from mcp_processor import mcp_processor
 if os.getenv("ENV") != "production":
     load_dotenv(override=True)
 
-# ChatOpenAI 객체 생성
-model = ChatOpenAI(model="gpt-4o", streaming=True, temperature=0)
+# LLM 객체 생성 (공통 팩토리 사용)
+model = create_llm(model="gpt-4o", streaming=True, temperature=0)
 
 # parser 생성
 class CustomJsonOutputParser(SimpleJsonOutputParser):

@@ -2,8 +2,8 @@ from fastapi import HTTPException, Request
 from typing import List, Optional
 import json
 from langchain.prompts import PromptTemplate
-from langchain.chat_models import ChatOpenAI
 from langchain.output_parsers.json import SimpleJsonOutputParser
+from llm_factory import create_llm, create_openai_llm
 from langchain_core.runnables import RunnableLambda
 from langserve import add_routes
 from pydantic import BaseModel
@@ -12,8 +12,8 @@ from database import fetch_all_process_definitions
 from process_var_sql_gen import get_process_definitions
 
 
-model = ChatOpenAI(model="gpt-4o")
-vision_model = ChatOpenAI(model="gpt-4-vision-preview", max_tokens = 4096)
+model = create_llm()
+vision_model = create_openai_llm(model="gpt-4-vision-preview", max_tokens=4096)
 
 parser = SimpleJsonOutputParser()
 

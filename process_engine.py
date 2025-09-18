@@ -1,7 +1,7 @@
 from fastapi import Request, HTTPException
 from langchain.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
 from langchain.output_parsers.json import SimpleJsonOutputParser
+from llm_factory import create_llm
 from datetime import datetime, timedelta
 
 from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, fetch_workitem_by_id, upsert_process_definition, fetch_assignee_info, upsert_process_instance_source, fetch_process_instance
@@ -12,8 +12,8 @@ import uuid
 import json
 import pytz
 
-# ChatOpenAI 객체 생성
-model = ChatOpenAI(model="gpt-4o", streaming=True)
+# LLM 객체 생성 (공통 팩토리 사용)
+model = create_llm(model="gpt-4o", streaming=True)
 
 # parser 생성
 import re

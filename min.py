@@ -1,6 +1,6 @@
 from fastapi import FastAPI
-from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate
+from llm_factory import create_llm
 from langchain.schema.output_parser import StrOutputParser
 from langchain.output_parsers.json import SimpleJsonOutputParser
 from langserve import add_routes
@@ -35,8 +35,8 @@ prompt_template = ChatPromptTemplate.from_template(
     """
     )
 
-# OpenAI 언어 모델 인스턴스 생성
-model = ChatOpenAI(model="gpt-3.5-turbo")
+# LLM 인스턴스 생성 (공통 팩토리 사용)
+model = create_llm(model="gpt-3.5-turbo")
 
 # 출력 파서 생성
 output_parser = SimpleJsonOutputParser()

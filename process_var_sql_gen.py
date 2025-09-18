@@ -1,7 +1,7 @@
 from fastapi import HTTPException, Request
 from langchain.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
 from langserve import add_routes
+from llm_factory import create_llm
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from database import fetch_all_process_definition_ids, execute_sql, generate_create_statement_for_table, fetch_all_process_definitions, upsert_chat_message, fetch_todolist_by_user_id, fetch_process_instance_list, subdomain_var, fetch_ui_definition, get_vector_store, fetch_all_ui_definition, fetch_organization_chart
 from process_engine import submit_workitem
@@ -14,10 +14,6 @@ import requests
 
 from datetime import date
 from pathlib import Path
-import openai
-
-import os
-openai_api_key = os.getenv("OPENAI_API_KEY")
 
 # vector
 # from langchain_openai import OpenAIEmbeddings
@@ -28,8 +24,8 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 
 parser = SimpleJsonOutputParser()
 
-# 1. OpenAI Chat Model 생성
-model = ChatOpenAI(model="gpt-4o", streaming=True)
+# 1. LLM 생성 (공통 팩토리 사용)
+model = create_llm(model="gpt-4o", streaming=True)
 
 prompt = PromptTemplate.from_template(
     """
