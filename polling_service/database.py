@@ -9,6 +9,7 @@ from decimal import Decimal
 from datetime import datetime, timedelta
 from contextvars import ContextVar
 from dotenv import load_dotenv
+from llm_factory import create_llm
 
 import pytz
 import socket
@@ -578,6 +579,27 @@ def fetch_workitems_by_root_proc_inst_id(root_proc_inst_id: str, tenant_id: Opti
             return None
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+def fetch_workitems_by_proc_inst_id(proc_inst_id: str, tenant_id: Optional[str] = None) -> Optional[List[WorkItem]]:
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+            
+            
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+            
+        response = supabase.table('todolist').select("*").eq('proc_inst_id', proc_inst_id).eq('tenant_id', tenant_id).execute()
+        
+        if response.data:
+            return [WorkItem(**item) for item in response.data]
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
     
 
 def fetch_workitem_by_id(workitem_id: str, tenant_id: Optional[str] = None) -> Optional[WorkItem]:
@@ -1123,6 +1145,17 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                 workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
                 workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
 
+                # browser-automation-agent인 경우 상세한 description 생성
+                if workitem.agent_orch == 'browser-automation-agent':
+                    print(f"[DEBUG] Generating browser automation description for workitem: {workitem.id}")
+                    try:
+                        updated_description = _generate_browser_automation_description(
+                            process_instance_data, workitem.id, tenant_id
+                        )
+                        if updated_description and updated_description != workitem.description:
+                            workitem_dict["description"] = updated_description
+                    except Exception as e:
+                        print(f"[ERROR] Failed to generate browser automation description: {str(e)}")
 
                 supabase = supabase_client_var.get()
                 if supabase is None:
@@ -1272,6 +1305,110 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
     except Exception as e:
         print(f"[ERROR] upsert_todo_workitems: {str(e)}")
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+def _generate_browser_automation_description(
+    process_instance_data: dict, 
+    current_activity_id, 
+    tenant_id: str
+) -> str:
+    """
+    browser-automation-agent용 상세한 description을 생성합니다.
+    """
+    try:
+        # 이전 workitem들을 가져와서 사용자 요청사항과 프로세스 흐름 파악
+        all_workitems = fetch_workitems_by_proc_inst_id(process_instance_data['proc_inst_id'], tenant_id)
+        
+        # 이전, 현재, 이후 workitem 정보 분석 (status 기반)
+        done_workitems = []
+        current_workitem = None
+        next_workitems = []
+        
+        if all_workitems:
+            for workitem in all_workitems:
+                workitem_info = {
+                    "activity_name": workitem.activity_name,
+                    "description": workitem.description,
+                    "status": workitem.status,
+                    "output": workitem.output,
+                    "activity_id": workitem.activity_id
+                }
+                
+                if workitem.status in ['DONE', 'COMPLETED', 'SUBMITTED']:
+                    done_workitems.append(workitem_info)
+                elif workitem.id == current_activity_id:
+                    current_workitem = workitem_info
+                else:
+                    next_workitems.append(workitem_info)
+        
+        # LLM을 사용하여 상세한 description 생성
+        prompt_template = """
+당신은 browser-automation-agent(browser-use)가 웹 브라우저를 통해 작업을 수행할 수 있도록 상세한 단계별 설명을 생성하는 AI입니다.
+
+=== 현재 작업 ===
+{current_workitem}
+
+=== 이전 작업들 ===
+{done_workitems}
+
+=== 이후 작업들 ===
+{next_workitems}
+
+=== 분석 요구사항 ===
+1. 이전 작업에서 사용자가 입력한 구체적인 내용을 파악하세요
+2. 이후 작업에서 어떤 결과물이 필요한지 파악하세요
+3. 현재 작업이 전체 프로세스에서 어떤 역할을 하는지 이해하세요
+4. 이후 작업이 URL 제공이나 파일 다운로드라면, 현재 작업에서 해당 결과물을 얻어내는 단계를 포함하세요
+
+=== 생성 요구사항 ===
+- browser-use가 웹 브라우저를 통해 수행할 수 있는 구체적인 단계별 설명을 생성하세요
+- 각 단계는 실행 가능하고 명확해야 합니다
+- 이전 작업의 입력 내용을 활용하세요
+- 이후 작업에 필요한 결과물을 생성하는 단계를 포함하세요
+- ppt 생성의 경우 https://www.genspark.ai/ 를 이용하도록 설명하세요
+
+형식:
+1. [단계명]: [구체적인 수행 방법]
+2. [단계명]: [구체적인 수행 방법]
+...
+
+예시 (PPT 생성의 경우):
+1. 구글 접속: https://www.google.com 에 접속
+2. Genspark.io 접속: 검색창에 "genspark.io" 입력 후 엔터, 첫 번째 결과 클릭
+3. 구글 로그인: "Sign in with Google" 버튼 클릭, 제공된 계정 정보로 로그인
+4. PPT 생성 요청: 텍스트 입력창에 사용자 요청사항 입력 후 생성 버튼 클릭
+5. 결과 확인: 생성된 PPT 미리보기 확인
+6. 결과 URL 획득: 생성된 PPT의 다운로드 링크 또는 공유 URL을 복사하여 저장
+
+상세한 단계별 설명을 생성해주세요:
+"""
+
+        print(f"[DEBUG] current_workitem: {current_workitem}")
+        print(f"[DEBUG] done_workitems: {done_workitems}")
+        print(f"[DEBUG] next_workitems: {next_workitems}")
+
+        prompt = prompt_template.format(
+            current_workitem=current_workitem,
+            done_workitems=done_workitems,
+            next_workitems=next_workitems
+        )
+        
+        # LLM 호출
+        model = create_llm(model="gpt-4o", streaming=True, temperature=0)
+        response = model.invoke(prompt)
+        
+        # 응답에서 단계별 설명 추출
+        if hasattr(response, 'content'):
+            description = response.content
+        else:
+            description = str(response)
+        
+        return description.strip()
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to generate browser automation description: {str(e)}")
+        # 기본 description 반환
+        return None
 
 
 def upsert_workitem(workitem_data: dict, tenant_id: Optional[str] = None):

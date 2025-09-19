@@ -951,6 +951,28 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
     upsert_cancelled_workitem(process_instance.model_dump(), process_result_json, process_definition, tenant_id)
     next_workitems = upsert_next_workitems(process_instance.model_dump(), process_result_json, process_definition, tenant_id)
     
+    # browser-automation-agent인 workitem들의 description 업데이트
+    if next_workitems:
+        for workitem in next_workitems:
+            if workitem.agent_orch == 'browser-automation-agent':
+                print(f"[DEBUG] Updating browser automation description for workitem: {workitem.id}")
+                try:
+                    activity = process_definition.find_activity_by_id(workitem.activity_id)
+                    if activity:
+                        # 이전 workitem들을 가져와서 사용자 요청사항과 프로세스 흐름 파악
+                        all_workitems = fetch_workitems_by_root_proc_inst_id(process_instance.root_proc_inst_id, tenant_id)
+                        updated_description = generate_browser_automation_description(
+                            process_instance.model_dump(), process_definition, activity, all_workitems, tenant_id
+                        )
+                        if updated_description != workitem.description:
+                            upsert_workitem({
+                                "id": workitem.id,
+                                "description": updated_description
+                            }, tenant_id)
+                            print(f"[DEBUG] Updated description for workitem {workitem.id}: {updated_description[:100]}...")
+                except Exception as e:
+                    print(f"[ERROR] Failed to update browser automation description: {str(e)}")
+    
     # Upsert process instance
     if process_instance.status == "NEW":
         process_instance.proc_inst_name = process_result.instanceName
@@ -1962,6 +1984,104 @@ async def handle_pending_workitem(workitem):
     except Exception as e:
         print(f"[ERROR] Error in handle_pending_workitem for workitem {workitem.get('id')}: {str(e)}")
         raise e
+
+
+def generate_browser_automation_description(
+    process_instance_data: dict, 
+    process_definition, 
+    current_activity, 
+    all_workitems: list,
+    tenant_id: str
+) -> str:
+    """
+    browser-automation-agent용 상세한 description을 생성합니다.
+    """
+    try:
+        # 이전 workitem들의 정보 수집
+        previous_context = []
+        user_requirements = []
+        
+        for workitem in all_workitems:
+            if workitem.status in ['DONE', 'COMPLETED', 'SUBMITTED'] and workitem.description:
+                previous_context.append(f"- {workitem.activity_name}: {workitem.description}")
+                # 사용자 요청사항이 포함된 workitem 찾기
+                if any(keyword in workitem.description.lower() for keyword in ['생성', '만들', '작성', '요청', '원해', '필요']):
+                    user_requirements.append(workitem.description)
+        
+        # 사용자 입력에서 요청사항 추출 (output에서)
+        for workitem in all_workitems:
+            if workitem.output and isinstance(workitem.output, dict):
+                for key, value in workitem.output.items():
+                    if isinstance(value, dict):
+                        for sub_key, sub_value in value.items():
+                            if sub_value and isinstance(sub_value, str) and any(keyword in sub_value.lower() for keyword in ['생성', '만들', '작성', '요청', '원해', '필요']):
+                                user_requirements.append(f"사용자 입력 ({sub_key}): {sub_value}")
+        
+        # 프로세스 정의에서 전체 흐름 파악
+        process_flow = []
+        if hasattr(process_definition, 'activities'):
+            for activity in process_definition.activities:
+                if activity.get('name'):
+                    process_flow.append(f"- {activity.get('name')}: {activity.get('description', '')}")
+        
+        # LLM을 사용하여 상세한 description 생성
+        prompt_template = """
+당신은 browser-automation-agent(browser-use)가 웹 브라우저를 통해 작업을 수행할 수 있도록 상세한 단계별 설명을 생성하는 AI입니다.
+
+현재 작업: {current_activity_name}
+작업 설명: {current_activity_description}
+
+이전 작업들:
+{previous_context}
+
+사용자 요청사항:
+{user_requirements}
+
+전체 프로세스 흐름:
+{process_flow}
+
+위 정보를 바탕으로 browser-use가 수행할 수 있는 상세한 단계별 설명을 생성해주세요.
+각 단계는 구체적이고 실행 가능해야 하며, 웹 브라우저를 통한 작업에 최적화되어야 합니다.
+
+형식:
+1. [단계명]: [구체적인 수행 방법]
+2. [단계명]: [구체적인 수행 방법]
+...
+
+예시 (PPT 생성의 경우):
+1. 구글 접속: https://www.google.com 에 접속
+2. Genspark.io 접속: 검색창에 "genspark.io" 입력 후 엔터, 첫 번째 결과 클릭
+3. 구글 로그인: "Sign in with Google" 버튼 클릭, 제공된 계정 정보로 로그인 (ID: {id}, PW: {pw})
+4. PPT 생성 요청: 텍스트 입력창에 사용자 요청사항 입력 후 생성 버튼 클릭
+5. 결과 확인: 생성된 PPT 미리보기 확인
+6. 결과 반환: 생성된 PPT의 다운로드 링크 또는 직접 결과 반환
+
+상세한 단계별 설명을 생성해주세요:
+"""
+
+        prompt = prompt_template.format(
+            current_activity_name=current_activity.get('name', ''),
+            current_activity_description=current_activity.get('description', ''),
+            previous_context='\n'.join(previous_context) if previous_context else '없음',
+            user_requirements='\n'.join(user_requirements) if user_requirements else '없음',
+            process_flow='\n'.join(process_flow) if process_flow else '없음'
+        )
+        
+        # LLM 호출
+        response = model.invoke(prompt)
+        
+        # 응답에서 단계별 설명 추출
+        if hasattr(response, 'content'):
+            description = response.content
+        else:
+            description = str(response)
+        
+        return description.strip()
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to generate browser automation description: {str(e)}")
+        # 기본 description 반환
+        return current_activity.get('description', '웹 브라우저를 통한 작업을 수행합니다.')
 
     
     
