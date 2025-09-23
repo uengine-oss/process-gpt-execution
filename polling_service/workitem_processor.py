@@ -972,6 +972,22 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
                             print(f"[DEBUG] Updated description for workitem {workitem.id}: {updated_description[:100]}...")
                 except Exception as e:
                     print(f"[ERROR] Failed to update browser automation description: {str(e)}")
+            try:
+                input_data = get_input_data(workitem.model_dump(), process_definition)
+                if input_data:
+                    try:
+                        input_data_str = json.dumps(input_data, ensure_ascii=False)
+                    except Exception:
+                        input_data_str = str(input_data)
+                    base_desc = workitem.description or ""
+                    augmented_desc = f"{base_desc}\n\n[input_data]\n{input_data_str}" if base_desc else f"[input_data]\n{input_data_str}"
+                    if augmented_desc != workitem.description:
+                        upsert_workitem({
+                            "id": workitem.id,
+                            "description": augmented_desc
+                        }, tenant_id)
+            except Exception as e:
+                print(f"[ERROR] Failed to append input_data to description for workitem {workitem.id}: {str(e)}")
     
     # Upsert process instance
     if process_instance.status == "NEW":
