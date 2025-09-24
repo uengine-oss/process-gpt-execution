@@ -175,6 +175,15 @@ async def submit_workitem(input: dict):
             workitem_data['revert_from'] = revert_from
             workitem_data['id'] = str(uuid.uuid4())
     else:
+        reference_ids = []
+        if prev_activities and len(prev_activities) > 0:
+            for prev_activity in prev_activities:
+                if isinstance(prev_activity, dict):
+                    if prev_activity.get('status') == 'SUBMITTED':
+                        reference_ids.append(prev_activity.get('id'))
+                else:
+                    reference_ids.append(prev_activity.id)
+
         workitem_data = {
             "id": str(uuid.uuid4()),
             "user_id": user_info.get('id'),
@@ -187,7 +196,7 @@ async def submit_workitem(input: dict):
             "due_date": due_date,
             "status": 'SUBMITTED',
             "assignees": role_bindings,
-            "reference_ids": prev_activities,
+            "reference_ids": reference_ids,
             "duration": activity.duration,
             "tool": activity.tool,
             "output": output,

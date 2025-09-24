@@ -32,6 +32,7 @@ class ProcessActivity(BaseModel):
     type: str
     description: str
     instruction: Optional[str] = None
+    attachedEvents: Optional[List[str]] = Field(default_factory=list)
     role: str
     inputData: Optional[List[str]] = Field(default_factory=list)
     outputData: Optional[List[str]] = Field(default_factory=list)
@@ -52,6 +53,17 @@ class ProcessActivity(BaseModel):
             return self.id == other.id  # 또는 다른 비교 로직을 사용
         return False
 
+class SubProcess(BaseModel):
+    name: str
+    id: str
+    type: str
+    role: str
+    attachedEvents: Optional[List[str]] = Field(default_factory=list)
+    properties: Optional[str] = None
+    duration: Optional[int] = None
+    srcTrg: Optional[str] = None
+    children: Optional["ProcessDefinition"] = None
+
 class ProcessSequence(BaseModel):
     id: str
     source: str
@@ -66,16 +78,18 @@ class ProcessGateway(BaseModel):
     type: Optional[str] = None
     process: Optional[str] = None
     condition: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    conditionData: Optional[List[str]] = None
     properties: Optional[str] = None
     description: Optional[str] = None
     srcTrg: Optional[str] = None
     duration: Optional[int] = None
+    agentMode: Optional[str] = None
+    orchestration: Optional[str] = None
     @root_validator(pre=True)
     def check_condition(cls, values):
         if values.get('condition') == "":
             values['condition'] = {}
         return values
-
 class ProcessDefinition(BaseModel):
     processDefinitionName: str
     processDefinitionId: str
@@ -83,6 +97,7 @@ class ProcessDefinition(BaseModel):
     data: Optional[List[ProcessData]] = []
     roles: Optional[List[ProcessRole]] = []
     activities: Optional[List[ProcessActivity]] = []
+    subProcesses: Optional[List[SubProcess]] = []
     sequences: Optional[List[ProcessSequence]] = []
     gateways: Optional[List[ProcessGateway]] = []
 

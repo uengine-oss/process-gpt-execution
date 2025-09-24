@@ -344,6 +344,51 @@ class ProcessDefinition(BaseModel):
                 continue
         return results
 
+    def find_near_next_activities(self, current_item_id: str, include_events: bool = True):
+        results: List = []
+        visited: set = set()
+
+        def expand(node_id: str):
+            if node_id in visited:
+                return
+            visited.add(node_id)
+
+            sub = self.find_sub_process_by_id(node_id)
+            if sub:
+                if sub not in results:
+                    results.append(sub)
+                return
+
+            act = self.find_activity_by_id(node_id)
+            if act:
+                if act not in results:
+                    results.append(act)
+                return
+
+            # Event is represented as a gateway with 'event' in type
+            ev = self.find_event_by_id(node_id)
+            if ev and include_events:
+                if ev not in results:
+                    results.append(ev)
+                return
+
+            gw = self.find_gateway_by_id(node_id)
+            if gw:
+                # If it's an event and events are excluded, do not add but stop expanding
+                if getattr(gw, "type", None) and "event" in gw.type and not include_events:
+                    return
+                # Traverse through the gateway to the next nodes
+                for seq in self.sequences:
+                    if seq.source == gw.id:
+                        expand(seq.target)
+                return
+
+        # Start from direct outgoing edges of current item
+        for seq in self.sequences:
+            if seq.source == current_item_id:
+                expand(seq.target)
+
+        return results
 
     def find_next_sub_process(self, current_activity_id: str) -> Optional[SubProcess]:
         for sequence in self.sequences:
