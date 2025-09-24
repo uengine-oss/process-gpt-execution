@@ -177,6 +177,7 @@ Runtime Context:
 Instructions:
 1) 기본 완료 조건
 - submitted_output 이 activities 의 checkpoints 만족하는지를 기준으로 결과를 "DONE" 과 "PENDING" 중에서 출력한다.
+- checkpoints 가 없으면 출력 결과를 "DONE" 으로 출력한다.
 - 현재 activity_id를 type="activity" 으로 completedActivities에 추가한다.
 - user feedback message 옵션이 빈 값이 아닌 경우 checkpoints 와 마찬가지로 submitted_output 이 user feedback message 를 만족하는지 확인하여 결과를 출력한다.
 

@@ -184,7 +184,14 @@ class SequenceFlow:
         if value is None:
             value = self.properties.get("feedback")
         if value is None and isinstance(self.properties.get("type"), str):
-            value = self.properties.get("type")
+            t = self.properties.get("type")
+            # Normalize and check explicit feedback-like type markers first
+            if isinstance(t, str) and t.strip().lower() in {"feedback", "back", "rollback"}:
+                return True
+            value = t
+        # Also treat explicit strings as feedback
+        if isinstance(value, str) and value.strip().lower() in {"feedback", "back", "rollback"}:
+            return True
         return _is_truthy(value)
 
     def getSourceActivity(self) -> ActivityNode:
@@ -358,40 +365,98 @@ class BlockFinder:
         if join_node is None:
             return None
 
-        branch_count = self.graph.count_incoming(join_node, ignore_feedback=True)
-        if branch_count < 2:
-            auto_join = self.graph.find_nearest_join(join_node)
-            if auto_join is not None:
-                join_node = auto_join
-                branch_count = self.graph.count_incoming(join_node, ignore_feedback=True)
+        # 1) branch_count 계산: (a) 본인 incoming 비피드백 시퀀스 수,
+        #    (b) 바로 전단계 게이트웨이가 있으면 그 게이트웨이 incoming 비피드백 시퀀스 수
+        def _non_feedback_in(flows):
+            return [f for f in flows if not f.isFeedback()]
 
-        core = _BlockFinderCore(join_node)
-        members = core.getBlockMembers()
+        def _non_feedback_out(flows):
+            return [f for f in flows if not f.isFeedback()]
 
-        if not members:
+        incoming_to_join = _non_feedback_in(join_node.getIncomingSequenceFlows())
+        branch_count = len(incoming_to_join)
+
+        # 바로 전단계 게이트웨이 확인
+        prior_gateways: List[ActivityNode] = []
+        for f in incoming_to_join:
+            src = f.getSourceActivity()
+            if src and self.graph.is_gateway(src):
+                prior_gateways.append(src)
+        if branch_count < 2 and prior_gateways:
+            gw = prior_gateways[0]
+            branch_count = len(_non_feedback_in(gw.getIncomingSequenceFlows()))
+
+        # 2) 역방향 탐색으로 split 후보 찾기:
+        #    outgoing(비피드백) 개수가 branch_count와 같은 가장 가까운 노드를 split으로 선택
+        from collections import deque
+
+        visited: Set[ActivityNode] = set()
+        queue = deque([join_node])
+        start_candidate: Optional[ActivityNode] = None
+
+        while queue:
+            node = queue.popleft()
+            if node in visited:
+                continue
+            visited.add(node)
+
+            out_cnt = len(_non_feedback_out(node.getOutgoingSequenceFlows()))
+            if out_cnt == branch_count:
+                start_candidate = node
+                break
+
+            for f in _non_feedback_in(node.getIncomingSequenceFlows()):
+                src = f.getSourceActivity()
+                if src and src not in visited:
+                    queue.append(src)
+
+        # 3) 사이 노드 수집: split -> join까지의 모든 노드(비피드백 경로) 집합
+        between_nodes: List[str] = []
+        possible_children: List[str] = []
+
+        if start_candidate is not None:
+            # split이 게이트웨이면 즉시 하위의 액티비티/서브프로세스/이벤트를 수집
+            if self.graph.is_gateway(start_candidate):
+                for f in _non_feedback_out(start_candidate.getOutgoingSequenceFlows()):
+                    tgt = f.getTargetActivity()
+                    if tgt and not self.graph.is_gateway(tgt):
+                        possible_children.append(tgt.getTracingTag())
+
+            # split에서 join까지 도달 가능한 노드들(비피드백 경로)을 수집
+            fwd_visited: Set[ActivityNode] = set()
+            fwd_queue = deque([start_candidate])
+            while fwd_queue:
+                cur = fwd_queue.popleft()
+                if cur in fwd_visited:
+                    continue
+                fwd_visited.add(cur)
+
+                if cur is not start_candidate and cur is not join_node:
+                    between_nodes.append(cur.getTracingTag())
+
+                if cur is join_node:
+                    continue
+
+                for f in _non_feedback_out(cur.getOutgoingSequenceFlows()):
+                    nxt = f.getTargetActivity()
+                    if nxt and nxt not in fwd_visited:
+                        fwd_queue.append(nxt)
+
             return BlockResult(
-                start_container_id=None,
+                start_container_id=start_candidate.getTracingTag(),
                 end_container_id=join_node.getTracingTag(),
                 branch_count=branch_count,
-                block_members=[],
-                possible_block_members=[],
+                block_members=between_nodes,
+                possible_block_members=possible_children,
             )
 
-        possible_members = _BlockFinderCore.getPossibleBlockMembers(members, process_instance)
-        distinct_possible = []
-        seen_ids: Set[str] = set()
-        for node in possible_members:
-            node_id = node.getTracingTag()
-            if node_id not in seen_ids:
-                seen_ids.add(node_id)
-                distinct_possible.append(node_id)
-
+        # fallback: split을 찾지 못한 경우 안전 반환
         return BlockResult(
-            start_container_id=members[-1].getTracingTag(),
+            start_container_id=None,
             end_container_id=join_node.getTracingTag(),
             branch_count=branch_count,
-            block_members=[member.getTracingTag() for member in members],
-            possible_block_members=distinct_possible,
+            block_members=[],
+            possible_block_members=[],
         )
 
     @staticmethod
