@@ -49,6 +49,8 @@ class ProcessGraph:
         self.sequence_flows: List[SequenceFlow] = []
         self._build_nodes()
         self._build_sequences()
+        # Infer feedback edges topologically (back-edges) and mark them
+        self._infer_feedback_flows()
 
     def resolve_node(self, node_or_id: Union[str, ActivityNode, None]) -> Optional[ActivityNode]:
         if isinstance(node_or_id, ActivityNode):
@@ -131,6 +133,85 @@ class ProcessGraph:
             or _call_optional(self.process_definition, "find_event_by_id", node_id)
         )
 
+    def _infer_feedback_flows(self) -> None:
+        # 1) pick start nodes: prefer startEvent; fallback to nodes with no incoming
+        start_nodes: List[ActivityNode] = []
+        for node in self.nodes.values():
+            raw = getattr(node, 'raw', None)
+            t = getattr(raw, 'type', None)
+            if isinstance(t, str) and 'start' in t.lower():
+                start_nodes.append(node)
+        if not start_nodes:
+            for node in self.nodes.values():
+                if not [f for f in node.getIncomingSequenceFlows() if not f.isFeedback()]:
+                    start_nodes.append(node)
+        if not start_nodes:
+            # if still empty, choose arbitrary nodes to avoid NPE; levels remain 0
+            start_nodes = list(self.nodes.values())
+
+        # 2) level labeling via BFS ignoring explicit feedback
+        from collections import deque as _deque
+        INF = 10**9
+        level: Dict[ActivityNode, int] = {n: INF for n in self.nodes.values()}
+        dq = _deque()
+        for s in start_nodes:
+            level[s] = 0
+            dq.append(s)
+        while dq:
+            cur = dq.popleft()
+            cur_level = level[cur]
+            for flow in cur.getOutgoingSequenceFlows():
+                if flow.isFeedback():
+                    continue
+                nxt = flow.getTargetActivity()
+                if nxt is None:
+                    continue
+                if level.get(nxt, INF) > cur_level + 1:
+                    level[nxt] = cur_level + 1
+                    dq.append(nxt)
+
+        # 3) candidate back-edges: source.level >= target.level; confirm cycle t->...->s without this flow
+        # build adjacency (excluding explicit feedback) for cycle test
+        adj: Dict[ActivityNode, List[ActivityNode]] = {n: [] for n in self.nodes.values()}
+        for flow in self.sequence_flows:
+            if flow.isFeedback():
+                continue
+            u = flow.getSourceActivity()
+            v = flow.getTargetActivity()
+            if u and v:
+                adj[u].append(v)
+
+        def _reachable(src: ActivityNode, dst: ActivityNode, skip_flow: SequenceFlow) -> bool:
+            seen: Set[ActivityNode] = set()
+            q = _deque([src])
+            while q:
+                x = q.popleft()
+                if x in seen:
+                    continue
+                seen.add(x)
+                if x is dst:
+                    return True
+                for flow in x.getOutgoingSequenceFlows():
+                    if flow is skip_flow or flow.isFeedback():
+                        continue
+                    y = flow.getTargetActivity()
+                    if y and y not in seen:
+                        q.append(y)
+            return False
+
+        for flow in self.sequence_flows:
+            if flow.isFeedback():
+                continue
+            s = flow.getSourceActivity()
+            t = flow.getTargetActivity()
+            if s is None or t is None:
+                continue
+            ls = level.get(s, INF)
+            lt = level.get(t, INF)
+            if ls >= lt and lt != INF:
+                if _reachable(t, s, flow):
+                    flow.properties["__inferredFeedback"] = True
+
 
 class ActivityNode:
     __slots__ = ("id", "raw", "_graph", "_incoming", "_outgoing")
@@ -180,16 +261,17 @@ class SequenceFlow:
         self.properties = properties or {}
 
     def isFeedback(self) -> bool:
+        # Inferred flag takes precedence if present
+        if self.properties.get("__inferredFeedback") is True:
+            return True
         value = self.properties.get("isFeedback")
         if value is None:
             value = self.properties.get("feedback")
         if value is None and isinstance(self.properties.get("type"), str):
             t = self.properties.get("type")
-            # Normalize and check explicit feedback-like type markers first
             if isinstance(t, str) and t.strip().lower() in {"feedback", "back", "rollback"}:
                 return True
             value = t
-        # Also treat explicit strings as feedback
         if isinstance(value, str) and value.strip().lower() in {"feedback", "back", "rollback"}:
             return True
         return _is_truthy(value)
