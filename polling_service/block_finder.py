@@ -414,6 +414,11 @@ class BlockResult:
             if node_id not in seen:
                 seen.add(node_id)
                 ordered.append(node_id)
+        # Include the end (join) node itself as part of the block
+        for node_id in [self.end_container_id] if self.end_container_id else []:
+            if node_id not in seen:
+                seen.add(node_id)
+                ordered.append(node_id)
         return ordered
 
     @property
@@ -469,8 +474,26 @@ class BlockFinder:
             branch_count = len(_non_feedback_in(gw.getIncomingSequenceFlows()))
 
         # 2) 역방향 탐색으로 split 후보 찾기:
-        #    outgoing(비피드백) 개수가 branch_count와 같은 가장 가까운 노드를 split으로 선택
+        #    outgoing(비피드백) 중 join까지 도달 가능한 가지 수가 branch_count와 같은 가장 가까운 노드를 split으로 선택
         from collections import deque
+
+        def _can_reach(start: ActivityNode, goal: ActivityNode) -> bool:
+            if start is goal:
+                return True
+            seen: Set[ActivityNode] = set()
+            q = deque([start])
+            while q:
+                x = q.popleft()
+                if x in seen:
+                    continue
+                seen.add(x)
+                if x is goal:
+                    return True
+                for ff in _non_feedback_out(x.getOutgoingSequenceFlows()):
+                    y = ff.getTargetActivity()
+                    if y and y not in seen:
+                        q.append(y)
+            return False
 
         visited: Set[ActivityNode] = set()
         queue = deque([join_node])
@@ -482,8 +505,14 @@ class BlockFinder:
                 continue
             visited.add(node)
 
-            out_cnt = len(_non_feedback_out(node.getOutgoingSequenceFlows()))
-            if out_cnt == branch_count:
+            # 해당 노드의 비피드백 out 중에서 join까지 도달 가능한 가지 수 계산
+            outs = _non_feedback_out(node.getOutgoingSequenceFlows())
+            out_to_join = 0
+            for of in outs:
+                tgt = of.getTargetActivity()
+                if tgt and _can_reach(tgt, join_node):
+                    out_to_join += 1
+            if out_to_join == branch_count and outs:
                 start_candidate = node
                 break
 
@@ -492,19 +521,19 @@ class BlockFinder:
                 if src and src not in visited:
                     queue.append(src)
 
-        # 3) 사이 노드 수집: split -> join까지의 모든 노드(비피드백 경로) 집합
+        # 3) 사이 노드 수집: split -> join까지의 모든 노드(비피드백 경로, join에 도달 가능한 경로만) 집합
         between_nodes: List[str] = []
         possible_children: List[str] = []
 
         if start_candidate is not None:
-            # split이 게이트웨이면 즉시 하위의 액티비티/서브프로세스/이벤트를 수집
+            # split이 게이트웨이면 즉시 하위의 액티비티/서브프로세스/이벤트 중 join까지 도달 가능한 노드만 수집
             if self.graph.is_gateway(start_candidate):
                 for f in _non_feedback_out(start_candidate.getOutgoingSequenceFlows()):
                     tgt = f.getTargetActivity()
-                    if tgt and not self.graph.is_gateway(tgt):
+                    if tgt and not self.graph.is_gateway(tgt) and _can_reach(tgt, join_node):
                         possible_children.append(tgt.getTracingTag())
 
-            # split에서 join까지 도달 가능한 노드들(비피드백 경로)을 수집
+            # split에서 join까지 도달 가능한 노드들만 수집
             fwd_visited: Set[ActivityNode] = set()
             fwd_queue = deque([start_candidate])
             while fwd_queue:
@@ -521,8 +550,13 @@ class BlockFinder:
 
                 for f in _non_feedback_out(cur.getOutgoingSequenceFlows()):
                     nxt = f.getTargetActivity()
-                    if nxt and nxt not in fwd_visited:
+                    if nxt and (nxt is join_node or _can_reach(nxt, join_node)) and nxt not in fwd_visited:
                         fwd_queue.append(nxt)
+
+            # 보수적으로 split의 즉시 자식(비-게이트웨이, join 도달 가능)을 block_members에도 포함
+            for nid in possible_children:
+                if nid not in between_nodes:
+                    between_nodes.append(nid)
 
             return BlockResult(
                 start_container_id=start_candidate.getTracingTag(),

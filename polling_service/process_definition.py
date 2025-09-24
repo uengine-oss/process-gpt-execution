@@ -198,11 +198,8 @@ class ProcessDefinition(BaseModel):
         return prev_activities
     
     def find_block(self, activity_id: str) -> 'BlockResult':
-        container_id = self.get_container_id(activity_id)
-        if container_id:
-            block_finder = BlockFinder(self)
-            return block_finder.find_block(container_id)
-        return None
+        block_finder = BlockFinder(self)
+        return block_finder.find_block(activity_id)
     
     
     def is_subprocess(self, node) -> bool:
