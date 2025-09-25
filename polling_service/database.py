@@ -1318,6 +1318,7 @@ def _generate_browser_automation_description(
     try:
         # 이전 workitem들을 가져와서 사용자 요청사항과 프로세스 흐름 파악
         all_workitems = fetch_workitems_by_proc_inst_id(process_instance_data['proc_inst_id'], tenant_id)
+        form_data = fetch_ui_definition_by_activity_id(process_instance_data['proc_def_id'], current_activity_id, tenant_id)
         
         # 이전, 현재, 이후 workitem 정보 분석 (status 기반)
         done_workitems = []
@@ -1347,6 +1348,9 @@ def _generate_browser_automation_description(
 
 === 현재 작업 ===
 {current_workitem}
+
+=== 현재 작업에 결과로 입력되어야할(기대하는 결과값) 입력 폼 데이터입니다. 이 폼 데이터를 채워넣을 수 있는 결과를 얻기 위한 상세한 설명을 생성하세요. ===
+{form_data}
 
 === 이전 작업들 ===
 {done_workitems}
@@ -1390,7 +1394,8 @@ def _generate_browser_automation_description(
         prompt = prompt_template.format(
             current_workitem=current_workitem,
             done_workitems=done_workitems,
-            next_workitems=next_workitems
+            next_workitems=next_workitems,
+            form_data=form_data
         )
         
         # LLM 호출
