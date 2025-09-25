@@ -496,6 +496,7 @@ class WorkItem(BaseModel):
     rework_count: Optional[int] = 0
     project_id: Optional[str] = None
     root_proc_inst_id: Optional[str] = None
+    query: Optional[str] = None
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
@@ -854,11 +855,13 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                 agent_mode = None
                 if activity.agentMode is not None:
                     if activity.agentMode != "none" and activity.agentMode != "None":
-                        agent_mode = activity.agentMode.upper()
+                        mode = activity.agentMode.upper()
+                        agent_mode = None if mode == "A2A" else mode
                 elif activity.agentMode is None and user_id:
                     assignee_info = fetch_assignee_info(user_id)
                     if assignee_info['type'] == "a2a":
-                        agent_mode = "A2A"
+                        # A2A 모드는 agent_mode에서 제외
+                        agent_mode = None
                 
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
@@ -1347,4 +1350,21 @@ def upsert_process_instance_source(source_data: dict):
         supabase.table("proc_inst_source").upsert(source_data).execute()
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+def fetch_events_by_todo_id(todo_id: str) -> Optional[List[Dict[str, Any]]]:
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table('events').select("*").eq('todo_id', todo_id).order('timestamp', desc=True).execute()
+        
+        if response.data and len(response.data) > 0:
+            return response.data
+
+        return []
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch events by todo_id: {str(e)}")
+        return None
 

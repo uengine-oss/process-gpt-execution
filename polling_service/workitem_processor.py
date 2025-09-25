@@ -187,9 +187,6 @@ Instructions:
 3) Output
 - 반드시 아래 JSON만 출력한다. 추가 설명 금지.
 
-4) Reference Info
-- referenceInfo 는 previous_outputs 을 바탕으로 추출한다.
-- referenceInfo 가 없으면 빈 배열로 출력한다.
 
 ```json
 {{
@@ -209,13 +206,7 @@ Instructions:
           "reason": "설명 (Korean)"
         }}
       ]
-    }},
-    referenceInfo: [
-      {{
-        "key": "key (Korean)",
-        "value": "value"
-      }}
-    ]
+    }}
   ],
 }}
 """
@@ -407,10 +398,6 @@ class CompletedActivity(BaseModel):
     description: Optional[str] = None
     cannotProceedErrors: Optional[List[ProceedError]] = None
 
-class ReferenceInfo(BaseModel):
-    key: Optional[str] = None
-    value: Optional[str] = None
-
 class FieldMapping(BaseModel):
     key: str
     name: str
@@ -424,8 +411,7 @@ class ProcessResult(BaseModel):
     completedActivities: Optional[List[CompletedActivity]] = None
     processDefinitionId: str
     result: Optional[str] = None
-    referenceInfo: Optional[List[ReferenceInfo]] = None
-    
+
 # upsert 디바운스 큐 및 쓰레드 정의 (파일 상단에 위치)
 upsert_queue = queue.Queue()
 
@@ -991,11 +977,11 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
                     except Exception:
                         input_data_str = str(input_data)
                     base_desc = workitem.description or ""
-                    augmented_desc = f"{base_desc}\n\n[input_data]\n{input_data_str}" if base_desc else f"[input_data]\n{input_data_str}"
+                    augmented_desc = f"{base_desc}\n\n[inputData]\n{input_data_str}" if base_desc else f"[inputData]\n{input_data_str}"
                     if augmented_desc != workitem.description:
                         upsert_workitem({
                             "id": workitem.id,
-                            "description": augmented_desc
+                            "query": augmented_desc
                         }, tenant_id)
             except Exception as e:
                 print(f"[ERROR] Failed to append input_data to description for workitem {workitem.id}: {str(e)}")
@@ -2083,7 +2069,6 @@ def run_completed_determination(completed_json, chain_input_completed):
     if not isinstance(completed_json, dict):
         completed_json = {}
     completed_json.setdefault("completedActivities", [])
-    completed_json.setdefault("referenceInfo", [])
 
     activity_id = chain_input_completed.get("activity_id")
     user_email = chain_input_completed.get("user_email")
@@ -2424,13 +2409,6 @@ def run_completed_determination(completed_json, chain_input_completed):
             if ca.get("completedActivityId") != activity_id
         ]
 
-    existing_pairs = {(ri.get("key"), str(ri.get("value"))) for ri in completed_json.get("referenceInfo", [])}
-    for ri in (reference_info or []):
-        key = (ri.get("key"), str(ri.get("value")))
-        if key not in existing_pairs:
-            completed_json["referenceInfo"].append(ri)
-            existing_pairs.add(key)
-
     return completed_json
 
 
@@ -2705,8 +2683,7 @@ async def handle_workitem(workitem):
             "roleBindings": workitem.get('assignees', []),
             "completedActivities": [],
             "nextActivities": [],
-            "cancelledActivities": [],
-            "referenceInfo": []
+            "cancelledActivities": []
         };
 
         merged_workitems_from_step = []
@@ -2757,7 +2734,6 @@ async def handle_workitem(workitem):
             )
             # Merge only expected keys to preserve instanceId/name/definitionId, etc.
             completed_json["completedActivities"] = llm_completed_json.get("completedActivities", [])
-            completed_json["referenceInfo"] = llm_completed_json.get("referenceInfo", completed_json.get("referenceInfo", []))
             
         if len(completed_json["completedActivities"]) > 0:
             isDone = completed_json["completedActivities"][0].get("result") == "DONE"

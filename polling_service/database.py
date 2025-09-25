@@ -261,6 +261,7 @@ class WorkItem(BaseModel):
     execution_scope: Optional[str] = None
     rework_count: Optional[int] = 0
     project_id: Optional[str] = None
+    query: Optional[str] = None
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
@@ -819,7 +820,6 @@ def upsert_workitem_completed_log(completed_workitems: List[WorkItem], process_r
                     appliedFeedback = True
 
             description = {
-                "referenceInfo": process_result_data.get("referenceInfo", []),
                 "completedActivities": process_result_data.get("completedActivities", []),
                 "nextActivities": process_result_data.get("nextActivities", []),
                 "appliedFeedback": appliedFeedback
@@ -923,6 +923,7 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     assignees=assignees,
                     duration=safeget(activity, 'duration', 0),
                     description=safeget(activity, 'description', ''),
+                    query=safeget(activity, 'instruction', ''),
                     agent_orch=agent_orch,
                     agent_mode=safeget(activity, 'agentMode', None),
                     log=log,
@@ -1044,6 +1045,7 @@ def upsert_cancelled_workitem(process_instance_data, process_result_data, proces
                     assignees=assignees,
                     duration=safeget(activity, 'duration', 0),
                     description=safeget(activity, 'description', ''),
+                    query=safeget(activity, 'instruction', ''),
                     agent_orch=agent_orch,
                     agent_mode=safeget(activity, 'agentMode', None),
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
@@ -1133,6 +1135,7 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     tenant_id=tenant_id,
                     agent_mode=agent_mode,
                     description=safeget(activity, 'description', ''),
+                    query=safeget(activity, 'instruction', ''),
                     agent_orch=agent_orch,
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
                     execution_scope=execution_scope
@@ -1289,6 +1292,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     duration=safeget(activity, 'duration', 0),
                     agent_mode=agent_mode,
                     description=safeget(activity, 'description', ''),
+                    query=safeget(activity, 'instruction', ''),
                     agent_orch=agent_orch,
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
                     execution_scope=execution_scope

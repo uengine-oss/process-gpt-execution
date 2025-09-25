@@ -203,6 +203,7 @@ async def submit_workitem(input: dict):
             "retry": 0,
             "consumer": None,
             "description": activity.description,
+            "query": activity.instruction,
             "project_id": project_id,
             "root_proc_inst_id": process_instance_id
         }
@@ -361,6 +362,7 @@ async def initiate_workitem(input: dict):
         "retry": 0,
         "consumer": None,
         "description": activity.description,
+        "query": activity.instruction,
         "project_id": project_id,
         "root_proc_inst_id": process_instance_id
     }
@@ -594,6 +596,7 @@ async def create_new_workitem(workitem) -> dict:
         "duration": workitem.duration,
         "tool": workitem.tool,
         "description": workitem.description,
+        "query": workitem.query,
         "output": workitem.output,
         "tenant_id": workitem.tenant_id,
         "project_id": workitem.project_id,
