@@ -1176,11 +1176,11 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                 if workitem.agent_orch == 'browser-automation-agent':
                     print(f"[DEBUG] Generating browser automation description for workitem: {workitem.id}")
                     try:
-                        updated_description = _generate_browser_automation_description(
+                        updated_query = _generate_browser_automation_description(
                             process_instance_data, workitem.id, tenant_id
                         )
-                        if updated_description and updated_description != workitem.description:
-                            workitem_dict["description"] = updated_description
+                        if updated_query and updated_query != workitem.query:
+                            workitem_dict["query"] = updated_query
                     except Exception as e:
                         print(f"[ERROR] Failed to generate browser automation description: {str(e)}")
 
