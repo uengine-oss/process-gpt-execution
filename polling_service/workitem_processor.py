@@ -16,6 +16,7 @@ from fastapi import HTTPException
 import threading
 import queue
 import time
+import ast
 
 from database import (
     fetch_process_definition, fetch_process_instance, fetch_ui_definition,
@@ -176,6 +177,7 @@ Runtime Context:
 Instructions:
 1) 기본 완료 조건
 - submitted_output 이 activities 의 checkpoints 만족하는지를 기준으로 결과를 "DONE" 과 "PENDING" 중에서 출력한다.
+- checkpoints 가 없으면 출력 결과를 "DONE" 으로 출력한다.
 - 현재 activity_id를 type="activity" 으로 completedActivities에 추가한다.
 - user feedback message 옵션이 빈 값이 아닌 경우 checkpoints 와 마찬가지로 submitted_output 이 user feedback message 를 만족하는지 확인하여 결과를 출력한다.
 
@@ -185,9 +187,6 @@ Instructions:
 3) Output
 - 반드시 아래 JSON만 출력한다. 추가 설명 금지.
 
-4) Reference Info
-- referenceInfo 는 previous_outputs 을 바탕으로 추출한다.
-- referenceInfo 가 없으면 빈 배열로 출력한다.
 
 ```json
 {{
@@ -207,13 +206,7 @@ Instructions:
           "reason": "설명 (Korean)"
         }}
       ]
-    }},
-    referenceInfo: [
-      {{
-        "key": "key (Korean)",
-        "value": "value"
-      }}
-    ]
+    }}
   ],
 }}
 """
@@ -405,10 +398,6 @@ class CompletedActivity(BaseModel):
     description: Optional[str] = None
     cannotProceedErrors: Optional[List[ProceedError]] = None
 
-class ReferenceInfo(BaseModel):
-    key: Optional[str] = None
-    value: Optional[str] = None
-
 class FieldMapping(BaseModel):
     key: str
     name: str
@@ -422,8 +411,7 @@ class ProcessResult(BaseModel):
     completedActivities: Optional[List[CompletedActivity]] = None
     processDefinitionId: str
     result: Optional[str] = None
-    referenceInfo: Optional[List[ReferenceInfo]] = None
-    
+
 # upsert 디바운스 큐 및 쓰레드 정의 (파일 상단에 위치)
 upsert_queue = queue.Queue()
 
@@ -642,6 +630,11 @@ def _process_sub_processes(process_instance: ProcessInstance, process_result: Pr
 
     def create_initial_workitem(child_def, child_proc_inst_id, child_proc_def_id, role_bindings, endpoint, process_instance, execution_scope):
         start_event = next((gw for gw in (child_def.gateways or []) if getattr(gw, 'type', None) == 'startEvent'), None)
+        
+        root_proc_inst_id = process_instance.root_proc_inst_id
+        if root_proc_inst_id == None:
+            root_proc_inst_id = process_instance.proc_inst_id
+            
         if start_event:
             start_date = datetime.now().isoformat()
             workitem_data = {
@@ -664,7 +657,7 @@ def _process_sub_processes(process_instance: ProcessInstance, process_result: Pr
                 "consumer": None,
                 "description": start_event.description or '',
                 "tenant_id": process_instance.tenant_id,
-                "root_proc_inst_id": process_instance.root_proc_inst_id,
+                "root_proc_inst_id": root_proc_inst_id,
                 "execution_scope": execution_scope,
             }
             upsert_workitem(workitem_data, process_instance.tenant_id)
@@ -702,7 +695,7 @@ def _process_sub_processes(process_instance: ProcessInstance, process_result: Pr
                 "consumer": None,
                 "description": initial_act.description,
                 "tenant_id": process_instance.tenant_id,
-                "root_proc_inst_id": process_instance.root_proc_inst_id,
+                "root_proc_inst_id": root_proc_inst_id,
             }
             upsert_workitem(workitem_data, process_instance.tenant_id)
             print(f"[INFO] Created initial activity workitem for child: {child_proc_inst_id} -> {initial_act.id}")
@@ -771,6 +764,10 @@ def _process_sub_processes(process_instance: ProcessInstance, process_result: Pr
         mi_count = resolve_multi_instance_count(activity, process_result_json)
         mi_reasons = resolve_multi_instance_reason(activity, process_result_json)
         execution_scope = 0
+    
+        root_proc_inst_id = process_instance.root_proc_inst_id
+        if root_proc_inst_id == None:
+            root_proc_inst_id = process_instance.proc_inst_id
 
         for i in range(mi_count):
             mi_reason = mi_reasons[i] if mi_reasons else ""
@@ -786,7 +783,7 @@ def _process_sub_processes(process_instance: ProcessInstance, process_result: Pr
                     "start_date": datetime.now().isoformat(),
                     "tenant_id": process_instance.tenant_id,
                     "parent_proc_inst_id": process_instance.proc_inst_id,
-                    "root_proc_inst_id": process_instance.root_proc_inst_id,
+                    "root_proc_inst_id": root_proc_inst_id,
                     "execution_scope": execution_scope
                 }
                 insert_process_instance(process_instance_data, process_instance.tenant_id)
@@ -972,6 +969,22 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
                             print(f"[DEBUG] Updated description for workitem {workitem.id}: {updated_description[:100]}...")
                 except Exception as e:
                     print(f"[ERROR] Failed to update browser automation description: {str(e)}")
+            try:
+                input_data = get_input_data(workitem.model_dump(), process_definition)
+                if input_data:
+                    try:
+                        input_data_str = json.dumps(input_data, ensure_ascii=False)
+                    except Exception:
+                        input_data_str = str(input_data)
+                    base_desc = workitem.query or ""
+                    augmented_desc = f"{base_desc}[InputData]\n{input_data_str}" if base_desc else f"[InputData]\n{input_data_str}"
+                    if augmented_desc != workitem.description:
+                        upsert_workitem({
+                            "id": workitem.id,
+                            "query": augmented_desc
+                        }, tenant_id)
+            except Exception as e:
+                print(f"[ERROR] Failed to append input_data to description for workitem {workitem.id}: {str(e)}")
     
     # Upsert process instance
     if process_instance.status == "NEW":
@@ -1367,18 +1380,53 @@ def get_gateway_condition_data(workitem: dict, process_definition: Any, gateway_
         print(f"[ERROR] Failed to get gateway condition data for {workitem.get('id')}: {str(e)}")
         return None
     
-def get_sequence_condition_data(process_definition: Any, next_activities: List[str]):
+def get_sequence_condition_data(process_definition: Any, current_activity_id: str, next_activities: List[str]):
     """
     워크아이템 실행에 필요한 시퀀스 조건 데이터 추출
+    - current_activity_id에서 시작하여 next_activities 중 어느 하나에 도달할 때까지의 경로에 포함된
+      모든 시퀀스의 properties를 수집한다 (게이트웨이는 건너가되, 해당 시퀀스는 수집 대상).
     """
     try:
         sequence_condition_data = {}
-        for sequence in process_definition.sequences:
-            if sequence.target in next_activities:
-                properties = sequence.properties
+        if not process_definition or not hasattr(process_definition, "sequences"):
+            return sequence_condition_data
+
+        targets: set = set(next_activities or [])
+        visited_nodes: set = set()
+        visited_sequences: set = set()
+        stack: List[str] = [current_activity_id]
+
+        while stack:
+            node_id = stack.pop()
+            if node_id in visited_nodes:
+                continue
+            visited_nodes.add(node_id)
+
+            stop_here = node_id in targets
+
+            if stop_here:
+                continue
+
+            for seq in process_definition.sequences or []:
+                if getattr(seq, "source", None) != node_id:
+                    continue
+                if getattr(seq, "id", None) in visited_sequences:
+                    continue
+                visited_sequences.add(seq.id)
+
+                properties = getattr(seq, "properties", None)
                 if properties:
-                    properties_json = json.loads(properties)
-                    sequence_condition_data[sequence.id] = properties_json
+                    try:
+                        properties_json = json.loads(properties)
+                        sequence_condition_data[seq.id] = properties_json
+                    except Exception:
+                        pass
+
+                if not stop_here:
+                    next_node = getattr(seq, "target", None)
+                    if next_node and next_node not in visited_nodes:
+                        stack.append(next_node)
+
         return sequence_condition_data
     except Exception as e:
         print(f"[ERROR] Failed to get sequence condition data: {str(e)}")
@@ -1441,6 +1489,1063 @@ async def run_prompt_and_parse(prompt_tmpl, chain_input, workitem, tenant_id, pa
     return parsed_output, log_text
 
 
+
+async def _evaluate_sequence_conditions(model, parser, process_definition, all_workitem_input_data, workitem_input_data, sequence_condition_data):
+    sequence_condition_data = sequence_condition_data or {}
+    nl_condition_sequences = []
+
+    for sequence in process_definition.sequences or []:
+        condition_data = sequence_condition_data.get(sequence.id)
+        if not isinstance(condition_data, dict):
+            continue
+
+        expr = condition_data.get("conditionFunction")
+        if isinstance(expr, str) and expr.strip():
+            eval_contexts: list[dict] = []
+
+            # Build evaluation contexts from all_workitem_input_data (list of dicts)
+            if isinstance(all_workitem_input_data, list):
+                for item in all_workitem_input_data:
+                    if isinstance(item, dict):
+                        eval_contexts.append(item)
+                        for value in item.values():
+                            if isinstance(value, dict):
+                                eval_contexts.append(value)
+                            elif isinstance(value, list):
+                                eval_contexts.extend(v for v in value if isinstance(v, dict))
+
+            if not eval_contexts:
+                eval_contexts.append({})
+
+            condition_eval = False
+            last_error: Exception | None = None
+            evaluated = False
+
+            for context in eval_contexts:
+                try:
+                    result = bool(eval(expr, {"__builtins__": {}}, context))
+                except Exception as e:
+                    last_error = e
+                else:
+                    evaluated = True
+                    if result:
+                        condition_eval = True
+                        break
+
+            if not condition_eval and last_error and not evaluated:
+                print(f"[WARN] conditionFunction eval failed on {sequence.id}: {last_error}")
+
+            _set_condition_eval(sequence_condition_data, sequence.id, condition_eval)
+            continue
+
+        condition_text = condition_data.get("condition")
+        if isinstance(condition_text, str) and condition_text.strip():
+            nl_condition_sequences.append((sequence.id, condition_text.strip()))
+
+    if nl_condition_sequences:
+        await _evaluate_nl_conditions(model, parser, all_workitem_input_data, workitem_input_data, nl_condition_sequences, sequence_condition_data)
+
+
+def _set_condition_eval(sequence_condition_data, seq_id, condition_met, reason=None):
+    def _to_bool(value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in ("true", "yes", "y", "1"): return True
+            if v in ("false", "no", "n", "0", "none", "null", ""): return False
+        return False
+
+    entry = sequence_condition_data.setdefault(seq_id, {})
+    entry["conditionEval"] = _to_bool(condition_met)
+    if isinstance(reason, str) and reason.strip():
+        entry["conditionReason"] = reason.strip()
+
+
+async def _evaluate_nl_conditions(model, parser, all_workitem_input_data, workitem_input_data, nl_condition_sequences, sequence_condition_data):
+    def _normalize(obj):
+        if isinstance(obj, dict):
+            return {str(k): _normalize(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_normalize(v) for v in obj]
+        if isinstance(obj, (str, int, float, bool)) or obj is None:
+            return obj
+        return str(obj)
+
+    runtime_context = {"current_output": _normalize(all_workitem_input_data), "previous_outputs": _normalize(workitem_input_data)}
+    conditions_payload = [{"sequenceId": seq_id, "condition": text} for seq_id, text in nl_condition_sequences]
+
+    chain_input_text = {
+        "instruction": "You are a BPMN sequence condition evaluator. Use the runtime context JSON and determine whether each natural-language condition is satisfied.",
+        "outputFormat": {"results": [{"sequenceId": "...", "conditionMet": True, "reason": "optional explanation"}]},
+        "runtimeContext": runtime_context,
+        "conditions": conditions_payload
+    }
+
+    prompt_tmpl = PromptTemplate.from_template('{chain_input_text}')
+    chain_input = {"chain_input_text": json.dumps(chain_input_text, ensure_ascii=False)}
+
+    try:
+        response_text = ''
+        async for chunk in model.astream(prompt_tmpl.format(**chain_input)):
+            token = getattr(chunk, 'content', None)
+            if token:
+                response_text += token
+    except Exception as e:
+        print(f"[WARN] condition prompt failed: {e}")
+        return
+
+    parsed_response = None
+    try:
+        parsed_response = json.loads(response_text)
+    except Exception:
+        try:
+            parsed_response = parser.parse(response_text)
+        except Exception as parse_error:
+            print(f"[WARN] condition prompt parse failed: {parse_error}")
+            return
+
+    results = []
+    if isinstance(parsed_response, dict):
+        for key in ("results", "sequenceResults", "evaluations"):
+            value = parsed_response.get(key)
+            if isinstance(value, list):
+                results = value
+                break
+
+    updated_ids: set[str] = set()
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        seq_id = item.get("sequenceId") or item.get("sequence_id")
+        if not seq_id:
+            continue
+        condition_met = item.get("conditionMet")
+        if condition_met is None:
+            condition_met = item.get("met")
+        if condition_met is None:
+            condition_met = item.get("result")
+        _set_condition_eval(sequence_condition_data, seq_id, condition_met, item.get("reason"))
+        updated_ids.add(seq_id)
+
+    for seq_id, _ in nl_condition_sequences:
+        if seq_id not in updated_ids:
+            _set_condition_eval(sequence_condition_data, seq_id, False)
+
+
+# NEW: Minimal timer event expression checker
+async def check_event_expression(next_activity_payloads: list[dict], chain_input_next: dict) -> list[dict]:
+    """
+    Fill 'expression' (or 'dueDate') for timer events among next_activity_payloads using a minimal prompt.
+    - Identifies candidates where type == 'event', target event type contains 'timer', and 'expression' is empty.
+    - Uses only provided chain_input_next data (events/output/previous_outputs/today) to infer values.
+    - Returns updated payload list without raising on errors.
+    """
+    try:
+        if not isinstance(next_activity_payloads, list) or not next_activity_payloads:
+            return next_activity_payloads
+
+        events_def = chain_input_next.get("events") or []
+
+        def _get(obj, key):
+            if isinstance(obj, dict):
+                return obj.get(key)
+            return getattr(obj, key, None)
+
+        def _find_event(ev_id: str):
+            for e in events_def:
+                if _get(e, "id") == ev_id:
+                    return e
+            return None
+
+        def _is_timer_event(ev_id: str) -> bool:
+            e = _find_event(ev_id)
+            if not e:
+                return False
+            t = str(_get(e, "type") or "").lower()
+            return "timer" in t
+
+        # Select candidates
+        candidates = [p for p in next_activity_payloads or []
+                      if isinstance(p, dict)
+                      and (p.get("type") == "event")
+                      and not p.get("expression")
+                      and p.get("nextActivityId")
+                      and _is_timer_event(p.get("nextActivityId"))]
+        if not candidates:
+            return next_activity_payloads
+
+        candidate_events = []
+        for p in candidates:
+            ev_id = p.get("nextActivityId")
+            ev = _find_event(ev_id)
+            if ev is None:
+                candidate_events.append({"id": ev_id})
+            else:
+                candidate_events.append({
+                    "id": _get(ev, "id"),
+                    "name": _get(ev, "name"),
+                    "type": _get(ev, "type"),
+                    "condition": _get(ev, "condition"),
+                    "properties": _get(ev, "properties"),
+                })
+
+        runtime_context = {
+            "today": chain_input_next.get("today"),
+            "output": chain_input_next.get("output"),
+            "previous_outputs": chain_input_next.get("previous_outputs") or {},
+        }
+
+        chain_input_text = {
+            "instruction": (
+                "You are a BPMN timer event planner. For each candidate timer event, "
+                "derive a concise cron expression (preferred) or an absolute dueDate (YYYY-MM-DD). "
+                "Use only runtimeContext and candidateEvents. If not derivable, leave fields empty."
+            ),
+            "outputFormat": {"timers": [{"id": "...", "expression": "", "dueDate": ""}]},
+            "runtimeContext": runtime_context,
+            "candidateEvents": candidate_events,
+        }
+
+        prompt_tmpl = PromptTemplate.from_template('{chain_input_text}')
+        chain_input = {"chain_input_text": json.dumps(chain_input_text, ensure_ascii=False)}
+
+        response_text = ""
+        async for chunk in model.astream(prompt_tmpl.format(**chain_input)):
+            token = getattr(chunk, 'content', None)
+            if token:
+                response_text += token
+
+        # Parse
+        try:
+            parsed = json.loads(response_text)
+        except Exception:
+            try:
+                parsed = parser.parse(response_text)
+            except Exception as parse_error:
+                print(f"[WARN] check_event_expression parse failed: {parse_error}")
+                return next_activity_payloads
+
+        timers = None
+        if isinstance(parsed, dict):
+            for key in ("timers", "events", "results"):
+                val = parsed.get(key)
+                if isinstance(val, list):
+                    timers = val
+                    break
+        if not isinstance(timers, list):
+            return next_activity_payloads
+
+        timer_map: dict[str, dict] = {}
+        for item in timers:
+            if not isinstance(item, dict):
+                continue
+            ev_id = item.get("id") or item.get("eventId") or item.get("nextActivityId")
+            if not ev_id:
+                continue
+            timer_map[ev_id] = {
+                "expression": item.get("expression") or "",
+                "dueDate": item.get("dueDate") or "",
+            }
+
+        for p in next_activity_payloads:
+            ev_id = p.get("nextActivityId")
+            if ev_id and ev_id in timer_map:
+                expr = timer_map[ev_id].get("expression")
+                due  = timer_map[ev_id].get("dueDate")
+                if expr:
+                    p["expression"] = expr
+                if due:
+                    p["dueDate"] = due
+
+        return next_activity_payloads
+    except Exception as e:
+        print(f"[WARN] check_event_expression failed: {e}")
+        return next_activity_payloads
+
+
+# NEW: Minimal subprocess multi-instance planner
+async def check_subprocess_expression(next_activity_payloads: list[dict], chain_input_next: dict) -> list[dict]:
+    """
+    For next activities that are subprocesses, infer multiInstanceCount and multiInstanceReason
+    from provided output/previous_outputs with a minimal prompt. Defaults to 1 and [] when unknown.
+    """
+    try:
+        if not isinstance(next_activity_payloads, list) or not next_activity_payloads:
+            return next_activity_payloads
+
+        sub_defs = chain_input_next.get("subProcesses") or []
+
+        def _get(obj, key):
+            if isinstance(obj, dict):
+                return obj.get(key)
+            return getattr(obj, key, None)
+
+        def _find_sub(sp_id: str):
+            for s in sub_defs:
+                if _get(s, "id") == sp_id:
+                    return s
+            return None
+
+        # Select candidates
+        candidates = [p for p in next_activity_payloads or []
+                      if isinstance(p, dict)
+                      and (p.get("type") == "subProcess")
+                      and p.get("nextActivityId")]
+        if not candidates:
+            return next_activity_payloads
+
+        candidate_subs = []
+        for p in candidates:
+            sp_id = p.get("nextActivityId")
+            sd = _find_sub(sp_id)
+            if sd is None:
+                candidate_subs.append({"id": sp_id, "name": sp_id})
+            else:
+                candidate_subs.append({
+                    "id": _get(sd, "id"),
+                    "name": _get(sd, "name") or sp_id,
+                    "description": _get(sd, "description") or "",
+                })
+
+        runtime_context = {
+            "output": chain_input_next.get("output"),
+            "previous_outputs": chain_input_next.get("previous_outputs") or {},
+            "instance_name_pattern": chain_input_next.get("instance_name_pattern") or "",
+        }
+
+        chain_input_text = {
+            "instruction": (
+                "당신은 BPMN 서브프로세스 멀티인스턴스 플래너입니다. 각 후보 서브프로세스에 대해 "
+                "runtimeContext의 값만을 사용하여 multiInstanceCount(정수)와 multiInstanceReason(문자열 배열)을 결정하세요. "
+                "배열 크기 등 명확한 근거가 있을 때만 count>1로 하며, 불명확하면 count=1과 빈 배열을 반환합니다. "
+                "Reason은 배열이고 count의 숫자만큼 있으며 각 항목은 해당 인스턴스를 식별/설명할 수 있게 한국어로 간결 요약하세요(객체/JSON은 핵심 필드 요약)."
+            ),
+            "outputFormat": {"subprocesses": [{"id": "...", "multiInstanceCount": 1, "multiInstanceReason": [""]}]},
+            "runtimeContext": runtime_context,
+            "candidateSubprocesses": candidate_subs,
+        }
+
+        prompt_tmpl = PromptTemplate.from_template('{chain_input_text}')
+        chain_input = {"chain_input_text": json.dumps(chain_input_text, ensure_ascii=False)}
+
+        response_text = ""
+        async for chunk in model.astream(prompt_tmpl.format(**chain_input)):
+            token = getattr(chunk, 'content', None)
+            if token:
+                response_text += token
+
+        # Parse
+        try:
+            parsed = json.loads(response_text)
+        except Exception:
+            try:
+                parsed = parser.parse(response_text)
+            except Exception as parse_error:
+                print(f"[WARN] check_subprocess_expression parse failed: {parse_error}")
+                return next_activity_payloads
+
+        subs = None
+        if isinstance(parsed, dict):
+            for key in ("subprocesses", "nextActivities", "results"):
+                val = parsed.get(key)
+                if isinstance(val, list):
+                    subs = val
+                    break
+        if not isinstance(subs, list):
+            return next_activity_payloads
+
+        sub_map: dict[str, dict] = {}
+        for item in subs:
+            if not isinstance(item, dict):
+                continue
+            sp_id = item.get("id") or item.get("subprocessId") or item.get("nextActivityId")
+            if not sp_id:
+                continue
+            cnt_raw = item.get("multiInstanceCount")
+            try:
+                cnt = int(str(cnt_raw)) if cnt_raw is not None else 1
+            except Exception:
+                cnt = 1
+            if cnt < 1:
+                cnt = 1
+            reasons = item.get("multiInstanceReason")
+            if not isinstance(reasons, list):
+                reasons = []
+            # Normalize reasons to strings
+            norm_reasons = []
+            for r in reasons[:cnt]:
+                if isinstance(r, (dict, list)):
+                    try:
+                        norm_reasons.append(json.dumps(r, ensure_ascii=False))
+                    except Exception:
+                        norm_reasons.append(str(r))
+                else:
+                    norm_reasons.append(str(r))
+            # pad/trim to count
+            if len(norm_reasons) < cnt:
+                norm_reasons += [""] * (cnt - len(norm_reasons))
+            else:
+                norm_reasons = norm_reasons[:cnt]
+
+            sub_map[sp_id] = {
+                "multiInstanceCount": str(cnt),
+                "multiInstanceReason": norm_reasons,
+            }
+
+        for p in next_activity_payloads:
+            sp_id = p.get("nextActivityId")
+            if sp_id and sp_id in sub_map:
+                p["multiInstanceCount"] = sub_map[sp_id]["multiInstanceCount"]
+                p["multiInstanceReason"] = sub_map[sp_id]["multiInstanceReason"]
+
+        return next_activity_payloads
+    except Exception as e:
+        print(f"[WARN] check_subprocess_expression failed: {e}")
+        return next_activity_payloads
+
+
+async def check_task_status(next_activity_payloads: list[dict], chain_input_next: dict) -> list[dict]:
+    try:
+        if not isinstance(next_activity_payloads, list) or not next_activity_payloads:
+            return next_activity_payloads
+
+        activity_id = chain_input_next.get("activity_id")
+        sequences = chain_input_next.get("sequences") or []
+        gateways  = chain_input_next.get("gateways")  or []
+        branch_merged_workitems = chain_input_next.get("branch_merged_workitems") or []
+
+        DONE_STATES = {"DONE", "SUBMITTED", "COMPLETED"}
+
+        def _get(obj, key):
+            if isinstance(obj, dict):
+                return obj.get(key)
+            return getattr(obj, key, None)
+
+        def _norm_id(v):
+            return str(v) if v is not None else None
+
+        seqs_by_source: dict[str, list] = {}
+        seqs_by_target: dict[str, list] = {}
+        for s in sequences:
+            src = _norm_id(_get(s, "source") or _get(s, "sourceRef"))
+            tgt = _norm_id(_get(s, "target") or _get(s, "targetRef"))
+            if src:
+                seqs_by_source.setdefault(src, []).append(s)
+            if tgt:
+                seqs_by_target.setdefault(tgt, []).append(s)
+
+        gateway_index: dict[str, dict] = {}
+        for g in gateways:
+            gid = _norm_id(_get(g, "id"))
+            if gid:
+                gateway_index[gid] = g
+
+        # Treat branches that are already included in next_activity_payloads as DONE
+        consider_done_ids: set[str] = set()
+        for p in (next_activity_payloads or []):
+            nid = _norm_id(p.get("nextActivityId"))
+            if nid:
+                consider_done_ids.add(nid)
+
+        def _is_gateway(node_id: str) -> bool:
+            return node_id in gateway_index
+
+        def _gw_type(node_id: str) -> str:
+            g = gateway_index.get(node_id) or {}
+            t = (_get(g, "type") or "").lower()
+            if "exclusive" in t or t in ("xor", "xorgateway"):
+                return "exclusive"
+            if "inclusive" in t or t in ("or", "orgateway"):
+                return "inclusive"
+            if "parallel" in t or t in ("and", "andgateway"):
+                return "parallel"
+            return t or "unknown"
+
+        def _seq_exists(src: str, tgt: str) -> bool:
+            for s in seqs_by_source.get(src, []) or []:
+                st = _norm_id(_get(s, "target") or _get(s, "targetRef"))
+                if st == tgt:
+                    return True
+            return False
+
+        def _classify_path(current_id: str, target_id: str):
+            """
+            Returns (path_type, gateway_id, join_or_split)
+            - path_type: "direct" | "via_gateway" | "unknown"
+            - gateway_id: id or None
+            - join_or_split: "join" | "split" | None (only if via_gateway)
+            """
+            if _seq_exists(current_id, target_id):
+                return "direct", None, None
+
+            for s in seqs_by_source.get(current_id, []) or []:
+                gw = _norm_id(_get(s, "target") or _get(s, "targetRef"))
+                if gw and _is_gateway(gw) and _seq_exists(gw, target_id):
+                    incomings = len(seqs_by_target.get(gw, []) or [])
+                    outgoings = len(seqs_by_source.get(gw, []) or [])
+                    join_or_split = None
+                    if incomings >= 2 and outgoings == 1:
+                        join_or_split = "join"
+                    elif incomings == 1 and outgoings >= 2:
+                        join_or_split = "split"
+                    return "via_gateway", gw, join_or_split
+
+            return "unknown", None, None
+
+        def _all_parallel_done() -> bool:
+            if not branch_merged_workitems:
+                return True
+            has_in_progress = False
+            for wi in branch_merged_workitems:
+                aid = _norm_id(_get(wi, "activity_id") or _get(wi, "activityId"))
+                # If this branch is already planned in next activities, treat as DONE
+                if aid in consider_done_ids:
+                    continue
+                st = (_get(wi, "status") or "").upper()
+                if st == "IN_PROGRESS":
+                    has_in_progress = True
+                    break
+                if st not in DONE_STATES:
+                    return False
+            return not has_in_progress
+
+        def _no_in_progress_in_parallel() -> bool:
+            for wi in branch_merged_workitems:
+                aid = _norm_id(_get(wi, "activity_id") or _get(wi, "activityId"))
+                # If this branch is already planned in next activities, ignore its status
+                if aid in consider_done_ids:
+                    continue
+                st = (_get(wi, "status") or "").upper()
+                if st == "IN_PROGRESS":
+                    return False
+            return True
+
+        filtered: list[dict] = []
+        cur_id = _norm_id(activity_id)
+
+        for p in next_activity_payloads:
+            nid = _norm_id(p.get("nextActivityId"))
+            if not cur_id or not nid:
+                filtered.append(p)
+                continue
+
+            path_type, gw_id, join_or_split = _classify_path(cur_id, nid)
+
+            keep = True
+            if path_type in ("direct", "unknown"):
+                keep = _all_parallel_done()
+            elif path_type == "via_gateway":
+                gtype = _gw_type(gw_id)
+                if join_or_split == "join":
+                    if gtype == "parallel":
+                        keep = _all_parallel_done()
+                    elif gtype == "inclusive":
+                        keep = _no_in_progress_in_parallel()
+                    elif gtype == "exclusive":
+                        keep = True
+                    else:
+                        keep = _all_parallel_done()
+                else:
+                    keep = True
+
+            if keep:
+                filtered.append(p)
+
+        return filtered
+    except Exception as e:
+        print(f"[WARN] check_task_status failed: {e}")
+        return next_activity_payloads
+
+
+def run_completed_determination(completed_json, chain_input_completed):
+    CHECKPOINTS_REQUIRED = False
+    CONDITIONLESS_PROCEEDS = True
+    HONOR_SYSTEM_ERROR = True
+    CHECKPOINTS_MODE = "ALL"
+
+    if not isinstance(completed_json, dict):
+        completed_json = {}
+    completed_json.setdefault("completedActivities", [])
+
+    activity_id = chain_input_completed.get("activity_id")
+    user_email = chain_input_completed.get("user_email")
+    output = chain_input_completed.get("output") or {}
+    previous_outputs = chain_input_completed.get("previous_outputs") or {}
+    sequences = chain_input_completed.get("sequences") or []
+    sequence_conditions = chain_input_completed.get("sequence_conditions") or {}
+    activities = chain_input_completed.get("activities") or []
+    gateways = chain_input_completed.get("gateways") or []
+
+    def obj_to_dict(x):
+        if isinstance(x, dict):
+            return x
+        d = {}
+        for k in dir(x):
+            if k.startswith("_"):
+                continue
+            try:
+                v = getattr(x, k)
+            except Exception:
+                continue
+            if callable(v):
+                continue
+            d[k] = v
+        return d
+
+    def safe_dict(x):
+        if isinstance(x, dict):
+            return x
+        if isinstance(x, str):
+            s = x.strip()
+            if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+                try:
+                    v = json.loads(s)
+                    return v if isinstance(v, dict) else {}
+                except Exception:
+                    return {}
+        return {}
+
+    def safe_list(x):
+        if isinstance(x, list):
+            return x
+        if isinstance(x, str):
+            s = x.strip()
+            if s.startswith("[") and s.endswith("]"):
+                try:
+                    v = json.loads(s)
+                    return v if isinstance(v, list) else []
+                except Exception:
+                    return []
+        return []
+
+    def get_activity_meta(items, aid):
+        for a in items:
+            d = obj_to_dict(a)
+            if d.get("id") == aid:
+                props = safe_dict(d.get("properties") or d.get("uengineProperties"))
+                cps_raw = d.get("checkpoints")
+                if cps_raw is None:
+                    cps_raw = props.get("checkpoints")
+                cps = safe_list(cps_raw)
+                name = d.get("name") or (props.get("name") if isinstance(props, dict) else "") or ""
+                return name, cps, d
+        return "", [], None
+
+    def dot_get(root, path):
+        cur = root
+        if not path:
+            return True, cur
+        for seg in str(path).split("."):
+            if isinstance(cur, dict):
+                if seg in cur:
+                    cur = cur[seg]
+                else:
+                    return False, None
+            elif isinstance(cur, list):
+                try:
+                    idx = int(seg)
+                except:
+                    return False, None
+                if 0 <= idx < len(cur):
+                    cur = cur[idx]
+                else:
+                    return False, None
+            else:
+                return False, None
+        return True, cur
+
+    def to_number(x):
+        try:
+            if isinstance(x, bool):
+                return x
+            return float(x)
+        except:
+            return x
+
+    def cmp_values(lv, op, rv):
+        if op == "==": return lv == rv
+        if op == "!=": return lv != rv
+        if op in (">", ">=", "<", "<="):
+            ln, rn = to_number(lv), to_number(rv)
+            if isinstance(ln, (int, float)) and isinstance(rn, (int, float)):
+                if op == ">": return ln > rn
+                if op == ">=": return ln >= rn
+                if op == "<": return ln < rn
+                if op == "<=": return ln <= rn
+            return False
+        if op == "in":
+            try: return lv in rv
+            except: return False
+        if op == "not in":
+            try: return lv not in rv
+            except: return False
+        if op == "contains":
+            try: return rv in lv
+            except: return False
+        return False
+
+    def parse_literal(s):
+        if isinstance(s, str) and ((s.startswith("'") and s.endswith("'")) or (s.startswith('"') and s.endswith('"'))):
+            return s[1:-1]
+        try:
+            return int(s)
+        except:
+            try:
+                return float(s)
+            except:
+                if isinstance(s, str):
+                    sl = s.lower()
+                    if sl == "true": return True
+                    if sl == "false": return False
+                    if sl == "null": return None
+                return s
+
+    def eval_predicate(pred, ctx):
+        if isinstance(pred, dict):
+            field = pred.get("field")
+            op = pred.get("op", "==")
+            rv = pred.get("value")
+            ok, lv = dot_get(ctx, field)
+            if not ok:
+                return False, ("DATA_FIELD_NOT_EXIST", f"필드 없음: {field}")
+            good = cmp_values(lv, op, rv)
+            return (good, None if good else ("PROCEED_CONDITION_NOT_MET", f"{field} {op} {rv} 불만족"))
+        if isinstance(pred, str):
+            txt = pred.strip()
+            for op in [" not in ", " contains ", ">=", "<=", "==", "!=", ">", "<", " in "]:
+                if op in txt:
+                    left, right = txt.split(op, 1)
+                    left, right = left.strip(), right.strip()
+                    if op.strip() in ("in", "not in") and (right.startswith("[") and right.endswith("]")):
+                        try:
+                            rv = json.loads(right)
+                        except:
+                            rv = right
+                    elif op.strip() in ("in", "not in") and "," in right:
+                        rv = [parse_literal(x.strip()) for x in right.split(",")]
+                    else:
+                        rv = parse_literal(right)
+                    ok, lv = dot_get(ctx, left)
+                    if not ok:
+                        return False, ("DATA_FIELD_NOT_EXIST", f"필드 없음: {left}")
+                    good = cmp_values(lv, op.strip(), rv)
+                    return (good, None if good else ("PROCEED_CONDITION_NOT_MET", f"{left} {op.strip()} {rv} 불만족"))
+            ok, lv = dot_get(ctx, txt)
+            if not ok:
+                return False, ("DATA_FIELD_NOT_EXIST", f"필드 없음: {txt}")
+            good = bool(lv)
+            return (good, None if good else ("PROCEED_CONDITION_NOT_MET", f"{txt} 값이 falsy"))
+        return False, ("SYSTEM_ERROR", "지원되지 않는 체크포인트 타입")
+
+    def outgoing_sequence_objs(seqs, aid):
+        outs = []
+        for s in seqs:
+            d = obj_to_dict(s)
+            src = d.get("sourceRef") or d.get("source")
+            if src == aid:
+                outs.append(d)
+        return outs
+
+    def iter_reference_scalars(d, prefix="", acc=None, limit=6):
+        if acc is None: acc = []
+        if len(acc) >= limit: return acc
+        if isinstance(d, dict):
+            for k, v in d.items():
+                if len(acc) >= limit: break
+                key = f"{prefix}{k}" if not prefix else f"{prefix}.{k}"
+                if isinstance(v, (str, int, float, bool)) or v is None:
+                    acc.append({"key": key, "value": v})
+                elif isinstance(v, dict):
+                    iter_reference_scalars(v, key, acc, limit)
+                elif isinstance(v, list) and v and isinstance(v[0], (str, int, float, bool)):
+                    acc.append({"key": key, "value": v[:5]})
+        return acc
+
+    def normalize_gateway_type(g):
+        t = (g.get("type") or g.get("gatewayType") or "").lower()
+        if "gateway" not in t:
+            return None
+        if "exclusive" in t or t in ("xor", "xorgateway"):
+            return "exclusive"
+        if "inclusive" in t or t in ("or", "orgateway"):
+            return "inclusive"
+        if "parallel" in t or t in ("and", "andgateway"):
+            return "parallel"
+        return None
+
+    activity_name, checkpoints_raw, _ = get_activity_meta(activities, activity_id)
+    checkpoints = checkpoints_raw if isinstance(checkpoints_raw, list) else safe_list(checkpoints_raw)
+
+    checkpoint_errors = []
+    if not checkpoints:
+        checkpoints_ok = not CHECKPOINTS_REQUIRED
+    else:
+        results = []
+        for pred in checkpoints:
+            ok, err = eval_predicate(pred, output)
+            results.append(ok)
+            if not ok and err:
+                checkpoint_errors.append({"type": err[0], "reason": err[1]})
+        checkpoints_ok = all(results) if CHECKPOINTS_MODE == "ALL" else any(results)
+
+    gateway_map = {}
+    for g in gateways:
+        gd = obj_to_dict(g)
+        gt = normalize_gateway_type(gd)
+        if gt:
+            gateway_map[gd.get("id")] = {"raw": gd, "type": gt}
+
+    seqs_from_activity = outgoing_sequence_objs(sequences, activity_id)
+
+    def seq_eval_state(seq_id, is_gateway_edge=False):
+        sc = sequence_conditions.get(seq_id)
+        if isinstance(sc, dict) and "conditionEval" in sc:
+            return True if sc.get("conditionEval") else False
+        if isinstance(sc, dict) and ("conditionFunction" in sc):
+            return None
+        return (None if is_gateway_edge else bool(CONDITIONLESS_PROCEEDS))
+
+    used_unknown = False
+    allowed_direct = False
+    allowed_via_gateway = False
+
+    for s in seqs_from_activity:
+        sid = s.get("id")
+        tgt = s.get("targetRef") or s.get("target")
+        leg_state = seq_eval_state(sid, is_gateway_edge=False)
+        if not tgt:
+            if leg_state is not False:
+                allowed_direct = True
+            if leg_state is None:
+                used_unknown = True
+            continue
+
+        gw = gateway_map.get(tgt)
+        if not gw:
+            if leg_state is not False:
+                allowed_direct = True
+            if leg_state is None:
+                used_unknown = True
+            continue
+        if leg_state is False:
+            continue
+
+        g_type = gw["type"]
+        g_out = outgoing_sequence_objs(sequences, tgt)
+        states = []
+        for gs in g_out:
+            gsid = gs.get("id")
+            states.append(seq_eval_state(gsid, is_gateway_edge=True))
+
+        if not states:
+            gw_ok = False
+        else:
+            cnt_true = sum(1 for st in states if st is True)
+            cnt_unknown = sum(1 for st in states if st is None)
+            if g_type == "parallel":
+                gw_ok = (cnt_true == len(states))
+                if gw_ok is False and cnt_unknown > 0:
+                    used_unknown = True
+            else:
+                gw_ok = (cnt_true >= 1) or (cnt_unknown >= 1)
+                if gw_ok and cnt_true == 0 and cnt_unknown >= 1:
+                    used_unknown = True
+
+        if gw_ok:
+            allowed_via_gateway = True
+
+    if seqs_from_activity:
+        sequences_ok = allowed_direct or allowed_via_gateway
+    else:
+        sequences_ok = bool(CONDITIONLESS_PROCEEDS)
+
+    cannot = []
+    if not checkpoints_ok:
+        cannot.extend(checkpoint_errors or [{"type": "PROCEED_CONDITION_NOT_MET", "reason": "체크포인트 불만족"}])
+    if checkpoints_ok and not sequences_ok:
+        cannot.append({"type": "PROCEED_CONDITION_NOT_MET", "reason": "시퀀스/게이트웨이 조건 불만족"})
+
+    has_system_error = any(e.get("type") == "SYSTEM_ERROR" for e in cannot) if HONOR_SYSTEM_ERROR else False
+    result = "DONE" if (checkpoints_ok and sequences_ok and not has_system_error) else "PENDING"
+
+    reference_info = iter_reference_scalars(previous_outputs, limit=6)
+
+    entry = {
+        "completedActivityId": activity_id,
+        "completedActivityName": activity_name,
+        "completedUserEmail": user_email,
+        "type": "activity",
+        "expression": None,
+        "dueDate": None,
+        "result": result,
+        "description": "체크포인트·시퀀스·게이트웨이 조건 기반 자동 판정",
+        "cannotProceedErrors": cannot
+    }
+
+    if not used_unknown and result == "DONE":
+        replaced = False
+        for i, ca in enumerate(completed_json["completedActivities"]):
+            if ca.get("completedActivityId") == activity_id:
+                seen = {((e or {}).get("type"), (e or {}).get("reason")) for e in (ca.get("cannotProceedErrors") or [])}
+                for e in (entry.get("cannotProceedErrors") or []):
+                    key = ((e or {}).get("type"), (e or {}).get("reason"))
+                    if key not in seen:
+                        ca.setdefault("cannotProceedErrors", []).append(e)
+                        seen.add(key)
+                ca["result"] = "DONE"
+                for k in ("completedActivityName", "completedUserEmail", "type", "expression", "dueDate", "description"):
+                    if not ca.get(k) and entry.get(k):
+                        ca[k] = entry[k]
+                replaced = True
+                break
+        if not replaced:
+            completed_json["completedActivities"].append(entry)
+    else:
+        completed_json["completedActivities"] = [
+            ca for ca in completed_json["completedActivities"]
+            if ca.get("completedActivityId") != activity_id
+        ]
+
+    return completed_json
+
+
+
+
+def resolve_next_activity_payloads(
+    process_definition,
+    activity_id: str,
+    workitem: dict,
+    sequence_condition_data: dict | None,
+) -> list[dict[str, Any]]:
+    """Derive next activity payloads from process definition and evaluated conditions."""
+    if not process_definition:
+        return []
+
+    role_bindings_for_next = workitem.get("assignees", []) or []
+
+    def _extract_endpoint(binding: dict | None) -> str | None:
+        if not isinstance(binding, dict):
+            return None
+        endpoint = binding.get("endpoint")
+        if isinstance(endpoint, list):
+            return endpoint[0] if endpoint else None
+        if isinstance(endpoint, str) and endpoint.strip():
+            return endpoint
+        return None
+
+    def _resolve_next_user_email(node, node_type: str) -> str:
+        role_name = getattr(node, "role", None) if node else None
+        if isinstance(role_name, str):
+            for binding in role_bindings_for_next:
+                if isinstance(binding, dict) and binding.get("name") == role_name:
+                    endpoint = _extract_endpoint(binding)
+                    if endpoint:
+                        return endpoint
+        for binding in role_bindings_for_next:
+            endpoint = _extract_endpoint(binding)
+            if endpoint:
+                return endpoint
+        if node_type == "event":
+            return "system"
+        return workitem.get("user_id") or "system"
+
+    sequences_all = list(getattr(process_definition, "sequences", []) or [])
+
+    def _sequence_condition_allows(seq_id: str | None) -> bool:
+        if not seq_id or not isinstance(sequence_condition_data, dict):
+            return True
+        sc = sequence_condition_data.get(seq_id)
+        if isinstance(sc, dict) and "conditionEval" in sc:
+            return bool(sc.get("conditionEval"))
+        return True
+
+    def _allowed_targets_from(source_id: str) -> list[str]:
+        targets: list[str] = []
+        for seq in sequences_all:
+            source_ref = getattr(seq, "source", None) or getattr(seq, "sourceRef", None)
+            if source_ref == source_id and _sequence_condition_allows(getattr(seq, "id", None)):
+                target_ref = getattr(seq, "target", None) or getattr(seq, "targetRef", None)
+                if target_ref:
+                    targets.append(target_ref)
+        return targets
+
+    def _collect_next_nodes() -> list[tuple[str, Any]]:
+        collected: list[tuple[str, Any]] = []
+        visited_nodes: set[str] = set()
+        visited_gateways: set[str] = set()
+
+        def _record(node_type: str, node_obj: Any) -> None:
+            node_id = getattr(node_obj, "id", None)
+            if not node_id or node_id in visited_nodes:
+                return
+            visited_nodes.add(node_id)
+            collected.append((node_type, node_obj))
+
+        def _visit(target_id: str | None) -> None:
+            if not target_id:
+                return
+            activity_obj = process_definition.find_activity_by_id(target_id)
+            if activity_obj:
+                _record("activity", activity_obj)
+                return
+            sub_process_obj = process_definition.find_sub_process_by_id(target_id)
+            if sub_process_obj:
+                _record("subProcess", sub_process_obj)
+                return
+            event_obj = process_definition.find_event_by_id(target_id)
+            if event_obj and getattr(event_obj, "type", None):
+                _record("event", event_obj)
+                return
+            gateway_obj = process_definition.find_gateway_by_id(target_id)
+            if gateway_obj:
+                if target_id in visited_gateways:
+                    return
+                visited_gateways.add(target_id)
+                for downstream_id in _allowed_targets_from(target_id):
+                    _visit(downstream_id)
+                return
+
+        for initial_target in _allowed_targets_from(activity_id):
+            _visit(initial_target)
+        return collected
+
+    resolved_next_nodes = _collect_next_nodes()
+    next_activity_payloads: list[dict[str, Any]] = []
+
+    for node_type, node_obj in resolved_next_nodes:
+        node_id = getattr(node_obj, "id", None)
+        if not node_id:
+            continue
+        node_name = getattr(node_obj, "name", "") or node_id
+        description = getattr(node_obj, "description", "") or ""
+        next_type_value = getattr(node_obj, "type", None) or node_type
+        expression_value = None
+        if node_type == "event":
+            condition_value = getattr(node_obj, "condition", None)
+            if isinstance(condition_value, dict):
+                expression_value = (
+                    condition_value.get("expression")
+                    or condition_value.get("cron")
+                )
+            elif isinstance(condition_value, str):
+                expression_value = condition_value
+
+        activity_payload = Activity(
+            nextActivityId=node_id,
+            nextActivityName=node_name,
+            nextUserEmail=_resolve_next_user_email(node_obj, node_type),
+            result="IN_PROGRESS",
+            description=description,
+            type=next_type_value,
+            expression=expression_value,
+        ).model_dump()
+        next_activity_payloads.append(activity_payload)
+
+    return next_activity_payloads
+
 async def handle_workitem(workitem):
     is_first, is_last = get_workitem_position(workitem)
 
@@ -1502,11 +2607,13 @@ async def handle_workitem(workitem):
 
     try:
         next_activities = []
+        next_near_activities = []
         gateway_condition_data = None
         sequence_condition_data = None
         
         if process_definition:
             next_activities = [activity.id for activity in process_definition.find_next_activities(activity_id, True)]
+            next_near_activities = [activity.id for activity in process_definition.find_near_next_activities(activity_id, True)]
             for act_id in next_activities:
                 if process_definition.find_gateway_by_id(act_id):
                     try:
@@ -1515,16 +2622,21 @@ async def handle_workitem(workitem):
                         print(f"[ERROR] Failed to get gateway condition data for {workitem.get('id')}: {str(e)}")
                         gateway_condition_data = None
                         
-            sequence_condition_data = get_sequence_condition_data(process_definition, next_activities)
+            sequence_condition_data = get_sequence_condition_data(process_definition, activity_id, next_near_activities)
                         
         workitem_input_data = None
+        all_workitem_input_data = []
         try:
             workitem_input_data = get_input_data(workitem, process_definition)
+            all_workitem_input_data = get_all_input_data(workitem, process_definition)
         except Exception as e:
             print(f"[ERROR] Failed to get selected info for {workitem.get('id')}: {str(e)}")
 
+        sequence_condition_data = sequence_condition_data or {}
+        await _evaluate_sequence_conditions(model, parser, process_definition, all_workitem_input_data, workitem_input_data, sequence_condition_data)
+
         attached_activities = []
-        for next_activity in next_activities:
+        for next_activity in next_near_activities:
             activity = process_definition.find_activity_by_id(next_activity)
             if activity and getattr(activity, 'attachedEvents', None):
                 attached_activities.append({
@@ -1571,8 +2683,7 @@ async def handle_workitem(workitem):
             "roleBindings": workitem.get('assignees', []),
             "completedActivities": [],
             "nextActivities": [],
-            "cancelledActivities": [],
-            "referenceInfo": []
+            "cancelledActivities": []
         };
 
         merged_workitems_from_step = []
@@ -1614,58 +2725,70 @@ async def handle_workitem(workitem):
             "attached_activities": attached_activities,
             "sequence_conditions": sequence_condition_data
         }
-
-
-        prompt_completed_json, completed_log = await run_prompt_and_parse(
-            prompt_completed, chain_input_completed, workitem, tenant_id, parser, "", log_prefix="[COMPLETED]", enable_logging=True
-        )
         
-        completed_json["completedActivities"] = prompt_completed_json["completedActivities"]
-        completed_json["referenceInfo"] = prompt_completed_json["referenceInfo"]
-        
-        completed_activities_from_step = (
-            completed_json.get("completedActivities")
-            or completed_json.get("completedActivitiesDelta")
-            or []
-        )
-        
-        organizations = fetch_organization_chart(tenant_id)
+        completed_json = run_completed_determination(completed_json, chain_input_completed)
 
-        chain_input_next = {
-            "activities": process_definition.activities,
-            "gateways": process_definition_json.get('gateways', []),
-            "events": process_definition_json.get('events', []),
-            "subProcesses": process_definition.subProcesses,
-            "sequences": process_definition.sequences,
-            "instance_id": process_instance_id,
-            "activity_id": activity_id,
-            "process_definition_id": process_definition_id,
-            "output": output,
-
-            "next_activities": next_activities,
-            "role_bindings": workitem.get('assignees', []),
-            "organizations": organizations,
-            "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
-            "today": today,
-            "previous_outputs": workitem_input_data,
-            "user_feedback_message": workitem.get('temp_feedback', ''),
+        if len(completed_json["completedActivities"]) == 0:
+            llm_completed_json, completed_log = await run_prompt_and_parse(
+                prompt_completed, chain_input_completed, workitem, tenant_id, parser, "", log_prefix="[COMPLETED]", enable_logging=True
+            )
+            # Merge only expected keys to preserve instanceId/name/definitionId, etc.
+            completed_json["completedActivities"] = llm_completed_json.get("completedActivities", [])
             
-            "branch_merged_workitems": merged_workitems_from_step,
-
-            "completedActivities": completed_activities_from_step,
-            "attached_activities": attached_activities,
-            "sequence_conditions": sequence_condition_data
-        }
-
-        next_json, next_log = await run_prompt_and_parse(
-            prompt_next, chain_input_next, workitem, tenant_id, parser, completed_log, log_prefix="[NEXT]", enable_logging=False
-        )
-        completed_json["nextActivities"] = next_json["nextActivities"]
-
-
-        execute_next_activity(completed_json, tenant_id)
+        if len(completed_json["completedActivities"]) > 0:
+            isDone = completed_json["completedActivities"][0].get("result") == "DONE"
+            if isDone:
+                completed_activities_from_step = (
+                    completed_json.get("completedActivities")
+                    or completed_json.get("completedActivitiesDelta")
+                    or []
+                )
         
-        process_output(workitem, tenant_id)
+                organizations = fetch_organization_chart(tenant_id)
+                next_activity_payloads = resolve_next_activity_payloads(
+                    process_definition,
+                    activity_id,
+                    workitem,
+                    sequence_condition_data,
+                )
+
+
+                chain_input_next = {
+                    "activities": process_definition.activities,
+                    "gateways": process_definition_json.get('gateways', []),
+                    "events": process_definition_json.get('events', []),
+                    "subProcesses": process_definition.subProcesses,
+                    "sequences": process_definition.sequences,
+                    "instance_id": process_instance_id,
+                    "activity_id": activity_id,
+                    "process_definition_id": process_definition_id,
+                    "output": output,
+
+                    "next_activities": next_near_activities,
+                    "role_bindings": workitem.get('assignees', []),
+                    "organizations": organizations,
+                    "instance_name_pattern": process_definition_json.get("instanceNamePattern") or "",
+                    "today": today,
+                    "previous_outputs": workitem_input_data,
+                    "all_workitem_input_data": all_workitem_input_data,
+                    "user_feedback_message": workitem.get('temp_feedback', ''),
+                    "branch_merged_workitems": merged_workitems_from_step,
+                    "completedActivities": completed_activities_from_step,
+                    "attached_activities": attached_activities,
+                    "sequence_conditions": sequence_condition_data
+                }
+                
+                next_activity_payloads = await check_event_expression(next_activity_payloads, chain_input_next)
+            
+                next_activity_payloads = await check_subprocess_expression(next_activity_payloads, chain_input_next)
+
+                next_activity_payloads = await check_task_status(next_activity_payloads, chain_input_next)
+
+                completed_json["nextActivities"] = next_activity_payloads
+
+                execute_next_activity(completed_json, tenant_id)
+                
+                process_output(workitem, tenant_id)
 
     except Exception as e:
         print(f"[ERROR] Error in handle_workitem for workitem {workitem['id']}: {str(e)}")
@@ -2083,5 +3206,100 @@ def generate_browser_automation_description(
         # 기본 description 반환
         return current_activity.get('description', '웹 브라우저를 통한 작업을 수행합니다.')
 
+def get_all_input_data(workitem: dict, process_definition: Any) -> List[dict]:
+    """
+    루트 프로세스 인스턴스 기준으로 모든 워크아이템을 조회하여
+    - 같은 activity_id가 중복될 경우 start_date가 가장 최신인 것만 남기고
+    - 각 선택된 워크아이템의 output을 리스트로 모아 반환
+
+    Returns:
+        List[dict]: 최신 워크아이템들의 output 목록 (파싱 실패/없음은 제외)
+    """
+    try:
+        tenant_id = workitem.get('tenant_id')
+        proc_inst_id = workitem.get('proc_inst_id')
+        root_proc_inst_id = workitem.get('root_proc_inst_id')
+
+        if not root_proc_inst_id and proc_inst_id and tenant_id:
+            try:
+                inst = fetch_process_instance(proc_inst_id, tenant_id)
+                root_proc_inst_id = (
+                    getattr(inst, 'root_proc_inst_id', None)
+                    or (inst.get('root_proc_inst_id') if isinstance(inst, dict) else None)
+                )
+            except Exception:
+                root_proc_inst_id = None
+
+        if not tenant_id or not root_proc_inst_id:
+            return []
+
+        workitems = fetch_workitems_by_root_proc_inst_id(root_proc_inst_id, tenant_id) or []
+
+        def _get(obj, key):
+            if isinstance(obj, dict):
+                return obj.get(key)
+            return getattr(obj, key, None)
+
+        def _parse_dt(s: str) -> datetime:
+            try:
+                return datetime.fromisoformat(s)
+            except Exception:
+                try:
+                    return datetime.strptime(s[:19], '%Y-%m-%dT%H:%M:%S')
+                except Exception:
+                    return datetime.min
+
+        # 최신 항목만 유지 (activity_id 기준)
+        latest_by_activity: dict[str, Any] = {}
+        for wi in workitems:
+            act_id = _get(wi, 'activity_id') or _get(wi, 'activityId')
+            if not act_id:
+                continue
+            start_date = str(_get(wi, 'start_date') or _get(wi, 'startDate') or '')
+            prev = latest_by_activity.get(act_id)
+            if not prev:
+                latest_by_activity[act_id] = wi
+            else:
+                prev_sd = str(_get(prev, 'start_date') or _get(prev, 'startDate') or '')
+                if _parse_dt(start_date) >= _parse_dt(prev_sd):
+                    latest_by_activity[act_id] = wi
+
+        # 정렬(옵션): start_date 기준 오름차순
+        selected = list(latest_by_activity.values())
+        selected.sort(key=lambda x: _parse_dt(str(_get(x, 'start_date') or _get(x, 'startDate') or '')))
+
+        outputs: List[dict] = []
+        for wi in selected:
+            out = _get(wi, 'output')
+            if not out:
+                continue
+            if isinstance(out, str):
+                try:
+                    out = json.loads(out)
+                except Exception:
+                    continue
+            if isinstance(out, dict):
+                # Strip form wrapper if present
+                try:
+                    if len(out) == 1:
+                        only_key = next(iter(out))
+                        only_val = out[only_key]
+                        if isinstance(only_val, dict):
+                            outputs.append(only_val)
+                            continue
+                    # If multiple keys, append inner dicts for keys that look like form ids
+                    added_any = False
+                    for k, v in out.items():
+                        if isinstance(v, dict) and str(k).endswith('_form'):
+                            outputs.append(v)
+                            added_any = True
+                    if not added_any:
+                        outputs.append(out)
+                except Exception:
+                    outputs.append(out)
+        return outputs
+    except Exception as e:
+        print(f"[ERROR] Failed to get all input data for {workitem.get('id')}: {str(e)}")
+        return []
     
     

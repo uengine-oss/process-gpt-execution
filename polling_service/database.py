@@ -261,6 +261,7 @@ class WorkItem(BaseModel):
     execution_scope: Optional[str] = None
     rework_count: Optional[int] = 0
     project_id: Optional[str] = None
+    query: Optional[str] = None
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
@@ -819,7 +820,6 @@ def upsert_workitem_completed_log(completed_workitems: List[WorkItem], process_r
                     appliedFeedback = True
 
             description = {
-                "referenceInfo": process_result_data.get("referenceInfo", []),
                 "completedActivities": process_result_data.get("completedActivities", []),
                 "nextActivities": process_result_data.get("nextActivities", []),
                 "appliedFeedback": appliedFeedback
@@ -906,6 +906,14 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                 if  cannotProceedErrors and len(cannotProceedErrors) > 0:
                     log = "\n".join(f"[{error.get('type', '')}] {error.get('reason', '')}" for error in cannotProceedErrors);
                 
+                query = ''
+                description = safeget(activity, 'description', '')
+                instruction = safeget(activity, 'instruction', '')
+                if description:
+                    query += f"[Description]\n{description}\n\n"
+                if instruction:
+                    query += f"[Instruction]\n{instruction}\n\n"
+                
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     proc_inst_id=process_instance_data['proc_inst_id'],
@@ -922,7 +930,8 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     tenant_id=tenant_id,
                     assignees=assignees,
                     duration=safeget(activity, 'duration', 0),
-                    description=safeget(activity, 'description', ''),
+                    description=description,
+                    query=query,
                     agent_orch=agent_orch,
                     agent_mode=safeget(activity, 'agentMode', None),
                     log=log,
@@ -1027,7 +1036,15 @@ def upsert_cancelled_workitem(process_instance_data, process_result_data, proces
                 agent_orch = safeget(activity, 'orchestration', None)
                 if agent_orch == 'none':
                     agent_orch = None
-                    
+                
+                query = ''
+                description = safeget(activity, 'description', '')
+                instruction = safeget(activity, 'instruction', '')
+                if description:
+                    query += f"[Description]\n{description}\n\n"
+                if instruction:
+                    query += f"[Instruction]\n{instruction}\n\n"
+                
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     proc_inst_id=process_instance_data['proc_inst_id'],
@@ -1043,7 +1060,8 @@ def upsert_cancelled_workitem(process_instance_data, process_result_data, proces
                     tenant_id=tenant_id,
                     assignees=assignees,
                     duration=safeget(activity, 'duration', 0),
-                    description=safeget(activity, 'description', ''),
+                    description=description,
+                    query=query,
                     agent_orch=agent_orch,
                     agent_mode=safeget(activity, 'agentMode', None),
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
@@ -1118,6 +1136,14 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                 
                 user_info = fetch_assignee_info(activity_data['nextUserEmail'])
                 
+                query = ''
+                description = safeget(activity, 'description', '')
+                instruction = safeget(activity, 'instruction', '')
+                if description:
+                    query += f"[Description]\n{description}\n\n"
+                if instruction:
+                    query += f"[Instruction]\n{instruction}\n\n"
+                
                 workitem = WorkItem(
                     id=str(uuid.uuid4()),
                     proc_inst_id=process_instance_data['proc_inst_id'],
@@ -1132,7 +1158,8 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     tool=safeget(activity, 'tool', ''),
                     tenant_id=tenant_id,
                     agent_mode=agent_mode,
-                    description=safeget(activity, 'description', ''),
+                    description=description,
+                    query=query,
                     agent_orch=agent_orch,
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
                     execution_scope=execution_scope
@@ -1270,6 +1297,14 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     agent_orch = 'crewai-deep-research'
 
                 status = "TODO"
+                
+                query = ''
+                description = safeget(activity, 'description', '')
+                instruction = safeget(activity, 'instruction', '')
+                if description:
+                    query += f"[Description]\n{description}\n\n"
+                if instruction:
+                    query += f"[Instruction]\n{instruction}\n\n"
 
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
@@ -1288,7 +1323,8 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     assignees=assignees if assignees else [],
                     duration=safeget(activity, 'duration', 0),
                     agent_mode=agent_mode,
-                    description=safeget(activity, 'description', ''),
+                    description=description,
+                    query=query,
                     agent_orch=agent_orch,
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
                     execution_scope=execution_scope
@@ -1539,8 +1575,6 @@ def fetch_assignee_info(assignee_id: str) -> Dict[str, str]:
             type = "user"
             if user_info.get("is_agent") == True:
                 type = "agent"
-                if user_info.get("url") is not None and user_info.get("url").strip() != "":
-                    type = "a2a"
             return {
                 "type": type,
                 "id": user_info.get("id", assignee_id),
@@ -1570,22 +1604,23 @@ def fetch_assignee_info(assignee_id: str) -> Dict[str, str]:
         }
 
 
-def determine_agent_mode(user_id: str, activity_agent_mode: Optional[str] = None) -> Optional[str]:
+def determine_agent_mode(user_id: str, agent_mode: Optional[str] = None) -> Optional[str]:
     """
     사용자 ID와 액티비티의 에이전트 모드를 기반으로 적절한 에이전트 모드를 결정합니다.
     
     Args:
         user_id: 사용자 ID (쉼표로 구분된 여러 ID 가능)
-        activity_agent_mode: 액티비티에서 설정된 에이전트 모드
+        agent_mode: 액티비티에서 설정된 에이전트 모드
     
     Returns:
-        결정된 에이전트 모드 (None, "A2A", "DRAFT", "COMPLETE")
+        결정된 에이전트 모드 (None, "DRAFT", "COMPLETE")
     """
     # 액티비티에서 명시적으로 에이전트 모드가 설정된 경우
-    if activity_agent_mode is not None:
-        if activity_agent_mode.lower() not in ["none", "null"]:
-            return activity_agent_mode.upper()
-    
+    if agent_mode is not None:
+        if agent_mode.lower() not in ["none", "null"]:
+            mode = agent_mode.upper()
+            return mode
+
     # user_id가 없으면 None 반환
     if not user_id:
         return None
@@ -1595,7 +1630,6 @@ def determine_agent_mode(user_id: str, activity_agent_mode: Optional[str] = None
         user_ids = user_id.split(',')
         has_user = False
         has_agent = False
-        has_a2a = False
         
         for user_id in user_ids:
             assignee_info = fetch_assignee_info(user_id)
@@ -1603,14 +1637,9 @@ def determine_agent_mode(user_id: str, activity_agent_mode: Optional[str] = None
                 has_user = True
             elif assignee_info['type'] == "agent":
                 has_agent = True
-            elif assignee_info['type'] == "a2a":
-                has_a2a = True
         
-        # A2A가 하나라도 있으면 A2A
-        if has_a2a:
-            return "A2A"
         # 사용자+에이전트 조합이면 DRAFT
-        elif has_user and has_agent:
+        if has_user and has_agent:
             return "DRAFT"
         # 에이전트만 있으면 COMPLETE
         elif has_agent and not has_user:
@@ -1622,9 +1651,7 @@ def determine_agent_mode(user_id: str, activity_agent_mode: Optional[str] = None
     # 단일 사용자 ID인 경우
     else:
         assignee_info = fetch_assignee_info(user_id)
-        if assignee_info['type'] == "a2a":
-            return "A2A"
-        elif assignee_info['type'] == "agent":
+        if assignee_info['type'] == "agent":
             return "COMPLETE"
         elif assignee_info['type'] == "user":
             return None

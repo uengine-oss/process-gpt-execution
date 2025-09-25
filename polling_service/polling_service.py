@@ -89,14 +89,14 @@ async def polling_workitem():
         except Exception as e:
             print(f"[ERROR] Failed to fetch submitted workitems: {str(e)}")
         
-        # A2A 에이전트 워크아이템 조회
-        try:
-            agent_workitems = fetch_workitem_with_agent()
-            if agent_workitems:
-                all_workitems.extend(agent_workitems)
-                print(f"[DEBUG] Found {len(agent_workitems)} agent workitems")
-        except Exception as e:
-            print(f"[ERROR] Failed to fetch agent workitems: {str(e)}")
+        # # A2A 에이전트 워크아이템 조회
+        # try:
+        #     agent_workitems = fetch_workitem_with_agent()
+        #     if agent_workitems:
+        #         all_workitems.extend(agent_workitems)
+        #         print(f"[DEBUG] Found {len(agent_workitems)} agent workitems")
+        # except Exception as e:
+        #     print(f"[ERROR] Failed to fetch agent workitems: {str(e)}")
             
         try:
             pending_workitems = fetch_workitem_with_pending_status()

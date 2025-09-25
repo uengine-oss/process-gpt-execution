@@ -175,6 +175,23 @@ async def submit_workitem(input: dict):
             workitem_data['revert_from'] = revert_from
             workitem_data['id'] = str(uuid.uuid4())
     else:
+        reference_ids = []
+        if prev_activities and len(prev_activities) > 0:
+            for prev_activity in prev_activities:
+                if isinstance(prev_activity, dict):
+                    if prev_activity.get('status') == 'SUBMITTED':
+                        reference_ids.append(prev_activity.get('id'))
+                else:
+                    reference_ids.append(prev_activity.id)
+
+        query = ''
+        description = activity.description
+        instruction = activity.instruction
+        if description:
+            query += f"[Description]\n{description}\n\n"
+        if instruction:
+            query += f"[Instruction]\n{instruction}\n\n"
+
         workitem_data = {
             "id": str(uuid.uuid4()),
             "user_id": user_info.get('id'),
@@ -187,13 +204,14 @@ async def submit_workitem(input: dict):
             "due_date": due_date,
             "status": 'SUBMITTED',
             "assignees": role_bindings,
-            "reference_ids": prev_activities,
+            "reference_ids": reference_ids,
             "duration": activity.duration,
             "tool": activity.tool,
             "output": output,
             "retry": 0,
             "consumer": None,
-            "description": activity.description,
+            "description": description,
+            "query": query,
             "project_id": project_id,
             "root_proc_inst_id": process_instance_id
         }
@@ -334,6 +352,14 @@ async def initiate_workitem(input: dict):
     
     tenant_id = input.get('tenant_id')
     
+    query = ''
+    description = activity.description
+    instruction = activity.instruction
+    if description:
+        query += f"[Description]\n{description}\n\n"
+    if instruction:
+        query += f"[Instruction]\n{instruction}\n\n"
+
     workitem_data = {
         "id": str(uuid.uuid4()),
         "user_id": user_email,
@@ -351,7 +377,8 @@ async def initiate_workitem(input: dict):
         "output": None,
         "retry": 0,
         "consumer": None,
-        "description": activity.description,
+        "description": description,
+        "query": query,
         "project_id": project_id,
         "root_proc_inst_id": process_instance_id
     }
@@ -585,6 +612,7 @@ async def create_new_workitem(workitem) -> dict:
         "duration": workitem.duration,
         "tool": workitem.tool,
         "description": workitem.description,
+        "query": workitem.query,
         "output": workitem.output,
         "tenant_id": workitem.tenant_id,
         "project_id": workitem.project_id,
