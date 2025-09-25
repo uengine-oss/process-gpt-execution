@@ -977,7 +977,7 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
                     except Exception:
                         input_data_str = str(input_data)
                     base_desc = workitem.query or ""
-                    augmented_desc = f"{base_desc}[inputData]\n{input_data_str}" if base_desc else f"[inputData]\n{input_data_str}"
+                    augmented_desc = f"{base_desc}[InputData]\n{input_data_str}" if base_desc else f"[InputData]\n{input_data_str}"
                     if augmented_desc != workitem.description:
                         upsert_workitem({
                             "id": workitem.id,

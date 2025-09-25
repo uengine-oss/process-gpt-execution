@@ -188,9 +188,9 @@ async def submit_workitem(input: dict):
         description = activity.description
         instruction = activity.instruction
         if description:
-            query += f"[description]\n{description}\n\n"
+            query += f"[Description]\n{description}\n\n"
         if instruction:
-            query += f"[instruction]\n{instruction}\n\n"
+            query += f"[Instruction]\n{instruction}\n\n"
 
         workitem_data = {
             "id": str(uuid.uuid4()),
@@ -356,9 +356,9 @@ async def initiate_workitem(input: dict):
     description = activity.description
     instruction = activity.instruction
     if description:
-        query += f"[description]\n{description}\n\n"
+        query += f"[Description]\n{description}\n\n"
     if instruction:
-        query += f"[instruction]\n{instruction}\n\n"
+        query += f"[Instruction]\n{instruction}\n\n"
 
     workitem_data = {
         "id": str(uuid.uuid4()),

@@ -906,6 +906,14 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                 if  cannotProceedErrors and len(cannotProceedErrors) > 0:
                     log = "\n".join(f"[{error.get('type', '')}] {error.get('reason', '')}" for error in cannotProceedErrors);
                 
+                query = ''
+                description = safeget(activity, 'description', '')
+                instruction = safeget(activity, 'instruction', '')
+                if description:
+                    query += f"[Description]\n{description}\n\n"
+                if instruction:
+                    query += f"[Instruction]\n{instruction}\n\n"
+                
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     proc_inst_id=process_instance_data['proc_inst_id'],
@@ -922,8 +930,8 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     tenant_id=tenant_id,
                     assignees=assignees,
                     duration=safeget(activity, 'duration', 0),
-                    description=safeget(activity, 'description', ''),
-                    query=safeget(activity, 'instruction', ''),
+                    description=description,
+                    query=query,
                     agent_orch=agent_orch,
                     agent_mode=safeget(activity, 'agentMode', None),
                     log=log,
@@ -1028,7 +1036,15 @@ def upsert_cancelled_workitem(process_instance_data, process_result_data, proces
                 agent_orch = safeget(activity, 'orchestration', None)
                 if agent_orch == 'none':
                     agent_orch = None
-                    
+                
+                query = ''
+                description = safeget(activity, 'description', '')
+                instruction = safeget(activity, 'instruction', '')
+                if description:
+                    query += f"[Description]\n{description}\n\n"
+                if instruction:
+                    query += f"[Instruction]\n{instruction}\n\n"
+                
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     proc_inst_id=process_instance_data['proc_inst_id'],
@@ -1044,8 +1060,8 @@ def upsert_cancelled_workitem(process_instance_data, process_result_data, proces
                     tenant_id=tenant_id,
                     assignees=assignees,
                     duration=safeget(activity, 'duration', 0),
-                    description=safeget(activity, 'description', ''),
-                    query=safeget(activity, 'instruction', ''),
+                    description=description,
+                    query=query,
                     agent_orch=agent_orch,
                     agent_mode=safeget(activity, 'agentMode', None),
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
@@ -1120,6 +1136,14 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                 
                 user_info = fetch_assignee_info(activity_data['nextUserEmail'])
                 
+                query = ''
+                description = safeget(activity, 'description', '')
+                instruction = safeget(activity, 'instruction', '')
+                if description:
+                    query += f"[Description]\n{description}\n\n"
+                if instruction:
+                    query += f"[Instruction]\n{instruction}\n\n"
+                
                 workitem = WorkItem(
                     id=str(uuid.uuid4()),
                     proc_inst_id=process_instance_data['proc_inst_id'],
@@ -1134,8 +1158,8 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     tool=safeget(activity, 'tool', ''),
                     tenant_id=tenant_id,
                     agent_mode=agent_mode,
-                    description=safeget(activity, 'description', ''),
-                    query=safeget(activity, 'instruction', ''),
+                    description=description,
+                    query=query,
                     agent_orch=agent_orch,
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
                     execution_scope=execution_scope
@@ -1273,6 +1297,14 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     agent_orch = 'crewai-deep-research'
 
                 status = "TODO"
+                
+                query = ''
+                description = safeget(activity, 'description', '')
+                instruction = safeget(activity, 'instruction', '')
+                if description:
+                    query += f"[Description]\n{description}\n\n"
+                if instruction:
+                    query += f"[Instruction]\n{instruction}\n\n"
 
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
@@ -1291,8 +1323,8 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     assignees=assignees if assignees else [],
                     duration=safeget(activity, 'duration', 0),
                     agent_mode=agent_mode,
-                    description=safeget(activity, 'description', ''),
-                    query=safeget(activity, 'instruction', ''),
+                    description=description,
+                    query=query,
                     agent_orch=agent_orch,
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
                     execution_scope=execution_scope
