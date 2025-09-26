@@ -25,7 +25,8 @@ from database import (
     upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
     upsert_todo_workitems, upsert_workitem, ProcessInstance,
     fetch_todolist_by_proc_inst_id, execute_rpc, upsert_cancelled_workitem, insert_process_instance,
-    fetch_child_instances_by_parent, fetch_organization_chart, fetch_workitems_by_root_proc_inst_id
+    fetch_child_instances_by_parent, fetch_organization_chart, fetch_workitems_by_root_proc_inst_id,
+    get_field_value, group_fields_by_form, get_input_data
 )
 from process_definition import load_process_definition
 from code_executor import execute_python_code
@@ -969,22 +970,6 @@ def _persist_process_data(process_instance: ProcessInstance, process_result: Pro
                             print(f"[DEBUG] Updated description for workitem {workitem.id}: {updated_description[:100]}...")
                 except Exception as e:
                     print(f"[ERROR] Failed to update browser automation description: {str(e)}")
-            try:
-                input_data = get_input_data(workitem.model_dump(), process_definition)
-                if input_data:
-                    try:
-                        input_data_str = json.dumps(input_data, ensure_ascii=False)
-                    except Exception:
-                        input_data_str = str(input_data)
-                    base_desc = workitem.query or ""
-                    augmented_desc = f"{base_desc}[InputData]\n{input_data_str}" if base_desc else f"[InputData]\n{input_data_str}"
-                    if augmented_desc != workitem.description:
-                        upsert_workitem({
-                            "id": workitem.id,
-                            "query": augmented_desc
-                        }, tenant_id)
-            except Exception as e:
-                print(f"[ERROR] Failed to append input_data to description for workitem {workitem.id}: {str(e)}")
     
     # Upsert process instance
     if process_instance.status == "NEW":
@@ -1178,179 +1163,6 @@ def update_instance_status_on_error(workitem: dict, is_first: bool, is_last: boo
 
 from typing import Any, Dict, List, Optional
 
-def get_field_value(field_info: str, process_definition: Any, process_instance_id: str, tenant_id: str):
-    """
-    산출물에서 특정 필드의 값을 추출 (구조 변경 최소화)
-    - (1) 현재 인스턴스 단일 조회 → 값 있으면 단일값으로 반환
-    - (2) 루트 인스턴스 단일 조회(+그룹 인덱싱) → 값 있으면 단일값으로 반환
-    - (3) 루트 기준 다건 조회(fetch_workitems_by_root_proc_inst_id)
-         → 전부 배열로 모아 { form_id: { field_id: ["<scope>:<value>", ...] } } 형태로 반환
-    """
-    try:
-        field_value: Dict[str, Any] = {}
-
-        process_definition_id = process_definition.processDefinitionId
-        split_field_info = field_info.split('.')
-        form_id = split_field_info[0]
-        field_id = split_field_info[1]
-        activity_id = form_id.replace("_form", "").replace(f"{process_definition_id}_", "")
-
-        def _out(wi: Any) -> Optional[dict]:
-            return getattr(wi, "output", None) or (wi.get("output") if isinstance(wi, dict) else None)
-
-        def _val_from_form(out: dict) -> Optional[Any]:
-            form = out.get(form_id)
-            if isinstance(form, dict):
-                return form.get(field_id)
-            return None
-
-        def _to_int(v: Any, default: int = 0) -> int:
-            try:
-                s = str(v).strip()
-                return int(s) if s != "" else default
-            except Exception:
-                return default
-
-        def _ci_equal(a: Optional[str], b: Optional[str]) -> bool:
-            return (a or "").lower() == (b or "").lower()
-
-        # (1) 현재 인스턴스 단일 조회
-        workitem = fetch_workitem_by_proc_inst_and_activity(process_instance_id, activity_id, tenant_id, True)
-        if workitem:
-            out = _out(workitem)
-            if out:
-                val = _val_from_form(out)
-                if val is not None:
-                    field_value[form_id] = { field_id: val }
-                    return field_value
-
-        # 인스턴스 정보
-        instance = fetch_process_instance(process_instance_id, tenant_id)
-        root_proc_inst_id = getattr(instance, "root_proc_inst_id", None) or (instance.get("root_proc_inst_id") if isinstance(instance, dict) else None)
-        exec_scope_raw = getattr(instance, "execution_scope", None) or (instance.get("execution_scope") if isinstance(instance, dict) else None)
-        exec_scope = _to_int(exec_scope_raw, 0)
-
-        # (2) 루트 인스턴스 단일 조회(+그룹 인덱싱)
-        workitem_root = fetch_workitem_by_proc_inst_and_activity(root_proc_inst_id, activity_id, tenant_id, True)
-        if workitem_root:
-            out = _out(workitem_root)
-            if out:
-                # (a) 직접 필드
-                val = _val_from_form(out)
-                if val is not None:
-                    field_value[form_id] = { field_id: val }
-                    return field_value
-                # (b) 그룹형: form 내부 item_value[exec_scope][field_id]
-                form = out.get(form_id)
-                if isinstance(form, dict):
-                    for _, item_value in form.items():
-                        try:
-                            candidate = item_value[exec_scope][field_id]
-                            if candidate is not None:
-                                field_value[form_id] = { field_id: candidate }
-                                return field_value
-                        except Exception:
-                            pass
-
-        workitems = fetch_workitems_by_root_proc_inst_id(root_proc_inst_id, tenant_id)
-        if not workitems:
-            return None
-
-        filtered: List[Any] = []
-        for wi in workitems:
-            wi_act = getattr(wi, "activity_id", None) or (wi.get("activity_id") if isinstance(wi, dict) else None)
-            if _ci_equal(wi_act, activity_id):
-                filtered.append(wi)
-        if not filtered:
-            return None
-
-        def _sort_key(wi: Any):
-            scope = _to_int(getattr(wi, "execution_scope", None) or (wi.get("execution_scope") if isinstance(wi, dict) else None), 10**9)
-            missing = 1 if scope == 10**9 else 0
-            return (missing, scope)
-
-        filtered.sort(key=_sort_key)
-
-        values: List[str] = []
-        for wi in filtered:
-            out = _out(wi)
-            if not out:
-                continue
-            val = _val_from_form(out)
-            if val is not None:
-                scope_i = _to_int(getattr(wi, "execution_scope", None) or (wi.get("execution_scope") if isinstance(wi, dict) else None), 0)
-                values.append(f"{scope_i}:{val}")
-
-        if values:
-            field_value[form_id] = { field_id: values }
-            return field_value
-
-        return None
-
-    except Exception as e:
-        print(f"[ERROR] Failed to get output field value for {field_info}: {str(e)}")
-        return None
-
-
-def group_fields_by_form(field_values: dict) -> dict:
-    """
-    필드 값들을 폼별로 그룹화하는 공통 함수
-    
-    Args:
-        field_values: {'form_id.field_name': {'form_id': {'field_name': value}}, ...} 형태의 딕셔너리
-    
-    Returns:
-        {'form_id': {'field_name': value, ...}, ...} 형태의 그룹화된 딕셔너리
-    """
-    form_groups = {}
-    
-    for field_key, field_value in field_values.items():
-        if not field_value:
-            continue
-            
-        form_id = field_key.split('.')[0]
-        if form_id not in form_groups:
-            form_groups[form_id] = {}
-        
-        field_id = field_key.split('.')[1] if '.' in field_key else field_key
-        
-        if isinstance(field_value, dict) and form_id in field_value:
-            actual_value = field_value[form_id].get(field_id)
-            if actual_value is not None:
-                form_groups[form_id][field_id] = actual_value
-    
-    return {form_id: fields for form_id, fields in form_groups.items() if fields}
-
-def get_input_data(workitem: dict, process_definition: Any):
-    """
-    워크아이템 실행에 필요한 입력 데이터 추출
-    """
-    try:
-        activity_id = workitem.get('activity_id')
-        activity = process_definition.find_activity_by_id(activity_id)
-
-        if not activity:
-            return None
-        
-        input_data = {}
-        input_fields = activity.inputData
-        if len(input_fields) != 0:
-            # 각 필드의 값을 가져오기
-            field_values = {}
-            for input_field in input_fields:
-                field_value = get_field_value(input_field, process_definition, workitem.get('proc_inst_id'), workitem.get('tenant_id'))
-                if field_value:
-                    field_values[input_field] = field_value
-            
-            # 폼별로 그룹화
-            grouped_data = group_fields_by_form(field_values)
-            input_data.update(grouped_data)
-
-        return input_data
-
-    except Exception as e:
-        print(f"[ERROR] Failed to get selected info for {workitem.get('id')}: {str(e)}")
-        return None
 
 def get_gateway_condition_data(workitem: dict, process_definition: Any, gateway_id: str):
     """
