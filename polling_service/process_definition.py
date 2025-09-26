@@ -594,26 +594,26 @@ class ProcessDefinition(BaseModel):
 
         def act_to_dict(owner_id: str, a):
             pa = self.find_activity_by_id(a.id)
-            def coalesce(child, parent):
-                return child if child not in (None, [], "") else parent
-            def coalesce_list(child_list, parent_list):
-                return child_list if child_list else (parent_list or [])
+            def prefer(parent, child):
+                return parent if parent not in (None, [], "") else child
+            def prefer_list(parent_list, child_list):
+                return parent_list if parent_list else (child_list or [])
             return {
                 "id": a.id,
-                "name": coalesce(a.name, getattr(pa, "name", None) if pa else None),
-                "role": coalesce(a.role, getattr(pa, "role", None) if pa else None),
-                "tool": coalesce(a.tool, getattr(pa, "tool", None) if pa else None),
-                "type": coalesce(a.type, getattr(pa, "type", None) if pa else None),
+                "name": prefer(getattr(pa, "name", None) if pa else None, a.name),
+                "role": prefer(getattr(pa, "role", None) if pa else None, a.role),
+                "tool": prefer(getattr(pa, "tool", None) if pa else None, a.tool),
+                "type": prefer(getattr(pa, "type", None) if pa else None, a.type),
                 "process": owner_id,
-                "duration": a.duration if a.duration is not None else (getattr(pa, "duration", None) if pa else None),
-                "agentMode": coalesce(a.agentMode, getattr(pa, "agentMode", None) if pa else None),
-                "inputData": coalesce_list(a.inputData or [], getattr(pa, "inputData", None) if pa else None),
-                "outputData": coalesce_list(a.outputData or [], getattr(pa, "outputData", None) if pa else None),
-                "properties": coalesce(a.properties, getattr(pa, "properties", "{}") if pa else "{}") or "{}",
-                "description": coalesce(a.description, getattr(pa, "description", None) if pa else None),
-                "instruction": coalesce(a.instruction, getattr(pa, "instruction", None) if pa else None),
-                "orchestration": coalesce(a.orchestration, getattr(pa, "orchestration", None) if pa else None),
-                "attachedEvents": coalesce_list(a.attachedEvents or [], getattr(pa, "attachedEvents", None) if pa else None)
+                "duration": prefer(getattr(pa, "duration", None) if pa else None, a.duration),
+                "agentMode": prefer(getattr(pa, "agentMode", None) if pa else None, a.agentMode),
+                "inputData": prefer_list(getattr(pa, "inputData", None) if pa else None, a.inputData or []),
+                "outputData": prefer_list(getattr(pa, "outputData", None) if pa else None, a.outputData or []),
+                "properties": (prefer(getattr(pa, "properties", "{}") if pa else "{}", a.properties) or "{}"),
+                "description": prefer(getattr(pa, "description", None) if pa else None, a.description),
+                "instruction": prefer(getattr(pa, "instruction", None) if pa else None, a.instruction),
+                "orchestration": prefer(getattr(pa, "orchestration", None) if pa else None, a.orchestration),
+                "attachedEvents": prefer_list(getattr(pa, "attachedEvents", None) if pa else None, a.attachedEvents or [])
             }
 
         def sanitize_list(objs):
