@@ -906,13 +906,16 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                 if  cannotProceedErrors and len(cannotProceedErrors) > 0:
                     log = "\n".join(f"[{error.get('type', '')}] {error.get('reason', '')}" for error in cannotProceedErrors);
                 
-                query = ''
-                description = safeget(activity, 'description', '')
-                instruction = safeget(activity, 'instruction', '')
-                if description:
-                    query += f"[Description]\n{description}\n\n"
-                if instruction:
-                    query += f"[Instruction]\n{instruction}\n\n"
+                if workitem and workitem.query:
+                    query = workitem.query
+                else:
+                    query = ''
+                    description = safeget(activity, 'description', '')
+                    instruction = safeget(activity, 'instruction', '')
+                    if description:
+                        query += f"[Description]\n{description}\n\n"
+                    if instruction:
+                        query += f"[Instruction]\n{instruction}\n\n"
                 
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
@@ -1037,13 +1040,16 @@ def upsert_cancelled_workitem(process_instance_data, process_result_data, proces
                 if agent_orch == 'none':
                     agent_orch = None
                 
-                query = ''
-                description = safeget(activity, 'description', '')
-                instruction = safeget(activity, 'instruction', '')
-                if description:
-                    query += f"[Description]\n{description}\n\n"
-                if instruction:
-                    query += f"[Instruction]\n{instruction}\n\n"
+                if workitem and workitem.query:
+                    query = workitem.query
+                else:
+                    query = ''
+                    description = safeget(activity, 'description', '')
+                    instruction = safeget(activity, 'instruction', '')
+                    if description:
+                        query += f"[Description]\n{description}\n\n"
+                    if instruction:
+                        query += f"[Instruction]\n{instruction}\n\n"
                 
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
@@ -1145,13 +1151,16 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                 
                 user_info = fetch_assignee_info(activity_data['nextUserEmail'])
                 
-                query = ''
-                description = safeget(activity, 'description', '')
-                instruction = safeget(activity, 'instruction', '')
-                if description:
-                    query += f"[Description]\n{description}\n\n"
-                if instruction:
-                    query += f"[Instruction]\n{instruction}\n\n"
+                if workitem and workitem.query:
+                    query = workitem.query
+                else:
+                    query = ''
+                    description = safeget(activity, 'description', '')
+                    instruction = safeget(activity, 'instruction', '')
+                    if description:
+                        query += f"[Description]\n{description}\n\n"
+                    if instruction:
+                        query += f"[Instruction]\n{instruction}\n\n"
                 
                 workitem = WorkItem(
                     id=str(uuid.uuid4()),
@@ -1308,13 +1317,16 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
 
                 status = "TODO"
                 
-                query = ''
-                description = safeget(activity, 'description', '')
-                instruction = safeget(activity, 'instruction', '')
-                if description:
-                    query += f"[Description]\n{description}\n\n"
-                if instruction:
-                    query += f"[Instruction]\n{instruction}\n\n"
+                if workitem and workitem.query:
+                    query = workitem.query
+                else:
+                    query = ''
+                    description = safeget(activity, 'description', '')
+                    instruction = safeget(activity, 'instruction', '')
+                    if description:
+                        query += f"[Description]\n{description}\n\n"
+                    if instruction:
+                        query += f"[Instruction]\n{instruction}\n\n"
 
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
