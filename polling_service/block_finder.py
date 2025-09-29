@@ -5,6 +5,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Union, TYPE_CHECKING
 
+from typing import Callable, Tuple
+
 if TYPE_CHECKING:
     from process_definition import ProcessDefinition
 
@@ -42,15 +44,59 @@ def _call_optional(obj: Any, method_name: str, *args, **kwargs):
     return None
 
 
+@dataclass
+class FeedbackOptions:
+    strategy: str = "iterative_break"  # "single_best" | "all_back_edges" | "iterative_break"
+    exclude_event_types: Set[str] = None  # e.g., {"compensation", "error", "timer", "boundary"}
+    candidate_filter: Optional[Callable[["SequenceFlow"], bool]] = None  # return True to allow
+    stable_tiebreak: bool = True
+
+    def __post_init__(self) -> None:
+        if self.exclude_event_types is None:
+            self.exclude_event_types = {"compensation", "error", "timer", "boundary"}
+
+
 class ProcessGraph:
-    def __init__(self, process_definition: "ProcessDefinition") -> None:
+    def __init__(self, process_definition: "ProcessDefinition", options: Optional[FeedbackOptions] = None) -> None:
         self.process_definition = process_definition
         self.nodes: Dict[str, ActivityNode] = {}
         self.sequence_flows: List[SequenceFlow] = []
+        self.options: FeedbackOptions = options or FeedbackOptions()
         self._build_nodes()
         self._build_sequences()
         # Infer feedback edges topologically (back-edges) and mark them
         self._infer_feedback_flows()
+
+    def debug_snapshot(self) -> str:
+        lines: List[str] = []
+        try:
+            lines.append(f"strategy={self.options.strategy}, exclude_event_types={sorted(self.options.exclude_event_types)}")
+        except Exception:
+            lines.append(f"strategy={getattr(self.options, 'strategy', '')}")
+        # Nodes
+        lines.append("Nodes:")
+        try:
+            nodes_sorted = sorted(self.nodes.values(), key=lambda n: n.id)
+        except Exception:
+            nodes_sorted = list(self.nodes.values())
+        for n in nodes_sorted:
+            raw = getattr(n, 'raw', None)
+            t = getattr(raw, 'type', None)
+            ds = getattr(self, 'distance_from_start', {}).get(n, None)
+            de = getattr(self, 'distance_to_end', {}).get(n, None)
+            lines.append(f"  - {n.id} ({t}) ds={ds} de={de}")
+        # Flows
+        lines.append("Flows:")
+        try:
+            flows_sorted = sorted(self.sequence_flows, key=lambda f: f.id)
+        except Exception:
+            flows_sorted = list(self.sequence_flows)
+        for f in flows_sorted:
+            u = f.getSourceActivity().id if f.getSourceActivity() else None
+            v = f.getTargetActivity().id if f.getTargetActivity() else None
+            fb = " [FB]" if f.isFeedback() else ""
+            lines.append(f"  - {u} -> {v}{fb}")
+        return "\n".join(lines)
 
     def resolve_node(self, node_or_id: Union[str, ActivityNode, None]) -> Optional[ActivityNode]:
         if isinstance(node_or_id, ActivityNode):
@@ -133,8 +179,18 @@ class ProcessGraph:
             or _call_optional(self.process_definition, "find_event_by_id", node_id)
         )
 
+    def recompute_feedback_flows(self) -> None:
+        # clear previously inferred flags
+        for flow in self.sequence_flows:
+            if "__inferredFeedback" in flow.properties:
+                try:
+                    del flow.properties["__inferredFeedback"]
+                except Exception:
+                    flow.properties["__inferredFeedback"] = False
+        self._infer_feedback_flows()
+
     def _infer_feedback_flows(self) -> None:
-        # 1) pick start nodes: prefer startEvent; fallback to nodes with no incoming
+        # 1) Identify start and end nodes (prefer explicit start/end events)
         start_nodes: List[ActivityNode] = []
         for node in self.nodes.values():
             raw = getattr(node, 'raw', None)
@@ -146,71 +202,230 @@ class ProcessGraph:
                 if not [f for f in node.getIncomingSequenceFlows() if not f.isFeedback()]:
                     start_nodes.append(node)
         if not start_nodes:
-            # if still empty, choose arbitrary nodes to avoid NPE; levels remain 0
             start_nodes = list(self.nodes.values())
 
-        # 2) level labeling via BFS ignoring explicit feedback
+        end_nodes: List[ActivityNode] = []
+        for node in self.nodes.values():
+            raw = getattr(node, 'raw', None)
+            t = getattr(raw, 'type', None)
+            if isinstance(t, str) and 'end' in t.lower():
+                end_nodes.append(node)
+        if not end_nodes:
+            for node in self.nodes.values():
+                if not [f for f in node.getOutgoingSequenceFlows() if not f.isFeedback()]:
+                    end_nodes.append(node)
+        if not end_nodes:
+            end_nodes = list(self.nodes.values())
+
+        # 2) Compute distances: from start and to end (ignoring existing feedback)
         from collections import deque as _deque
         INF = 10**9
-        level: Dict[ActivityNode, int] = {n: INF for n in self.nodes.values()}
+
+        dist_from_start: Dict[ActivityNode, int] = {n: INF for n in self.nodes.values()}
         dq = _deque()
         for s in start_nodes:
-            level[s] = 0
+            dist_from_start[s] = 0
             dq.append(s)
         while dq:
             cur = dq.popleft()
-            cur_level = level[cur]
+            cur_d = dist_from_start[cur]
             for flow in cur.getOutgoingSequenceFlows():
                 if flow.isFeedback():
                     continue
                 nxt = flow.getTargetActivity()
                 if nxt is None:
                     continue
-                if level.get(nxt, INF) > cur_level + 1:
-                    level[nxt] = cur_level + 1
+                if dist_from_start.get(nxt, INF) > cur_d + 1:
+                    dist_from_start[nxt] = cur_d + 1
                     dq.append(nxt)
 
-        # 3) candidate back-edges: source.level >= target.level; confirm cycle t->...->s without this flow
-        # build adjacency (excluding explicit feedback) for cycle test
-        adj: Dict[ActivityNode, List[ActivityNode]] = {n: [] for n in self.nodes.values()}
+        rev_adj: Dict[ActivityNode, List[ActivityNode]] = {n: [] for n in self.nodes.values()}
         for flow in self.sequence_flows:
             if flow.isFeedback():
                 continue
             u = flow.getSourceActivity()
             v = flow.getTargetActivity()
             if u and v:
-                adj[u].append(v)
+                rev_adj[v].append(u)
 
-        def _reachable(src: ActivityNode, dst: ActivityNode, skip_flow: SequenceFlow) -> bool:
+        dist_to_end: Dict[ActivityNode, int] = {n: INF for n in self.nodes.values()}
+        dq = _deque()
+        for e in end_nodes:
+            dist_to_end[e] = 0
+            dq.append(e)
+        while dq:
+            cur = dq.popleft()
+            cur_d = dist_to_end[cur]
+            for prev in rev_adj.get(cur, []):
+                if dist_to_end.get(prev, INF) > cur_d + 1:
+                    dist_to_end[prev] = cur_d + 1
+                    dq.append(prev)
+
+        # Store distance maps for external reference if needed
+        self.distance_from_start = dist_from_start
+        self.distance_to_end = dist_to_end
+
+        # Strategy helpers
+        def _build_adj() -> Dict[ActivityNode, List[ActivityNode]]:
+            a: Dict[ActivityNode, List[ActivityNode]] = {n: [] for n in self.nodes.values()}
+            for fl in self.sequence_flows:
+                if fl.isFeedback():
+                    continue
+                u = fl.getSourceActivity()
+                v = fl.getTargetActivity()
+                if u and v:
+                    a[u].append(v)
+            return a
+
+        def _tarjan(adj: Dict[ActivityNode, List[ActivityNode]]) -> List[List[ActivityNode]]:
+            index_counter = [0]
+            index_map: Dict[ActivityNode, int] = {}
+            lowlink_map: Dict[ActivityNode, int] = {}
+            stack_local: List[ActivityNode] = []
+            on_stack: Set[ActivityNode] = set()
+            comps: List[List[ActivityNode]] = []
+
+            def strongconnect(v: ActivityNode) -> None:
+                idx = index_counter[0]
+                index_counter[0] += 1
+                index_map[v] = idx
+                lowlink_map[v] = idx
+                stack_local.append(v)
+                on_stack.add(v)
+
+                for w in adj.get(v, []):
+                    if w not in index_map:
+                        strongconnect(w)
+                        lowlink_map[v] = min(lowlink_map[v], lowlink_map[w])
+                    elif w in on_stack:
+                        lowlink_map[v] = min(lowlink_map[v], index_map[w])
+
+                if lowlink_map[v] == index_map[v]:
+                    comp: List[ActivityNode] = []
+                    while True:
+                        w = stack_local.pop()
+                        on_stack.discard(w)
+                        comp.append(w)
+                        if w is v:
+                            break
+                    comps.append(comp)
+
+            for node in self.nodes.values():
+                if node not in index_map:
+                    strongconnect(node)
+            return comps
+
+        def _event_type_of(node: Optional[ActivityNode]) -> str:
+            raw = getattr(node, 'raw', None)
+            t = getattr(raw, 'type', None)
+            return t.lower() if isinstance(t, str) else ""
+
+        def _allowed_candidate(flow: SequenceFlow, comp_set: Optional[Set[ActivityNode]] = None) -> bool:
+            if flow.isFeedback():
+                return False
+            u = flow.getSourceActivity()
+            v = flow.getTargetActivity()
+            if u is None or v is None:
+                return False
+            if comp_set is not None and (u not in comp_set or v not in comp_set):
+                return False
+            # domain-based exclusions by event types
+            et_u = _event_type_of(u)
+            et_v = _event_type_of(v)
+            for bad in self.options.exclude_event_types:
+                if bad in et_u or bad in et_v:
+                    return False
+            if self.options.candidate_filter is not None and not self.options.candidate_filter(flow):
+                return False
+            return True
+
+        def _participates_in_cycle(flow: SequenceFlow, adj: Dict[ActivityNode, List[ActivityNode]]) -> bool:
+            u = flow.getSourceActivity()
+            v = flow.getTargetActivity()
+            if u is None or v is None:
+                return False
+            # BFS over static adjacency (ignoring feedback flags) to avoid mid-pass interference
+            q = deque([v])
             seen: Set[ActivityNode] = set()
-            q = _deque([src])
             while q:
                 x = q.popleft()
                 if x in seen:
                     continue
                 seen.add(x)
-                if x is dst:
+                if x is u:
                     return True
-                for flow in x.getOutgoingSequenceFlows():
-                    if flow is skip_flow or flow.isFeedback():
-                        continue
-                    y = flow.getTargetActivity()
-                    if y and y not in seen:
+                for y in adj.get(x, []):
+                    # No need to skip the exact flow u->v here since traversal is v->...->u
+                    if y not in seen:
                         q.append(y)
             return False
 
-        for flow in self.sequence_flows:
-            if flow.isFeedback():
-                continue
-            s = flow.getSourceActivity()
-            t = flow.getTargetActivity()
-            if s is None or t is None:
-                continue
-            ls = level.get(s, INF)
-            lt = level.get(t, INF)
-            if ls >= lt and lt != INF:
-                if _reachable(t, s, flow):
-                    flow.properties["__inferredFeedback"] = True
+        INF_BIG = 10**9
+        def _flow_rank(flow: SequenceFlow) -> Tuple[int, int, str, str]:
+            src = flow.getSourceActivity()
+            ds = dist_from_start.get(src, INF_BIG)
+            de = dist_to_end.get(src, INF_BIG)
+            key = (-(ds if ds != INF_BIG else -1), (de if de != INF_BIG else INF_BIG))
+            if self.options.stable_tiebreak:
+                # Add deterministic tie-breakers: source id then flow id
+                sid = src.id if src is not None else ""
+                return (key[0], key[1], sid, flow.id)
+            return (key[0], key[1], "", flow.id)
+
+        # Main strategy execution
+        def _mark_single_best_in_comp(comp: List[ActivityNode], adj: Dict[ActivityNode, List[ActivityNode]]) -> bool:
+            comp_set = set(comp)
+            candidates = [fl for fl in self.sequence_flows if _allowed_candidate(fl, comp_set)]
+            # Only those participating in a cycle
+            cyc_cands = [fl for fl in candidates if _participates_in_cycle(fl, adj)]
+            if not cyc_cands:
+                return False
+            best = min(cyc_cands, key=_flow_rank)
+            best.properties["__inferredFeedback"] = True
+            return True
+
+        def _mark_all_back_edges_in_comp(comp: List[ActivityNode], adj: Dict[ActivityNode, List[ActivityNode]]) -> int:
+            comp_set = set(comp)
+            count = 0
+            for fl in self.sequence_flows:
+                if not _allowed_candidate(fl, comp_set):
+                    continue
+                if _participates_in_cycle(fl, adj):
+                    fl.properties["__inferredFeedback"] = True
+                    count += 1
+            return count
+
+        changed = True
+        first_pass = True
+        while changed:
+            changed = False
+            adj = _build_adj()
+            sccs = _tarjan(adj)
+            for comp in sccs:
+                # Skip non-cyclic singletons
+                if len(comp) == 1:
+                    n = comp[0]
+                    has_self_loop = any((f.getSourceActivity() is n and f.getTargetActivity() is n and not f.isFeedback()) for f in n.getOutgoingSequenceFlows())
+                    if not has_self_loop:
+                        continue
+                # If the SCC contains any excluded event type, skip marking for the whole component
+                if any(any(bad in _event_type_of(node) for bad in self.options.exclude_event_types) for node in comp):
+                    continue
+                # Apply strategy per component
+                if self.options.strategy == "all_back_edges":
+                    marked = _mark_all_back_edges_in_comp(comp, adj)
+                    if marked:
+                        changed = True
+                elif self.options.strategy == "single_best":
+                    if first_pass and _mark_single_best_in_comp(comp, adj):
+                        changed = True
+                else:  # iterative_break
+                    if _mark_single_best_in_comp(comp, adj):
+                        changed = True
+            if self.options.strategy == "single_best":
+                # run only once over all components
+                break
+            first_pass = False
 
 
 class ActivityNode:
@@ -437,8 +652,8 @@ class BlockResult:
 
 
 class BlockFinder:
-    def __init__(self, process_definition: "ProcessDefinition") -> None:
-        self.graph = ProcessGraph(process_definition)
+    def __init__(self, process_definition: "ProcessDefinition", options: Optional[FeedbackOptions] = None) -> None:
+        self.graph = ProcessGraph(process_definition, options)
 
     def get_block_members(self, join_activity: Union[str, ActivityNode]) -> List[ActivityNode]:
         join_node = self.graph.resolve_node(join_activity)
@@ -590,4 +805,5 @@ __all__ = [
     "BlockResult",
     "ProcessGraph",
     "SequenceFlow",
+    "FeedbackOptions",
 ]
