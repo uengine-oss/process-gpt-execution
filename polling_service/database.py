@@ -1199,7 +1199,6 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                         )
                         if updated_query and updated_query != workitem.query:
                             workitem_dict["query"] = updated_query
-                            workitem_dict["description"] = updated_query
                     except Exception as e:
                         print(f"[ERROR] Failed to generate browser automation description: {str(e)}")
 
