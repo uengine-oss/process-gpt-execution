@@ -3052,6 +3052,28 @@ def get_all_input_data(workitem: dict, process_definition: Any) -> List[dict]:
                 return obj.get(key)
             return getattr(obj, key, None)
 
+        cur_scope_raw = workitem.get('execution_scope') or workitem.get('executionScope')
+        try:
+            cur_scope = int(str(cur_scope_raw)) if cur_scope_raw is not None else None
+        except Exception:
+            cur_scope = cur_scope_raw
+
+        def _norm_scope(v):
+            if v is None or v == "":
+                return None
+            try:
+                return int(str(v))
+            except Exception:
+                return str(v)
+
+        def _scope_of(obj):
+            return _norm_scope(_get(obj, 'execution_scope') or _get(obj, 'executionScope'))
+
+        if cur_scope is None:
+            pass
+        else:
+            workitems = [wi for wi in workitems if (_scope_of(wi) is None) or (_scope_of(wi) == cur_scope)]
+
         def _parse_dt(s: str) -> datetime:
             try:
                 return datetime.fromisoformat(s)
