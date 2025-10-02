@@ -3,7 +3,7 @@ from langchain.schema import Document
 from langchain.output_parsers.json import SimpleJsonOutputParser
 from llm_factory import create_llm
 from pydantic import BaseModel
-from typing import List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple
 import json
 import re
 import uuid
@@ -1315,19 +1315,58 @@ async def _evaluate_sequence_conditions(model, parser, process_definition, all_w
         if isinstance(expr, str) and expr.strip():
             eval_contexts: list[dict] = []
 
-            # Build evaluation contexts from all_workitem_input_data (list of dicts)
-            if isinstance(all_workitem_input_data, list):
-                for item in all_workitem_input_data:
-                    if isinstance(item, dict):
-                        eval_contexts.append(item)
-                        for value in item.values():
-                            if isinstance(value, dict):
-                                eval_contexts.append(value)
-                            elif isinstance(value, list):
-                                eval_contexts.extend(v for v in value if isinstance(v, dict))
+            # NEW: Support scoped condition function syntax: "<form_key>: <expression>"
+            expr_text = expr.strip()
+            scoped_context = None
+            if ":" in expr_text:
+                try:
+                    prefix, rhs = expr_text.split(":", 1)
+                    prefix = prefix.strip()
+                    rhs = rhs.strip()
+                    if prefix and isinstance(all_workitem_input_data, dict):
+                        maybe_ctx = all_workitem_input_data.get(prefix)
+                        if isinstance(maybe_ctx, dict):
+                            scoped_context = maybe_ctx
+                            expr = rhs
+                except Exception:
+                    pass
 
-            if not eval_contexts:
-                eval_contexts.append({})
+            seen = set()
+
+            def _collect_contexts(value):
+    
+                if isinstance(value, dict):
+    
+                    obj_id = id(value)
+    
+                    if obj_id in seen:
+    
+                        return
+    
+                    seen.add(obj_id)
+    
+                    eval_contexts.append(value)
+    
+                    for nested in value.values():
+    
+                        _collect_contexts(nested)
+    
+                elif isinstance(value, list):
+    
+                    for nested in value:
+    
+                        _collect_contexts(nested)
+
+            if scoped_context is not None:
+                eval_contexts.append(scoped_context)
+            else:
+                if all_workitem_input_data:
+
+                    _collect_contexts(all_workitem_input_data)
+
+                if not eval_contexts:
+
+                    eval_contexts.append({})
 
             condition_eval = False
             last_error: Exception | None = None
@@ -2437,7 +2476,7 @@ async def handle_workitem(workitem):
             sequence_condition_data = get_sequence_condition_data(process_definition, activity_id, next_near_activities)
                         
         workitem_input_data = None
-        all_workitem_input_data = []
+        all_workitem_input_data = {}
         try:
             workitem_input_data = get_input_data(workitem, process_definition)
             all_workitem_input_data = get_all_input_data(workitem, process_definition)
@@ -3023,122 +3062,312 @@ def generate_browser_automation_description(
         # 기본 description 반환
         return current_activity.get('description', '웹 브라우저를 통한 작업을 수행합니다.')
 
-def get_all_input_data(workitem: dict, process_definition: Any) -> List[dict]:
+def get_all_input_data(workitem: dict, process_definition: Any) -> Dict[str, Any]:
+
     """
+
     루트 프로세스 인스턴스 기준으로 모든 워크아이템을 조회하여
-    - 같은 activity_id가 중복될 경우 start_date가 가장 최신인 것만 남기고
-    - 각 선택된 워크아이템의 output을 리스트로 모아 반환
+
+    - 같은 activity_id가 중복인 경우 start_date가 가장 최신인 것만 유지
+
+    - 추출된 output을 폼 key 기반으로 모아 반환
+
+
 
     Returns:
-        List[dict]: 최신 워크아이템들의 output 목록 (파싱 실패/없음은 제외)
+
+        Dict[str, Any]: 최신 워크아이템들의 output 목록 (미싱 데이터/오류는 제외)
+
     """
+
     try:
+
         tenant_id = workitem.get('tenant_id')
+
         proc_inst_id = workitem.get('proc_inst_id')
+
         root_proc_inst_id = workitem.get('root_proc_inst_id')
 
+
+
         if not root_proc_inst_id and proc_inst_id and tenant_id:
+
             try:
+
                 inst = fetch_process_instance(proc_inst_id, tenant_id)
+
                 root_proc_inst_id = (
+
                     getattr(inst, 'root_proc_inst_id', None)
+
                     or (inst.get('root_proc_inst_id') if isinstance(inst, dict) else None)
+
                 )
+
             except Exception:
+
                 root_proc_inst_id = None
 
+
+
         if not tenant_id or not root_proc_inst_id:
-            return []
+
+            return {}
+
+
 
         workitems = fetch_workitems_by_root_proc_inst_id(root_proc_inst_id, tenant_id) or []
 
+
+
         def _get(obj, key):
+
             if isinstance(obj, dict):
+
                 return obj.get(key)
+
             return getattr(obj, key, None)
 
+
+
+        # Helper: numeric key detector
+        def _is_numeric_key(k: Any) -> bool:
+            try:
+                if isinstance(k, (int, float)):
+                    return True
+                if isinstance(k, str) and k.isdigit():
+                    return True
+            except Exception:
+                pass
+            return False
+
+        # Helper: resolve form key for a workitem
+        def _resolve_form_key_for_workitem(wi: Any) -> str:
+            act_id = _get(wi, 'activity_id') or _get(wi, 'activityId')
+            proc_def_id = _get(wi, 'proc_def_id') or _get(wi, 'procDefId') or workitem.get('proc_def_id')
+            ten = _get(wi, 'tenant_id') or workitem.get('tenant_id')
+            try:
+                ui_def = fetch_ui_definition_by_activity_id(proc_def_id, act_id, ten)
+                form_key = getattr(ui_def, 'id', None) or (ui_def.get('id') if isinstance(ui_def, dict) else None)
+                if form_key and isinstance(form_key, str):
+                    return form_key
+            except Exception:
+                pass
+            # Fallback: activity id as a stable non-numeric key
+            return str(act_id) if act_id is not None else 'unknown_form'
+
+
         cur_scope_raw = workitem.get('execution_scope') or workitem.get('executionScope')
+
         try:
+
             cur_scope = int(str(cur_scope_raw)) if cur_scope_raw is not None else None
+
         except Exception:
+
             cur_scope = cur_scope_raw
 
+
+
         def _norm_scope(v):
+
             if v is None or v == "":
+
                 return None
+
             try:
+
                 return int(str(v))
+
             except Exception:
+
                 return str(v)
 
+
+
         def _scope_of(obj):
+
             return _norm_scope(_get(obj, 'execution_scope') or _get(obj, 'executionScope'))
 
-        if cur_scope is None:
-            pass
-        else:
+
+
+        if cur_scope is not None:
+
             workitems = [wi for wi in workitems if (_scope_of(wi) is None) or (_scope_of(wi) == cur_scope)]
 
+
+
         def _parse_dt(s: str) -> datetime:
+
             try:
+
                 return datetime.fromisoformat(s)
+
             except Exception:
+
                 try:
+
                     return datetime.strptime(s[:19], '%Y-%m-%dT%H:%M:%S')
+
                 except Exception:
+
                     return datetime.min
 
-        # 최신 항목만 유지 (activity_id 기준)
+
+
+        # 최신 워크아이템만 유지 (activity_id 기준)
+
         latest_by_activity: dict[str, Any] = {}
+
         for wi in workitems:
+
             act_id = _get(wi, 'activity_id') or _get(wi, 'activityId')
+
             if not act_id:
+
                 continue
+
             start_date = str(_get(wi, 'start_date') or _get(wi, 'startDate') or '')
+
             prev = latest_by_activity.get(act_id)
+
             if not prev:
+
                 latest_by_activity[act_id] = wi
+
             else:
+
                 prev_sd = str(_get(prev, 'start_date') or _get(prev, 'startDate') or '')
+
                 if _parse_dt(start_date) >= _parse_dt(prev_sd):
+
                     latest_by_activity[act_id] = wi
 
+
+
         # 정렬(옵션): start_date 기준 오름차순
+
         selected = list(latest_by_activity.values())
+
         selected.sort(key=lambda x: _parse_dt(str(_get(x, 'start_date') or _get(x, 'startDate') or '')))
 
-        outputs: List[dict] = []
+
+
+        outputs: Dict[str, Any] = {}
+
+
+
+        def _register_output(key, value):
+
+            if key is None:
+
+                return False
+
+            key_str = str(key).strip()
+
+            if not key_str:
+
+                return False
+
+            outputs[key_str] = value
+
+            return True
+
+
+
         for wi in selected:
+
             out = _get(wi, 'output')
-            if not out:
+
+            if out in (None, '', {}):
+
                 continue
+
             if isinstance(out, str):
+
                 try:
+
                     out = json.loads(out)
+
                 except Exception:
+
                     continue
+
+
+
             if isinstance(out, dict):
-                # Strip form wrapper if present
+
+                registered = False
+
                 try:
+
+                    # Case 1: exactly one key
                     if len(out) == 1:
-                        only_key = next(iter(out))
-                        only_val = out[only_key]
-                        if isinstance(only_val, dict):
-                            outputs.append(only_val)
-                            continue
-                    # If multiple keys, append inner dicts for keys that look like form ids
-                    added_any = False
-                    for k, v in out.items():
-                        if isinstance(v, dict) and str(k).endswith('_form'):
-                            outputs.append(v)
-                            added_any = True
-                    if not added_any:
-                        outputs.append(out)
+
+                        only_key, only_val = next(iter(out.items()))
+
+                        reg_key = _resolve_form_key_for_workitem(wi) if _is_numeric_key(only_key) else only_key
+
+                        registered = _register_output(reg_key, only_val)
+
+                    # Case 2: keys include obvious form-like key
+                    if not registered:
+
+                        for k, v in out.items():
+
+                            if isinstance(v, dict) and ('form' in str(k).lower() or 'Form' in str(k)):
+
+                                reg_key = _resolve_form_key_for_workitem(wi) if _is_numeric_key(k) else k
+
+                                if _register_output(reg_key, v):
+
+                                    registered = True
+
+                                    break
+
+                    # Case 3: all keys are numeric -> collapse under resolved form key
+                    if not registered:
+
+                        keys = list(out.keys())
+
+                        if keys and all(_is_numeric_key(k) for k in keys):
+
+                            form_key = _resolve_form_key_for_workitem(wi)
+
+                            registered = _register_output(form_key, out)
+
+                    # Case 4: fallback to activity id or first key
+                    if not registered:
+
+                        act_key = _get(wi, 'activity_id') or _get(wi, 'activityId')
+
+                        if not act_key and out:
+
+                            first_key = next(iter(out.keys()), None)
+
+                            act_key = _resolve_form_key_for_workitem(wi) if _is_numeric_key(first_key) else first_key
+
+                        _register_output(act_key, out)
+
                 except Exception:
-                    outputs.append(out)
+
+                    act_key = _get(wi, 'activity_id') or _get(wi, 'activityId')
+
+                    _register_output(act_key, out)
+
+            else:
+
+                act_key = _get(wi, 'activity_id') or _get(wi, 'activityId')
+
+                _register_output(act_key, out)
+
+
+
         return outputs
+
     except Exception as e:
+
         print(f"[ERROR] Failed to get all input data for {workitem.get('id')}: {str(e)}")
-        return []
-    
-    
+
+        return {}
+
