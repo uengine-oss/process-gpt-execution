@@ -1648,9 +1648,183 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
         if not candidates:
             return next_activity_payloads
 
+        # Deterministic handling when foreachVariable is present on subprocess definition
+        def _extract_foreach_variable(sd: Any) -> str | None:
+            if sd is None:
+                return None
+            # Try direct attributes with common casings
+            for key in ("foreachVariable", "forEachVariable", "foreach_variable", "for_each_variable"):
+                fv = _get(sd, key)
+                if isinstance(fv, str) and fv.strip():
+                    return fv.strip()
+            # Try properties/uengineProperties
+            props = _get(sd, "properties") or _get(sd, "uengineProperties")
+            props_json = None
+            if isinstance(props, str):
+                try:
+                    props_json = json.loads(props)
+                except Exception:
+                    # Fallback: regex search case-insensitively in raw JSON string
+                    try:
+                        m = re.search(r'"(forEachVariable|foreachVariable)"\s*:\s*"([^"]+)"', props, re.IGNORECASE)
+                        if m:
+                            return m.group(2).strip()
+                    except Exception:
+                        pass
+            elif isinstance(props, dict):
+                props_json = props
+            if isinstance(props_json, dict):
+                # Case-insensitive key lookup
+                for k, v in props_json.items():
+                    if isinstance(k, str) and k.replace("_", "").lower() in ("foreachvariable", "foreachvariable"):
+                        if isinstance(v, str) and v.strip():
+                            return v.strip()
+                # Explicit keys
+                for key in ("foreachVariable", "forEachVariable", "foreach_variable", "for_each_variable"):
+                    v = props_json.get(key)
+                    if isinstance(v, str) and v.strip():
+                        return v.strip()
+            return None
+
+        def _traverse_path(root: Any, path: str) -> Any:
+            cur = root
+            if path is None or path == "":
+                return cur
+            for seg in str(path).split('.'):
+                if isinstance(cur, dict):
+                    if seg in cur:
+                        cur = cur[seg]
+                    else:
+                        return None
+                elif isinstance(cur, list):
+                    try:
+                        idx = int(seg)
+                        if 0 <= idx < len(cur):
+                            cur = cur[idx]
+                        else:
+                            return None
+                    except Exception:
+                        return None
+                else:
+                    return None
+            return cur
+
+        def _resolve_collection_from_foreach(foreach_var: str, ctx: dict) -> list | None:
+            # Prefer aggregated inputs when a form:section style key is used
+            all_inputs = ctx.get("all_workitem_input_data") or {}
+            output = ctx.get("output") or {}
+            previous = ctx.get("previous_outputs") or {}
+
+            # Support "formKey:section.path" style (e.g., vip_newsletter_process_activity_1en8e0l_form:vip_info_section)
+            if ":" in str(foreach_var):
+                form_key, rest = foreach_var.split(":", 1)
+                form_key = form_key.strip()
+                rest = rest.strip()
+                base = all_inputs.get(form_key)
+                if base is not None:
+                    val = _traverse_path(base, rest)
+                    if isinstance(val, list):
+                        return val
+                    if isinstance(val, dict):
+                        # best-effort: pick first list-like value
+                        for v in val.values():
+                            if isinstance(v, list):
+                                return v
+                # Fallback: try output/previous with same pattern
+                for root in (output, previous):
+                    base = root.get(form_key) if isinstance(root, dict) else None
+                    if base is not None:
+                        val = _traverse_path(base, rest)
+                        if isinstance(val, list):
+                            return val
+                        if isinstance(val, dict):
+                            for v in val.values():
+                                if isinstance(v, list):
+                                    return v
+                return None
+
+            # Otherwise treat as dot-path across known roots
+            for root in (all_inputs, output, previous):
+                val = _traverse_path(root, foreach_var)
+                if isinstance(val, list):
+                    return val
+                if isinstance(val, dict):
+                    for v in val.values():
+                        if isinstance(v, list):
+                            return v
+            return None
+
+        def _summarize_reason(item: Any) -> str:
+            def _clip_value(s: Any, limit: int = 7) -> str:
+                try:
+                    t = str(s)
+                except Exception:
+                    t = f"{s}"
+                return t if len(t) <= limit else t[:limit]
+            try:
+                if isinstance(item, dict):
+                    # Preserve key, clip only value to limit
+                    pairs = []
+                    for k in sorted(item.keys()):
+                        v = item[k]
+                        if isinstance(v, (str, int, float, bool)) or v is None:
+                            pairs.append(f"{k}={_clip_value(v)}")
+                    if pairs:
+                        return ", ".join(pairs)
+                    # Fallback to clipped JSON when no scalar pairs available
+                    return _clip_value(json.dumps(item, ensure_ascii=False))
+                if isinstance(item, list):
+                    preview = ", ".join(_clip_value(x) for x in item[:5])
+                    return _clip_value(f"list[{len(item)}]: {preview}")
+                return _clip_value(item)
+            except Exception:
+                try:
+                    return _clip_value(json.dumps(item, ensure_ascii=False))
+                except Exception:
+                    return _clip_value(item)
+
+        foreach_map: dict[str, str] = {}
+        for p in candidates:
+            sp_id = p.get("nextActivityId")
+            sd = _find_sub(sp_id)
+            fv = _extract_foreach_variable(sd)
+            if isinstance(fv, str) and fv.strip():
+                foreach_map[sp_id] = fv.strip()
+
+        handled_ids: set[str] = set()
+        for p in candidates:
+            sp_id = p.get("nextActivityId")
+            fv = foreach_map.get(sp_id)
+            if not fv:
+                continue
+            collection = _resolve_collection_from_foreach(fv, chain_input_next)
+            if isinstance(collection, list) and collection:
+                cnt = len(collection)
+                reasons = [_summarize_reason(elem) for elem in collection]
+                # Ensure reasons length equals count
+                if len(reasons) < cnt:
+                    reasons += [""] * (cnt - len(reasons))
+                elif len(reasons) > cnt:
+                    reasons = reasons[:cnt]
+                p["multiInstanceCount"] = str(cnt)
+                p["multiInstanceReason"] = reasons
+                handled_ids.add(sp_id)
+            elif isinstance(collection, list):
+                # Empty list -> zero would stall; default to 1 empty instance
+                p["multiInstanceCount"] = "1"
+                p["multiInstanceReason"] = [""]
+                handled_ids.add(sp_id)
+
+        # If all subprocess candidates were handled deterministically, skip LLM
+        if handled_ids and all((p.get("nextActivityId") in handled_ids) for p in candidates):
+            return next_activity_payloads
+
+        # Build LLM candidate set only for unhandled subprocesses
         candidate_subs = []
         for p in candidates:
             sp_id = p.get("nextActivityId")
+            if sp_id in handled_ids:
+                continue
             sd = _find_sub(sp_id)
             if sd is None:
                 candidate_subs.append({"id": sp_id, "name": sp_id})
@@ -1660,6 +1834,10 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
                     "name": _get(sd, "name") or sp_id,
                     "description": _get(sd, "description") or "",
                 })
+
+        # If nothing remains for LLM, return
+        if not candidate_subs:
+            return next_activity_payloads
 
         runtime_context = {
             "output": chain_input_next.get("output"),
@@ -1713,7 +1891,7 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
             if not isinstance(item, dict):
                 continue
             sp_id = item.get("id") or item.get("subprocessId") or item.get("nextActivityId")
-            if not sp_id:
+            if not sp_id or sp_id in handled_ids:
                 continue
             cnt_raw = item.get("multiInstanceCount")
             try:
