@@ -2650,67 +2650,6 @@ async def handle_workitem(workitem):
         print(f"[ERROR] Error in handle_workitem for workitem {workitem['id']}: {str(e)}")
         raise e
 
-            
-async def handle_agent_workitem(workitem):
-    """
-    에이전트 업무를 처리하는 함수
-    agent_processor의 handle_workitem_with_agent를 사용합니다.
-    """
-    # 워크아이템 위치 판별
-    is_first, is_last = get_workitem_position(workitem)
-
-    if workitem['retry'] >= 3:
-        # 예외 발생 시 인스턴스 상태 업데이트
-        update_instance_status_on_error(workitem, is_first, is_last)
-        return
-    
-    try:
-        print(f"[DEBUG] Starting agent workitem processing for: {workitem['id']}")
-        
-        # 에이전트 정보 가져오기
-        if workitem['user_id'] and ',' in workitem['user_id']:
-            agent_ids = workitem['user_id'].split(',')
-            agent_info = []
-            for agent_id in agent_ids:
-                agent_info.append(fetch_user_info(agent_id))
-        else:
-            agent_id = workitem['user_id']
-            agent_info = [fetch_user_info(agent_id)] if agent_id else []
-        
-        if not agent_info:
-            print(f"[ERROR] Agent not found: {agent_id}")
-            upsert_workitem({
-                "id": workitem['id'],
-                "status": "PENDING",
-                "description": f"Agent not found: {agent_id}"
-            }, workitem['tenant_id'])
-            return
-        
-        # 프로세스 정의와 액티비티 정보 가져오기
-        process_definition_json = fetch_process_definition(workitem['proc_def_id'], workitem['tenant_id'])
-        process_definition = load_process_definition(process_definition_json)
-        activity = process_definition.find_activity_by_id(workitem['activity_id'])
-        
-        if not activity:
-            print(f"[ERROR] Activity not found: {workitem['activity_id']}")
-            return
-        
-        # handle_workitem_with_agent 호출
-        result = await handle_workitem_with_agent(workitem, activity, agent_info)
-        
-        if result is not None:
-            print(f"[DEBUG] Agent workitem completed successfully: {workitem['id']}")
-        else:
-            print(f"[ERROR] Agent workitem failed: {workitem['id']}")
-            upsert_workitem({
-                "id": workitem['id'],
-                "log": "Agent processing failed"
-            }, workitem['tenant_id'])
-        
-    except Exception as e:
-        print(f"[ERROR] Error in handle_agent_workitem for workitem {workitem['id']}: {str(e)}")
-        raise e 
-
 
 async def handle_service_workitem(workitem):
     """
