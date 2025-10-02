@@ -1366,7 +1366,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
 
 def _generate_browser_automation_description(
     process_instance_data: dict, 
-    current_activity_id, 
+    current_workitem_id, 
     tenant_id: str
 ) -> str:
     """
@@ -1375,7 +1375,8 @@ def _generate_browser_automation_description(
     try:
         # 이전 workitem들을 가져와서 사용자 요청사항과 프로세스 흐름 파악
         all_workitems = fetch_workitems_by_proc_inst_id(process_instance_data['proc_inst_id'], tenant_id)
-        form_data = fetch_ui_definition_by_activity_id(process_instance_data['proc_def_id'], current_activity_id, tenant_id)
+
+        form_data = fetch_ui_definition_by_activity_id(process_instance_data['proc_def_id'], process_instance_data['current_activity_ids'][0], tenant_id)
         
         # 이전, 현재, 이후 workitem 정보 분석 (status 기반)
         done_workitems = []
@@ -1394,7 +1395,7 @@ def _generate_browser_automation_description(
                 
                 if workitem.status in ['DONE', 'COMPLETED', 'SUBMITTED']:
                     done_workitems.append(workitem_info)
-                elif workitem.id == current_activity_id:
+                elif workitem.id == current_workitem_id:
                     current_workitem = workitem_info
                 else:
                     next_workitems.append(workitem_info)
@@ -1444,15 +1445,18 @@ def _generate_browser_automation_description(
 상세한 단계별 설명을 생성해주세요:
 """
 
-        print(f"[DEBUG] current_workitem: {current_workitem}")
-        print(f"[DEBUG] done_workitems: {done_workitems}")
-        print(f"[DEBUG] next_workitems: {next_workitems}")
+        # print(f"[DEBUG] current_workitem: {current_workitem}")
+        # print(f"[DEBUG] done_workitems: {done_workitems}")
+        # print(f"[DEBUG] next_workitems: {next_workitems}")
+        # print(f"[DEBUG] form_data: {form_data.fields_json}")
+        # print(f"[DEBUG] str form_data: {str(form_data.fields_json)}")
+
 
         prompt = prompt_template.format(
             current_workitem=current_workitem,
             done_workitems=done_workitems,
             next_workitems=next_workitems,
-            form_data=form_data
+            form_data=str(form_data.fields_json) if form_data and form_data.fields_json else "NULL"
         )
         
         # LLM 호출
