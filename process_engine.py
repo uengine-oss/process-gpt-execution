@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, fetch_workitem_by_id, upsert_process_definition, fetch_assignee_info, upsert_process_instance_source, fetch_process_instance
 from process_definition import load_process_definition
+from compensation_handler import handle_compensation
 
 import traceback
 import uuid
@@ -613,7 +614,7 @@ async def create_new_workitem(workitem) -> dict:
         "tool": workitem.tool,
         "description": workitem.description,
         "query": workitem.query,
-        "output": workitem.output,
+        "output": {},
         "tenant_id": workitem.tenant_id,
         "project_id": workitem.project_id,
         "root_proc_inst_id": workitem.root_proc_inst_id,
@@ -730,17 +731,18 @@ async def handle_rework_complete(request: Request):
         instance_id = body.get('instanceId')
         
         result = {}
-
         for activity in activities:
             activity_id = activity.get('id')
             workitem = fetch_workitem_by_proc_inst_and_activity(instance_id, activity_id)
             if workitem is None:
                 raise HTTPException(status_code=400, detail="No workitem found")
-            
+
             new_workitem = await create_new_workitem(workitem)
             db_result = upsert_workitem(new_workitem)
+            await handle_compensation(workitem, new_workitem)
             if db_result and hasattr(db_result, 'data') and db_result.data:
-                result[activity_id] = db_result.data[0]
+                new_workitem_id = db_result.data[0].get('id')
+                result[new_workitem_id] = db_result.data[0]
             else:
                 raise Exception(f"Failed to upsert workitem {new_workitem.get('id', 'unknown')} to database")
         

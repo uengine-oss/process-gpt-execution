@@ -2485,11 +2485,16 @@ async def handle_workitem(workitem):
         else:
             user_email_for_prompt = ','.join(workitem['user_id'].split(','))
             
-        instance_name = process_definition_json.get("processDefinitionName") + "_" + workitem['id']
-            
+        # instance_name = process_definition_json.get("processDefinitionName") + "_" + workitem['id']
+        process_instance = fetch_process_instance(process_instance_id, tenant_id)
+        if process_instance and process_instance.proc_inst_name != process_definition_json.get("processDefinitionName"):
+            instance_name = process_instance.proc_inst_name
+        else:
+            instance_name = process_definition_json.get("processDefinitionName") + "_" + process_instance_id.split('.')[1]
+
         completed_json = {
             "instanceId": process_instance_id,
-            "instanceName": process_definition_json.get("instanceNamePattern") or instance_name,
+            "instanceName": instance_name,
             "processDefinitionId": process_definition_id,
             "fieldMappings": [],
             "roleBindings": workitem.get('assignees', []),

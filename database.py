@@ -1368,3 +1368,120 @@ def fetch_events_by_todo_id(todo_id: str) -> Optional[List[Dict[str, Any]]]:
         print(f"[ERROR] Failed to fetch events by todo_id: {str(e)}")
         return None
 
+
+def fetch_events_by_proc_inst_id(proc_inst_id: str) -> Optional[List[Dict[str, Any]]]:
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table('events').select("*").eq('proc_inst_id', proc_inst_id).order('timestamp', desc=True).execute()
+        
+        if response.data and len(response.data) > 0:
+            return response.data
+
+        return []
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch events by proc_inst_id: {str(e)}")
+        return None
+
+
+def fetch_events_by_proc_inst_id_until_activity(
+    proc_def_id: str,
+    proc_inst_id: str, 
+    target_activity_id: str, 
+    tenant_id: Optional[str] = None
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    특정 프로세스 인스턴스의 이벤트를 특정 액티비티까지만 가져옵니다.
+    프로세스 정의의 sequences를 사용하여 target_activity_id와 그 이전 액티비티들의 
+    이벤트만 가져옵니다.
+    
+    Args:
+        proc_def_id: 프로세스 정의 ID
+        proc_inst_id: 프로세스 인스턴스 ID
+        target_activity_id: 목표 액티비티 ID (이 액티비티까지만 이벤트를 가져옴)
+        tenant_id: 테넌트 ID (선택사항)
+    
+    Returns:
+        필터링된 이벤트 목록
+    """
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+        
+        # 1. 프로세스 정의 가져오기
+        process_definition_json = fetch_process_definition(proc_def_id, tenant_id)
+        if not process_definition_json:
+            print(f"[ERROR] Process definition not found for {proc_def_id}")
+            return []
+        
+        process_definition = load_process_definition(process_definition_json)
+        
+        # 2. target_activity와 모든 이전 액티비티들을 프로세스 정의에서 찾기
+        target_activity_ids = set([target_activity_id])
+        prev_activities = process_definition.find_prev_activities(target_activity_id, [])
+        
+        for prev_activity in prev_activities:
+            target_activity_ids.add(prev_activity.id)
+        
+        if not target_activity_ids:
+            return []
+        
+        # 3. 해당 proc_inst_id의 todolist에서 target_activity_ids에 해당하는 항목들만 가져오기
+        # activity_id별로 status가 DONE인 것 중 rework_count가 가장 큰 워크아이템 선택
+        todolist_response = supabase.table('todolist').select("id, activity_id, rework_count, status").eq(
+            'proc_inst_id', proc_inst_id
+        ).eq('tenant_id', tenant_id).execute()
+        
+        if not todolist_response.data:
+            return []
+        
+        # activity_id별로 status가 DONE인 것 중 rework_count가 가장 큰 워크아이템 선택
+        activity_todo_map = {}
+        for todo in todolist_response.data:
+            activity_id = todo.get('activity_id')
+            status = todo.get('status')
+            
+            # target_activity_ids에 포함된 액티비티만 선택
+            if activity_id not in target_activity_ids:
+                continue
+            
+            # status가 DONE이 아니면 제외
+            if status != 'DONE':
+                continue
+                
+            rework_count = todo.get('rework_count', 0)
+            
+            if activity_id not in activity_todo_map:
+                activity_todo_map[activity_id] = todo
+            else:
+                # rework_count가 더 큰 것으로 업데이트 (재작업된 것)
+                existing_rework_count = activity_todo_map[activity_id].get('rework_count', 0)
+                if rework_count > existing_rework_count:
+                    activity_todo_map[activity_id] = todo
+        
+        # 4. 수집된 todo_id들로 이벤트 가져오기
+        target_todo_ids = [todo.get('id') for todo in activity_todo_map.values()]
+        
+        if not target_todo_ids:
+            return []
+        
+        # 5. 해당 todo_id들에 대한 이벤트만 가져오기
+        events_response = supabase.table('events').select("*").eq(
+            'proc_inst_id', proc_inst_id
+        ).in_('todo_id', target_todo_ids).order('timestamp', desc=True).execute()
+        
+        if events_response.data and len(events_response.data) > 0:
+            return events_response.data
+        
+        return []
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch events by proc_inst_id until activity: {str(e)}")
+        return None
+

@@ -1124,13 +1124,18 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                 if workitem.agent_mode == 'COMPLETE' and (workitem.agent_orch == 'none' or workitem.agent_orch == None):
                     workitem.agent_orch = 'crewai-deep-research'
             
+            # 입력 데이터 추가
             input_data = get_input_data(workitem.model_dump(), process_definition)
             if input_data:
                 try:
                     input_data_str = json.dumps(input_data, ensure_ascii=False)
                 except Exception:
                     input_data_str = str(input_data)
-                query = f"{workitem.query}[InputData]\n{input_data_str}" if workitem.query else f"[InputData]\n{input_data_str}"
+                query = workitem.query
+                if query and '[InputData]' in query:
+                    query = query.split('[InputData]')[0] + f"[InputData]\n{input_data_str}"
+                else:
+                    query = f"{query}[InputData]\n{input_data_str}"
                 workitem.query = query
             # print(f"[DEBUG] workitem.agent_mode: {workitem.agent_mode}")
         else:
