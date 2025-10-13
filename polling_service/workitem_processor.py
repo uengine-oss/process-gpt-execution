@@ -2483,6 +2483,39 @@ def resolve_next_activity_payloads(
 
     sequences_all = list(getattr(process_definition, "sequences", []) or [])
 
+    def _parse_seq_properties(seq: Any) -> dict:
+        props = getattr(seq, "properties", None) or getattr(seq, "uengineProperties", None)
+        if isinstance(props, dict):
+            return props
+        if isinstance(props, str):
+            try:
+                return json.loads(props)
+            except Exception:
+                pass
+        return {}
+
+    def _normalize_gateway_type(gw_obj: Any) -> str | None:
+        gw_type = (getattr(gw_obj, "type", None) or "").lower()
+        if "exclusive" in gw_type or gw_type in ("xor", "xorgateway"):
+            return "exclusive"
+        if "inclusive" in gw_type or gw_type in ("or", "orgateway"):
+            return "inclusive"
+        if "parallel" in gw_type or gw_type in ("and", "andgateway"):
+            return "parallel"
+        return (gw_type or None)
+
+    def _sequence_condition_state(seq_id: str | None) -> Optional[bool]:
+        if not seq_id or not isinstance(sequence_condition_data, dict):
+            return None
+        sc = sequence_condition_data.get(seq_id)
+        if isinstance(sc, dict) and "conditionEval" in sc:
+            try:
+                return True if sc.get("conditionEval") else False
+            except Exception:
+                return None
+        # Unknown when no explicit evaluation present
+        return None
+
     def _sequence_condition_allows(seq_id: str | None) -> bool:
         if not seq_id or not isinstance(sequence_condition_data, dict):
             return True
@@ -2492,6 +2525,94 @@ def resolve_next_activity_payloads(
         return True
 
     def _allowed_targets_from(source_id: str) -> list[str]:
+        # If source is a gateway, apply gateway-specific rules
+        gateway_obj = process_definition.find_gateway_by_id(source_id)
+        if gateway_obj:
+            gw_type = _normalize_gateway_type(gateway_obj)
+            out_seqs: list[Any] = []
+            for seq in sequences_all:
+                src = getattr(seq, "source", None) or getattr(seq, "sourceRef", None)
+                if src == source_id:
+                    out_seqs.append(seq)
+
+            # Exclusive (XOR): choose exactly one
+            if gw_type == "exclusive":
+                true_seqs: list[Any] = []
+                unknown_seqs: list[Any] = []
+                default_seq: Any | None = None
+
+                for s in out_seqs:
+                    sid = getattr(s, "id", None)
+                    state = _sequence_condition_state(sid)
+                    props = _parse_seq_properties(s)
+                    is_default = False
+                    try:
+                        # tolerate various keys/cases
+                        for k in ("default", "isDefault", "defaultFlow", "default_flow"):
+                            if isinstance(props.get(k), bool) and props.get(k):
+                                is_default = True
+                                break
+                    except Exception:
+                        pass
+                    if is_default and default_seq is None:
+                        default_seq = s
+                    if state is True:
+                        true_seqs.append(s)
+                    elif state is None:
+                        unknown_seqs.append(s)
+
+                chosen: list[Any] = []
+                if len(true_seqs) == 1:
+                    chosen = true_seqs
+                elif len(true_seqs) > 1:
+                    # Use priority if available; otherwise exclude all (no selection)
+                    def _priority(seq_obj: Any) -> tuple[int, int]:
+                        props = _parse_seq_properties(seq_obj)
+                        prio = props.get("priority")
+                        try:
+                            prio_val = int(str(prio)) if prio is not None else 0
+                        except Exception:
+                            prio_val = 0
+                        # stable tie-breaker by id
+                        sid = getattr(seq_obj, "id", "") or ""
+                        try:
+                            sid_key = int(re.sub(r"\D", "", sid) or 0)
+                        except Exception:
+                            sid_key = 0
+                        return (prio_val, sid_key)
+
+                    # Sort ascending (lower number => higher priority)
+                    sorted_true = sorted(true_seqs, key=_priority)
+                    # If all priorities are equal (no real priority), and no default, exclude all
+                    pri_values = { _priority(s)[0] for s in sorted_true }
+                    if len(pri_values) == 1 and default_seq is None:
+                        chosen = []
+                    else:
+                        chosen = [sorted_true[0]]
+                else:
+                    # No explicit True
+                    if default_seq is not None:
+                        chosen = [default_seq]
+                    else:
+                        chosen = []  # exclude (no stall globally; just this branch)
+
+                targets: list[str] = []
+                for s in chosen:
+                    tgt = getattr(s, "target", None) or getattr(s, "targetRef", None)
+                    if tgt:
+                        targets.append(tgt)
+                return targets
+
+            # Other gateway types: fall back to non-strict filtering
+            targets: list[str] = []
+            for seq in out_seqs:
+                if _sequence_condition_allows(getattr(seq, "id", None)):
+                    tgt = getattr(seq, "target", None) or getattr(seq, "targetRef", None)
+                    if tgt:
+                        targets.append(tgt)
+            return targets
+
+        # Non-gateway source: apply condition filter as-is
         targets: list[str] = []
         for seq in sequences_all:
             source_ref = getattr(seq, "source", None) or getattr(seq, "sourceRef", None)
