@@ -1233,7 +1233,10 @@ def get_sequence_condition_data(process_definition: Any, current_activity_id: st
                         sequence_condition_data[seq.id] = properties_json
                     except Exception:
                         pass
-
+        
+                if seq.name:
+                    sequence_condition_data.setdefault(seq.id, {})["name"] = seq.name
+                    
                 if not stop_here:
                     next_node = getattr(seq, "target", None)
                     if next_node and next_node not in visited_nodes:
@@ -1426,7 +1429,40 @@ async def _evaluate_nl_conditions(model, parser, all_workitem_input_data, workit
         return str(obj)
 
     runtime_context = {"current_output": _normalize(all_workitem_input_data), "previous_outputs": _normalize(workitem_input_data)}
-    conditions_payload = [{"sequenceId": seq_id, "condition": text} for seq_id, text in nl_condition_sequences]
+    # Build NL conditions with priority: condition > name (from sequence_condition_data)
+    conditions_payload = []
+    existing_ids = set()
+    try:
+        for seq_id, text in nl_condition_sequences:
+            if isinstance(text, str) and text.strip():
+                conditions_payload.append({"sequenceId": seq_id, "condition": text})
+                existing_ids.add(str(seq_id))
+    except Exception:
+        # Fallback: tolerate unexpected shapes
+        pass
+
+    if isinstance(sequence_condition_data, dict):
+        for sid, sdata in sequence_condition_data.items():
+            sid_str = str(sid)
+            if sid_str in existing_ids:
+                continue
+            cond_text = None
+            name_text = None
+            try:
+                cond_text = sdata.get("condition") if isinstance(sdata, dict) else None
+            except Exception:
+                cond_text = None
+            try:
+                name_text = sdata.get("name") if isinstance(sdata, dict) else None
+            except Exception:
+                name_text = None
+
+            if isinstance(cond_text, str) and cond_text.strip():
+                conditions_payload.append({"sequenceId": sid, "condition": cond_text.strip()})
+                existing_ids.add(sid_str)
+            elif isinstance(name_text, str) and name_text.strip():
+                conditions_payload.append({"sequenceId": sid, "condition": name_text.strip()})
+                existing_ids.add(sid_str)
 
     chain_input_text = {
         "instruction": "You are a BPMN sequence condition evaluator. Use the runtime context JSON and determine whether each natural-language condition is satisfied.",
