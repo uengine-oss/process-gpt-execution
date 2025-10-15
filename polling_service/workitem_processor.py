@@ -20,7 +20,7 @@ import ast
 
 from database import (
     fetch_process_definition, fetch_process_instance, fetch_ui_definition,
-    fetch_ui_definition_by_activity_id, fetch_user_info, fetch_assignee_info, 
+    fetch_ui_definition_by_activity_id, fetch_ui_definitions_by_def_id, fetch_user_info, fetch_assignee_info, 
     fetch_workitem_by_proc_inst_and_activity, upsert_process_instance, 
     upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
     upsert_todo_workitems, upsert_workitem, ProcessInstance,
@@ -37,6 +37,186 @@ from mcp_processor import mcp_processor
 
 if os.getenv("ENV") != "production":
     load_dotenv(override=True)
+
+# ------------------------------------------------------------
+# Helpers: annotate output data with UI field display names
+# ------------------------------------------------------------
+def _build_field_text_map_from_ui_definition(ui_def: Any) -> Dict[str, str]:
+    """Build a map of field_key -> display text from a single UIDefinition.
+
+    Safely handles missing or malformed `fields_json`.
+    """
+    try:
+        fields = getattr(ui_def, "fields_json", None) or ui_def.get("fields_json")  # type: ignore[attr-defined]
+    except Exception:
+        fields = None
+
+    key_to_text: Dict[str, str] = {}
+    if isinstance(fields, list):
+        for item in fields:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("key")
+            text = item.get("text")
+            if isinstance(key, str) and isinstance(text, str):
+                key_to_text[key] = text
+    return key_to_text
+
+
+def _extract_alias_from_html(html: Optional[str]) -> Optional[str]:
+    try:
+        if not isinstance(html, str) or not html:
+            return None
+        m = re.search(r'alias\s*=\s*"([^"]+)"', html)
+        if m:
+            return m.group(1)
+    except Exception:
+        return None
+    return None
+
+
+def add_field_names_by_activity(
+    output_data: Dict[str, Any],
+    activity_id: str,
+    ui_definitions: Optional[List[Any]],
+) -> Dict[str, Any]:
+    """Return a copy of `output_data` where each known field key becomes
+    {"name": <display text>, "value": <original value>} for the given activity.
+
+    - Looks up the UIDefinition matching `activity_id` from `ui_definitions`.
+    - For keys present in `output_data` and in `fields_json`, wraps the value into {name, value}.
+    - Does not mutate the original dict.
+    """
+    annotated: Dict[str, Any] = dict(output_data or {})
+    if not activity_id or not ui_definitions:
+        return annotated
+
+    # Find matching UI by activity_id
+    ui_for_activity: Optional[Any] = None
+    for ui in ui_definitions or []:
+        try:
+            if getattr(ui, "activity_id", None) == activity_id or (
+                isinstance(ui, dict) and ui.get("activity_id") == activity_id
+            ):
+                ui_for_activity = ui
+                break
+        except Exception:
+            continue
+
+    if not ui_for_activity:
+        return annotated
+
+    key_to_text = _build_field_text_map_from_ui_definition(ui_for_activity)
+    if not key_to_text:
+        return annotated
+
+    def _wrap(value: Any, display_name: str) -> Dict[str, Any]:
+        # If already in desired shape, update name and keep value as-is
+        if isinstance(value, dict) and "name" in value and "value" in value:
+            wrapped = dict(value)
+            wrapped["name"] = display_name
+            return wrapped
+        return {"name": display_name, "value": value}
+
+    for k in list(output_data.keys()):
+        if isinstance(k, str) and k.startswith("__"):
+            continue
+
+        value = output_data[k]
+        display = key_to_text.get(k, k)
+
+        # If value is a list of dicts, annotate each dict's fields by key and wrap regardless of mapping
+        if isinstance(value, list):
+            transformed_list: list[Any] = []
+            for elem in value:
+                if isinstance(elem, dict):
+                    item_dict = dict(elem)
+                    for inner_key in list(item_dict.keys()):
+                        item_dict = add_field_name_by_key(item_dict, inner_key, ui_definitions)
+                    transformed_list.append(item_dict)
+                else:
+                    transformed_list.append(elem)
+            annotated[k] = {"name": display, "value": transformed_list}
+            continue
+
+        # If value is a dict, annotate its inner keys and wrap regardless of mapping
+        if isinstance(value, dict):
+            item_dict = dict(value)
+            for inner_key in list(item_dict.keys()):
+                item_dict = add_field_name_by_key(item_dict, inner_key, ui_definitions)
+            annotated[k] = {"name": display, "value": item_dict}
+            continue
+
+        # Scalar -> wrap if mapping exists; otherwise leave scalar as-is
+        if k in key_to_text:
+            annotated[k] = {"name": display, "value": value}
+
+    # Remove legacy map if present
+    if "__names__" in annotated:
+        try:
+            del annotated["__names__"]
+        except Exception:
+            pass
+    return annotated
+
+
+def add_field_name_by_key(
+    output_data: Dict[str, Any],
+    field_key: str,
+    ui_definitions: Optional[List[Any]],
+) -> Dict[str, Any]:
+    """Return a copy of `output_data` with a single field wrapped as
+    {"name": <display text>, "value": <original value>}.
+
+    - Scans all provided `ui_definitions` to find the first  field whose `key` matches `field_key`.
+    - Does not mutate the original dict.
+    """
+    annotated: Dict[str, Any] = dict(output_data or {})
+    if not field_key or not ui_definitions:
+        return annotated
+
+    display_text: Optional[str] = None
+    for ui in ui_definitions or []:
+        key_to_text = _build_field_text_map_from_ui_definition(ui)
+        if field_key in key_to_text:
+            display_text = key_to_text[field_key]
+            break
+
+    if field_key in annotated:
+        original_value = annotated[field_key]
+        display_name = display_text if display_text else field_key
+
+        # If list: annotate each dict element's inner keys by scanning ui_definitions
+        if isinstance(original_value, list):
+            transformed_list: list[Any] = []
+            for elem in original_value:
+                if isinstance(elem, dict):
+                    item = dict(elem)
+                    for inner_key in list(item.keys()):
+                        item = add_field_name_by_key(item, inner_key, ui_definitions)
+                    transformed_list.append(item)
+                else:
+                    transformed_list.append(elem)
+            annotated[field_key] = {"name": display_name, "value": transformed_list}
+            return annotated
+
+        # If dict: annotate its inner keys, then wrap
+        if isinstance(original_value, dict):
+            item = dict(original_value)
+            for inner_key in list(item.keys()):
+                item = add_field_name_by_key(item, inner_key, ui_definitions)
+            annotated[field_key] = {"name": display_name, "value": item}
+            return annotated
+
+        # Scalar: simple wrap or update name if already wrapped
+        if isinstance(original_value, dict) and "name" in original_value and "value" in original_value:
+            wrapped = dict(original_value)
+            wrapped["name"] = display_name
+            annotated[field_key] = wrapped
+        else:
+            annotated[field_key] = {"name": display_name, "value": original_value}
+
+    return annotated
 
 # LLM 객체 생성 (공통 팩토리 사용)
 model = create_llm(model="gpt-4o", streaming=True, temperature=0)
@@ -213,169 +393,6 @@ Instructions:
 """
 )
 
-prompt_next = PromptTemplate.from_template(
-"""
-You are a BPMN Next Activity Planner.
-
-Goal:
-- 완료 추출기의 출력(`completedActivities`)을 받아 BPMN 2.0 토큰 규칙을 준수하여 **다음으로 활성화될 수 있는 노드만** `nextActivities`에 산출한다.
-- 'nextActivities'는 비어있을 수도 있음
-
-Inputs:
-Process Definition:
-- activities: {activities}
-- gateways: {gateways}
-- events: {events}
-- sequences: {sequences}
-- attached_activities: {attached_activities}
-- subProcesses: {subProcesses}
-
-Runtime Context:
-- next_activities: {next_activities}
-- roleBindings: {role_bindings}
-- organizations : {organizations}
-- today: {today}
-- output: {output}
-- previous_outputs: {previous_outputs}
-- sequence_conditions: {sequence_conditions}
-- completedActivities: {completedActivities}
-- branch_merged_workitems: {branch_merged_workitems}
-
-
-Instructions:
-0.1) Cohort(현재 병렬 블록) 고정
-- cohort_ids := set(branch_merged_workitems[*].activity_id)
-- 규칙의 스코프는 기본적으로 cohort_ids에 한정한다.
-- branch_merged_workitems가 비어 있으면 **cohort 기반 검사는 생략**하고, 나머지 규칙으로만 판정한다. (전역 대기 금지)
-
-0) 데이터/그래프 원칙
-- **없는 key를 만들거나 추론하지 않는다.** 값은 반드시 위 입력 구조 내부에 있어야 한다.
-- 도달 가능성은 `sequences` 그래프와 `next_activities`(직접 outgoings 후보)를 사용해 판정한다. 여러 홉을 건너뛰지 않는다.
-- 진행 불가(값 부재/조건 미결정/조인 미충족 추정/이벤트 미발생) 시 **오류 없이** 해당 후보만 제외하고 계속 평가한다. (전역 대기 금지)
-- nextActivities에는 오직 activity, event, subProcess, callActivity만 포함되어야 하며, gateway id는 절대 포함하면 안 된다.
-
-1) Interrupt-first (이벤트)
-- 오늘 날짜(`today`)와 `events`/`attached_activities`/`sequences` 상의 정보만으로 **due가 명확한 이벤트**가 있고, 현재 지점에서 **도달 가능**하면:
-  - `interruptByEvent=true`, 해당 이벤트 **하나만** `nextActivities`에 넣고 종료.
-- 판단 불가/미도래면 `interruptByEvent=false`로 두고 진행.
-
-2) Non-gateway 대상 처리
-- `next_activities` 후보 중 게이트웨이가 **아닌** 대상(액티비티/서브프로세스/이벤트)에 대해:
-  - 해당 시퀀스의 조건(있다면 `sequences` 또는 `gateways`에 명시된 표현)을 **입력 구조 내부 값으로만** 평가한다.
-  - 참으로 판정 가능한 후보만 `nextActivities`에 포함한다. 거짓/판단불가는 **그 후보만 제외**한다.
-- target이 `subProcesses`에 존재하면:
-  - type="subProcess", nextUserEmail="system",
-  - description="서브프로세스를 시작합니다. 내부 액티비티는 서브프로세스 컨텍스트에서 할당됩니다."
-  
-2.1) Implicit AND-Join on Multi-Incoming Targets (암묵 병렬 조인)
-- 대상: type이 gateway가 아닌 후보 타겟 T에 들어오는 시퀀스가 2개 이상인 경우
-- 용어:
-  - DONE_STATES := ["DONE","SUBMITTED"]
-  - cohort_ids := set(branch_merged_workitems[*].activity_id)
-
-- 절차:
-  1) (필수) cohort 스코프: 
-     predecessors_all := [seq.source for seq in sequences if seq.target == T]
-     predecessors := [p for p in predecessors_all if p in cohort_ids]   # ★ 블록 외 소스 제외
-  2) 만약 predecessors가 비어 있으면 **T만 이번 사이클에서 제외**하고 다른 후보 평가를 계속한다.  
-     (branch_merged_workitems가 비어도 전역 대기하지 않는다.)
-  3) 상태 집계:
-     - 각 p ∈ predecessors에 대해, branch_merged_workitems에서 activity_id==p 인 항목의 **최신 상태(status)**를 집계한다.
-  4) 다음 중 하나라도 참이면 **T만 제외**한다:
-     - 집계된 상태 중 "IN_PROGRESS"가 하나라도 있다.
-     - predecessors 중 branch_merged_workitems에 **기록이 전혀 없는** 것이 있다.  # (데이터 부재는 추론 금지)
-  5) 위 두 조건에 걸리지 않고, 모든 집계 상태가 DONE_STATES 안에 있으면 **T를 nextActivities에 포함**한다.
-  
-2-2) subprocess 처리
-    - 다음 액티비티로 선택된게 subprocess라면 multiInstanceCount를 추출한다.
-    - 추출 방법은 subprocess.name 이 조건이고 'output', 'previous_outputs'에서 반드시 있다고 생각하고 어느정도 의미가 맞는 항목을 추출한다.
-    - ex) subprocess의 이름이 'a의 개수만큼'이면 'output' 또는 'previous_output'에서 a의 의미에 해당하는 항목을 확인하고 배열이라면 해당 배열의 개수가 multiInstanceCount가 된다.
-    - 추출 불가능하면 1로 설정한다.
-    - multiInstanceReason은 multiInstanceCount를 설정한 근거가 된 값을 output 또는 previous_output에서 추출한 값을 배열로 설정한다.
-    - multiInstanceReason은 추출 불가능하면 빈 배열로 설정한다.
-    - multiInstanceReason의 배열 개수는 multiInstanceCount와 같다.
-    - multiInstanceReason에서 추출된 값이 json 같은거라면 각 멀티인스턴스에 대한 설명을 어떤 데이터가 들어가있는지 모든 항목에 대해 요약하여 적절히 자연어로 풀어서 설명한다(Korean).
-  
-3) Gateways (explicit only; from `gateways.type`)
-- 다음 노드가 `gateways`에 존재하면 그 `type`으로만 동작한다:
-  - **exclusiveGateway (XOR)**:
-    - `sequences`/`gateways` 내부의 조건을 입력 구조 값으로 평가해 **참 하나**가 명확하면 그 경로만 진행.
-    - 여러 개가 동시 참이면 모델의 우선순위/디폴트가 명시돼 있을 때만 그 규칙을 적용, 없으면 **그 후보들은 제외**하고 다른 후보를 평가한다. (전역 대기 금지)
-    - 전혀 참이 없고 default flow가 명시돼 있지 않으면 **제외**한다.
-  - **inclusiveGateway (OR)**:
-    - 참으로 판정 가능한 모든 아웃고잉을 활성화.
-    - 이후 조인이 필요하면(모델 상 대응 OR-join 존재) **branch_merged_workitems의 상태가 "IN_PROGRESS"인 브랜치가 없을 때** 조인 뒤 1-hop 타겟을 next로 산출, 있으면 **그 조인 경로만 보류**한다.
-  - **parallelGateway (AND)**:
-    - 전제:
-      - `branch_merged_workitems`는 **현재 병렬 구간(cohort)**에 속한 브랜치들만 포함한다.  
-        (다른 게이트웨이/구간의 워크아이템은 포함되지 않는다.)
-    - 스코프 판정:
-      - outgoings := `sequences`에서 source == 이 게이트웨이 id 인 1-hop 타겟 집합
-      - incomings := `sequences`에서 target == 이 게이트웨이 id 인 1-hop 소스 집합
-      - 타입:
-        - Split: len(incomings) == 1 AND len(outgoings) >= 2
-        - Join:  len(incomings) >= 2 AND len(outgoings) == 1
-    - Split:
-      - 조건 평가 없이 outgoings 중 **activity / event / subProcess / callActivity**만 후보로 본다(게이트웨이로의 1-hop은 대기).
-      - 각 후보 타겟 t에 대해, `branch_merged_workitems`에 **동일 브랜치로 식별되는 항목**이 존재하고 그 상태가
-        ["IN_PROGRESS","DONE","SUBMITTED"] 중 하나라면 **중복 방지로 제외**한다.
-        (동일 브랜치 식별은 입력 구조에서 일관되게 식별 가능한 키를 사용한다. 새로운 키를 만들지 않는다.)
-      - 위에 해당하지 않는, **아직 시작되지 않은 브랜치**만 `nextActivities`에 포함한다.
-    - Join:
-      - 조인 완료 조건(현재 cohort 한정):
-        - `branch_merged_workitems`에 포함된 **모든 브랜치**의 최신 상태가 ["DONE","SUBMITTED"] 중 하나이고,
-        - 상태가 "IN_PROGRESS"인 항목이 **하나도 없다**.
-      - 위 조건이 참이면 이 게이트웨이의 **1-hop 단일 타겟**을 `nextActivities`에 산출한다. 조건 미충족이면 **이 조인 경로만 보류**한다. (다른 후보에는 영향 없음)
-  - **eventBasedGateway**:
-    - 실제 발생한 이벤트가 `events`/`attached_activities`/`sequences`에서 판정 가능할 때만 그 단일 경로 진행. 아니면 **그 경로만 보류**한다.
-    
-4) Attached Events (simultaneous inclusion)
-- `nextActivities`에 포함된 activity/subProcess가 `attached_activities.activity_id`로 존재하면,
-  - 그 `attached_events` 각각을 type="event"로 **별도 엔트리**로 추가한다(이미 완료/취소 제외).
-
-5) Assignment
-- 'roleBindings'은 프로세스 시작 전 기본으로 설정한 role임 'roleBindings'에 없는 역할이면 다음 액티비티의 role기반으로 결정한다.
-- `roleBindings`의 endpoint가 비어있거나 다음 액티비티의 role이 'roleBindings'에 없을 경우
-    - roleBindings의 이름과 유사한 항목을 'output' 또는 'previous_output'에서 찾음
-    - 찾았으면 그 항목에 지정 된 이름 또는 이메일 등의 사용자 정보로 'organizations'에서 검색
-    - 검색 되었으면 그 항목의 id가 nextUserEmail이 됨
-    - 유사한 검색결과도 없을 경우 **오류 없이 제외**하고, 나머지 항목은 계속 검토한다.
-- `roleBindings`의 endpoint가 배열이면 `,`으로 조인하여 nextUserEmail을 결정한다.
-    - 외부 고객 역할이면 입력 구조 내에서 email을 찾을 수 있을 때만 사용한다(없으면 해당 항목 제외).
-    - 유효 email을 결정할 수 없으면 **오류 없이 제외**하고, 나머지 항목은 계속 검토한다.
-
-6) InstanceName
-- `instance_name_pattern`을 우선 사용. 비어 있으면 반드시 한글로 `processDefinitionName_key_value` 형식을 따라 20자 이내 생성.
-
-7) 출력 형식
-- 반드시 JSON만 출력(설명 금지). 진행 불가한 후보는 제외하고, 가능 후보만 `nextActivities`에 담는다.
-- 전역 대기를 유발하지 말고, **후보 단위로** 판단한다.
-
-```json
-{{
-  "nextActivities": [
-    {{
-      "nextActivityId": "id",
-      "nextActivityName": "name",
-      "nextUserEmail": "email_or_system",
-      "type": "activity" | "subProcess" | "event",
-      "expression": "cron if event",
-      "dueDate": "YYYY-MM-DD if event",
-      "multiInstanceCount": "1",
-      "multiInstanceReason" : ["a에 대한 정보(1, 2, 3)","b에 대한 정보(4, 5, 6)"],
-      "result": "IN_PROGRESS",
-      "description": "Korean instruction",
-      "cannotProceedErrors": [
-        {{
-          "type": "PROCEED_CONDITION_NOT_MET" | "SYSTEM_ERROR" | "DATA_FIELD_NOT_EXIST",
-          "reason": "설명 (Korean)"
-        }}
-      ]
-    }}
-  ]
-}}
-"""
-)
 
 # Pydantic model for process execution
 
@@ -1305,7 +1322,7 @@ async def run_prompt_and_parse(prompt_tmpl, chain_input, workitem, tenant_id, pa
 
 
 
-async def _evaluate_sequence_conditions(model, parser, process_definition, all_workitem_input_data, workitem_input_data, sequence_condition_data):
+async def _evaluate_sequence_conditions(model, parser, process_definition, all_workitem_input_data, workitem_input_data, sequence_condition_data, ui_definitions):
     sequence_condition_data = sequence_condition_data or {}
     nl_condition_sequences = []
 
@@ -1337,38 +1354,28 @@ async def _evaluate_sequence_conditions(model, parser, process_definition, all_w
             seen = set()
 
             def _collect_contexts(value):
-    
                 if isinstance(value, dict):
-    
                     obj_id = id(value)
-    
                     if obj_id in seen:
-    
                         return
     
                     seen.add(obj_id)
-    
                     eval_contexts.append(value)
     
                     for nested in value.values():
-    
                         _collect_contexts(nested)
     
                 elif isinstance(value, list):
-    
                     for nested in value:
-    
                         _collect_contexts(nested)
 
             if scoped_context is not None:
                 eval_contexts.append(scoped_context)
             else:
                 if all_workitem_input_data:
-
                     _collect_contexts(all_workitem_input_data)
 
                 if not eval_contexts:
-
                     eval_contexts.append({})
 
             condition_eval = False
@@ -1397,7 +1404,7 @@ async def _evaluate_sequence_conditions(model, parser, process_definition, all_w
             nl_condition_sequences.append((sequence.id, condition_text.strip()))
 
     if nl_condition_sequences:
-        await _evaluate_nl_conditions(model, parser, all_workitem_input_data, workitem_input_data, nl_condition_sequences, sequence_condition_data)
+        await _evaluate_nl_conditions(model, parser, all_workitem_input_data, workitem_input_data, nl_condition_sequences, sequence_condition_data, ui_definitions)
 
 
 def _set_condition_eval(sequence_condition_data, seq_id, condition_met, reason=None):
@@ -1418,7 +1425,38 @@ def _set_condition_eval(sequence_condition_data, seq_id, condition_met, reason=N
         entry["conditionReason"] = reason.strip()
 
 
-async def _evaluate_nl_conditions(model, parser, all_workitem_input_data, workitem_input_data, nl_condition_sequences, sequence_condition_data):
+async def _evaluate_nl_conditions(model, parser, all_workitem_input_data, workitem_input_data, nl_condition_sequences, sequence_condition_data, ui_definitions):
+    def _collect_ui_field_keys(ui_defs: Optional[List[Any]]) -> set[str]:
+        keys: set[str] = set()
+        try:
+            for ui in ui_defs or []:
+                m = _build_field_text_map_from_ui_definition(ui)
+                for k in m.keys():
+                    if isinstance(k, str):
+                        keys.add(k)
+        except Exception:
+            pass
+        return keys
+
+    def _apply_helper_recursively(obj: Any, field_keys: set[str]) -> Any:
+        if isinstance(obj, dict):
+            annotated = dict(obj)
+            # First, apply helper on keys that exist at this level
+            for fk in field_keys:
+                if fk in annotated:
+                    annotated = add_field_name_by_key(annotated, fk, ui_definitions)
+            # Then recurse into values
+            for k, v in list(annotated.items()):
+                if isinstance(v, (dict, list)):
+                    annotated[k] = _apply_helper_recursively(v, field_keys)
+            return annotated
+        if isinstance(obj, list):
+            return [_apply_helper_recursively(v, field_keys) for v in obj]
+        return obj
+
+    ui_field_keys = _collect_ui_field_keys(ui_definitions)
+    all_workitem_input_data = _apply_helper_recursively(all_workitem_input_data, ui_field_keys)
+    workitem_input_data = _apply_helper_recursively(workitem_input_data, ui_field_keys)
     def _normalize(obj):
         if isinstance(obj, dict):
             return {str(k): _normalize(v) for k, v in obj.items()}
@@ -1710,12 +1748,10 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
             elif isinstance(props, dict):
                 props_json = props
             if isinstance(props_json, dict):
-                # Case-insensitive key lookup
                 for k, v in props_json.items():
                     if isinstance(k, str) and k.replace("_", "").lower() in ("foreachvariable", "foreachvariable"):
                         if isinstance(v, str) and v.strip():
                             return v.strip()
-                # Explicit keys
                 for key in ("foreachVariable", "forEachVariable", "foreach_variable", "for_each_variable"):
                     v = props_json.get(key)
                     if isinstance(v, str) and v.strip():
@@ -1762,11 +1798,9 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
                     if isinstance(val, list):
                         return val
                     if isinstance(val, dict):
-                        # best-effort: pick first list-like value
                         for v in val.values():
                             if isinstance(v, list):
                                 return v
-                # Fallback: try output/previous with same pattern
                 for root in (output, previous):
                     base = root.get(form_key) if isinstance(root, dict) else None
                     if base is not None:
@@ -1779,7 +1813,6 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
                                     return v
                 return None
 
-            # Otherwise treat as dot-path across known roots
             for root in (all_inputs, output, previous):
                 val = _traverse_path(root, foreach_var)
                 if isinstance(val, list):
@@ -1799,7 +1832,6 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
                 return t if len(t) <= limit else t[:limit]
             try:
                 if isinstance(item, dict):
-                    # Preserve key, clip only value to limit
                     pairs = []
                     for k in sorted(item.keys()):
                         v = item[k]
@@ -1807,7 +1839,6 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
                             pairs.append(f"{k}={_clip_value(v)}")
                     if pairs:
                         return ", ".join(pairs)
-                    # Fallback to clipped JSON when no scalar pairs available
                     return _clip_value(json.dumps(item, ensure_ascii=False))
                 if isinstance(item, list):
                     preview = ", ".join(_clip_value(x) for x in item[:5])
@@ -1837,7 +1868,6 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
             if isinstance(collection, list) and collection:
                 cnt = len(collection)
                 reasons = [_summarize_reason(elem) for elem in collection]
-                # Ensure reasons length equals count
                 if len(reasons) < cnt:
                     reasons += [""] * (cnt - len(reasons))
                 elif len(reasons) > cnt:
@@ -1846,16 +1876,13 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
                 p["multiInstanceReason"] = reasons
                 handled_ids.add(sp_id)
             elif isinstance(collection, list):
-                # Empty list -> zero would stall; default to 1 empty instance
                 p["multiInstanceCount"] = "1"
                 p["multiInstanceReason"] = [""]
                 handled_ids.add(sp_id)
 
-        # If all subprocess candidates were handled deterministically, skip LLM
         if handled_ids and all((p.get("nextActivityId") in handled_ids) for p in candidates):
             return next_activity_payloads
 
-        # Build LLM candidate set only for unhandled subprocesses
         candidate_subs = []
         for p in candidates:
             sp_id = p.get("nextActivityId")
@@ -1871,13 +1898,82 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
                     "description": _get(sd, "description") or "",
                 })
 
-        # If nothing remains for LLM, return
         if not candidate_subs:
             return next_activity_payloads
+        
+        runtime_output = chain_input_next.get("output")
+        runtime_previous_outputs = chain_input_next.get("previous_outputs") or {}
+
+        try:
+            ui_definitions = chain_input_next.get("ui_definitions")
+            activity_id = chain_input_next.get("activity_id")
+
+            if ui_definitions and activity_id:
+                if isinstance(runtime_output, dict):
+                    runtime_output = add_field_names_by_activity(runtime_output, activity_id, ui_definitions)
+                if isinstance(runtime_previous_outputs, dict):
+                    # Prefer form alias as the name when possible
+                    for _k in list(runtime_previous_outputs.keys()):
+                        display_name = None
+                        try:
+                            # find a ui_def whose id matches the form key
+                            matched_ui = None
+                            for ui in ui_definitions or []:
+                                uid = getattr(ui, "id", None) or (ui.get("id") if isinstance(ui, dict) else None)
+                                if uid == _k:
+                                    matched_ui = ui
+                                    break
+                            if matched_ui is not None:
+                                display_name = _extract_alias_from_html(getattr(matched_ui, "html", None) or (matched_ui.get("html") if isinstance(matched_ui, dict) else None))
+                        except Exception:
+                            display_name = None
+
+                        # Wrap the top-level form key
+                        runtime_previous_outputs = add_field_name_by_key(runtime_previous_outputs, _k, ui_definitions)
+                        if display_name:
+                            try:
+                                cur = runtime_previous_outputs.get(_k)
+                                if isinstance(cur, dict) and "name" in cur:
+                                    cur["name"] = display_name
+                            except Exception:
+                                pass
+
+                def _collect_ui_field_keys(ui_defs: Optional[List[Any]]) -> set[str]:
+                    keys: set[str] = set()
+                    try:
+                        for ui in ui_defs or []:
+                            m = _build_field_text_map_from_ui_definition(ui)
+                            for k in m.keys():
+                                if isinstance(k, str):
+                                    keys.add(k)
+                    except Exception:
+                        pass
+                    return keys
+
+                def _apply_helper_recursively(obj: Any, field_keys: set[str]) -> Any:
+                    if isinstance(obj, dict):
+                        annotated = dict(obj)
+                        for fk in field_keys:
+                            if fk in annotated:
+                                annotated = add_field_name_by_key(annotated, fk, ui_definitions)
+                        for k, v in list(annotated.items()):
+                            if isinstance(v, (dict, list)):
+                                annotated[k] = _apply_helper_recursively(v, field_keys)
+                        return annotated
+                    if isinstance(obj, list):
+                        return [_apply_helper_recursively(v, field_keys) for v in obj]
+                    return obj
+
+                ui_field_keys = _collect_ui_field_keys(ui_definitions)
+                runtime_output = _apply_helper_recursively(runtime_output, ui_field_keys)
+                runtime_previous_outputs = _apply_helper_recursively(runtime_previous_outputs, ui_field_keys)
+        except Exception:
+            # Best-effort enrichment; ignore failures
+            pass
 
         runtime_context = {
-            "output": chain_input_next.get("output"),
-            "previous_outputs": chain_input_next.get("previous_outputs") or {},
+            "output": runtime_output,
+            "previous_outputs": runtime_previous_outputs,
             "instance_name_pattern": chain_input_next.get("instance_name_pattern") or "",
         }
 
@@ -2124,6 +2220,144 @@ async def check_task_status(next_activity_payloads: list[dict], chain_input_next
         print(f"[WARN] check_task_status failed: {e}")
         return next_activity_payloads
 
+
+async def check_role_binding(next_activity_payloads: list[dict], chain_input_next: dict) -> list[dict]:
+    """
+    Use a minimal LLM prompt to resolve nextUserEmail for next activities based on roleBindings,
+    organizations, and runtime inputs. This only fills missing nextUserEmail values and keeps
+    existing values/items intact (no filtering or removal).
+
+    Rules encoded in the prompt:
+    - roleBindings: default assignments; if role not present or endpoint empty, infer from inputs/orgs.
+    - If roleBindings.endpoint is an array, join with ',' for nextUserEmail.
+    - If role is external_customer, use an email found within inputs only (otherwise exclude).
+    - Try similar-key lookup from output/previous_outputs (e.g., role-like names, '*email*').
+    - If an org member is found by name/email, use its id as nextUserEmail.
+    - If unresolved, exclude silently.
+    """
+    try:
+        if not isinstance(next_activity_payloads, list) or not next_activity_payloads:
+            return next_activity_payloads
+
+        activities = chain_input_next.get("activities") or []
+        role_bindings = chain_input_next.get("role_bindings") or []
+        organizations = chain_input_next.get("organizations") or []
+        output = chain_input_next.get("output") or {}
+        previous_outputs = chain_input_next.get("previous_outputs") or {}
+
+        def _get(obj, key):
+            if isinstance(obj, dict):
+                return obj.get(key)
+            return getattr(obj, key, None)
+
+        # Collect candidate activities that need user resolution (skip events)
+        candidates: list[dict] = []
+        for p in next_activity_payloads:
+            if not isinstance(p, dict):
+                continue
+            if (p.get("type") or "").lower() == "event":
+                continue
+            # Only resolve when nextUserEmail is missing/blank
+            if isinstance(p.get("nextUserEmail"), str) and p.get("nextUserEmail").strip():
+                continue
+            if p.get("nextUserEmail") not in (None, "") and not isinstance(p.get("nextUserEmail"), str):
+                continue
+            act_id = p.get("nextActivityId")
+            if not act_id:
+                continue
+            activity_obj = None
+            for a in activities:
+                if _get(a, "id") == act_id:
+                    activity_obj = a
+                    break
+            candidates.append({
+                "id": act_id,
+                "name": _get(activity_obj, "name") or act_id,
+                "role": _get(activity_obj, "role") or "",
+            })
+
+        if not candidates:
+            return next_activity_payloads
+
+        chain_input_text = {
+            "instruction": (
+                "당신은 역할 할당기입니다. 아래 규칙을 따르세요:\n"
+                "1) roleBindings에 현재 액티비티의 role이 있고 endpoint가 존재하면 사용합니다.\n"
+                "   - endpoint가 배열이면 ','로 조인하여 nextUserEmail로 설정합니다.\n"
+                "2) endpoint가 비어있거나 해당 role이 없으면, output/previous_outputs에서 역할명과 유사한 키 또는 'email' 관련 값을 찾으세요.\n"
+                "   - 값이 이메일이면 그대로 사용하거나, 이름/이메일로 organizations에서 구성원을 찾아 해당 id를 nextUserEmail로 설정합니다.\n"
+                "3) role이 external_customer인 경우 입력 구조 내에서 email을 찾을 수 있을 때만 사용합니다(없으면 제외).\n"
+                "4) 유효 email/id를 결정할 수 없으면 오류 없이 해당 항목을 제외합니다."
+            ),
+            "outputFormat": {"assignments": [{"id": "...", "nextUserEmail": "", "keep": True}]},
+            "candidates": candidates,
+            "roleBindings": role_bindings,
+            "organizations": organizations,
+            "runtimeContext": {
+                "output": output,
+                "previous_outputs": previous_outputs,
+            },
+        }
+
+        prompt_tmpl = PromptTemplate.from_template('{chain_input_text}')
+        chain_input = {"chain_input_text": json.dumps(chain_input_text, ensure_ascii=False)}
+
+        response_text = ""
+        async for chunk in model.astream(prompt_tmpl.format(**chain_input)):
+            token = getattr(chunk, 'content', None)
+            if token:
+                response_text += token
+
+        try:
+            parsed = json.loads(response_text)
+        except Exception:
+            try:
+                parsed = parser.parse(response_text)
+            except Exception as parse_error:
+                print(f"[WARN] check_role_binding parse failed: {parse_error}")
+                return next_activity_payloads
+
+        assignments = None
+        if isinstance(parsed, dict):
+            for key in ("assignments", "results", "nextActivities"):
+                val = parsed.get(key)
+                if isinstance(val, list):
+                    assignments = val
+                    break
+        if not isinstance(assignments, list):
+            return next_activity_payloads
+
+        # Build map id -> nextUserEmail (non-empty only)
+        amap: dict[str, str] = {}
+        for item in assignments:
+            if not isinstance(item, dict):
+                continue
+            cid = item.get("id") or item.get("nextActivityId")
+            if not cid:
+                continue
+            email_or_id = item.get("nextUserEmail")
+            if isinstance(email_or_id, str) and email_or_id.strip():
+                amap[str(cid)] = email_or_id.strip()
+
+        # Fill only missing nextUserEmail; preserve all entries
+        for p in next_activity_payloads:
+            if not isinstance(p, dict):
+                continue
+            if (p.get("type") or "").lower() == "event":
+                continue
+            existing = p.get("nextUserEmail")
+            if isinstance(existing, str) and existing.strip():
+                continue
+            if existing not in (None, "") and not isinstance(existing, str):
+                continue
+            nid = p.get("nextActivityId")
+            if nid and nid in amap:
+                p["nextUserEmail"] = amap[nid]
+
+        return next_activity_payloads
+    except Exception as e:
+        print(f"[WARN] check_role_binding failed: {e}")
+        return next_activity_payloads
 
 def run_completed_determination(completed_json, chain_input_completed):
     CHECKPOINTS_REQUIRED = False
@@ -2501,7 +2735,7 @@ def resolve_next_activity_payloads(
             return endpoint
         return None
 
-    def _resolve_next_user_email(node, node_type: str) -> str:
+    def _resolve_next_user_email(node, node_type: str) -> Optional[str]:
         role_name = getattr(node, "role", None) if node else None
         if isinstance(role_name, str):
             for binding in role_bindings_for_next:
@@ -2509,13 +2743,11 @@ def resolve_next_activity_payloads(
                     endpoint = _extract_endpoint(binding)
                     if endpoint:
                         return endpoint
-        for binding in role_bindings_for_next:
-            endpoint = _extract_endpoint(binding)
-            if endpoint:
-                return endpoint
+                    break
+        # For events, default to system; otherwise return None so prompt-based resolver can fill it later
         if node_type == "event":
             return "system"
-        return workitem.get("user_id") or "system"
+        return None
 
     sequences_all = list(getattr(process_definition, "sequences", []) or [])
 
@@ -2778,6 +3010,8 @@ async def handle_workitem(workitem):
     today = datetime.now().strftime("%Y-%m-%d")
 
     ui_definition = fetch_ui_definition_by_activity_id(process_definition_id, activity_id, tenant_id)
+    ui_definitions = fetch_ui_definitions_by_def_id(process_definition_id, tenant_id)
+    
     output = {}
     if workitem.get('output') and isinstance(workitem['output'], str):
         try:
@@ -2819,7 +3053,7 @@ async def handle_workitem(workitem):
             print(f"[ERROR] Failed to get selected info for {workitem.get('id')}: {str(e)}")
 
         sequence_condition_data = sequence_condition_data or {}
-        await _evaluate_sequence_conditions(model, parser, process_definition, all_workitem_input_data, workitem_input_data, sequence_condition_data)
+        await _evaluate_sequence_conditions(model, parser, process_definition, all_workitem_input_data, workitem_input_data, sequence_condition_data, ui_definitions)
 
         attached_activities = []
         for next_activity in next_near_activities:
@@ -2954,7 +3188,7 @@ async def handle_workitem(workitem):
                     "activity_id": activity_id,
                     "process_definition_id": process_definition_id,
                     "output": output,
-
+                    "ui_definitions": ui_definitions,
                     "next_activities": next_near_activities,
                     "role_bindings": workitem.get('assignees', []),
                     "organizations": organizations,
@@ -2974,6 +3208,8 @@ async def handle_workitem(workitem):
                 next_activity_payloads = await check_subprocess_expression(next_activity_payloads, chain_input_next)
 
                 next_activity_payloads = await check_task_status(next_activity_payloads, chain_input_next)
+                
+                next_activity_payloads = await check_role_binding(next_activity_payloads, chain_input_next)
 
                 completed_json["nextActivities"] = next_activity_payloads
 
@@ -3355,56 +3591,33 @@ def get_all_input_data(workitem: dict, process_definition: Any) -> Dict[str, Any
     """
 
     try:
-
         tenant_id = workitem.get('tenant_id')
-
         proc_inst_id = workitem.get('proc_inst_id')
-
         root_proc_inst_id = workitem.get('root_proc_inst_id')
-
-
 
         if not root_proc_inst_id and proc_inst_id and tenant_id:
 
             try:
-
                 inst = fetch_process_instance(proc_inst_id, tenant_id)
 
                 root_proc_inst_id = (
-
                     getattr(inst, 'root_proc_inst_id', None)
-
                     or (inst.get('root_proc_inst_id') if isinstance(inst, dict) else None)
-
                 )
 
             except Exception:
-
                 root_proc_inst_id = None
 
-
-
         if not tenant_id or not root_proc_inst_id:
-
             return {}
-
-
 
         workitems = fetch_workitems_by_root_proc_inst_id(root_proc_inst_id, tenant_id) or []
 
-
-
         def _get(obj, key):
-
             if isinstance(obj, dict):
-
                 return obj.get(key)
-
             return getattr(obj, key, None)
 
-
-
-        # Helper: numeric key detector
         def _is_numeric_key(k: Any) -> bool:
             try:
                 if isinstance(k, (int, float)):
@@ -3415,7 +3628,6 @@ def get_all_input_data(workitem: dict, process_definition: Any) -> Dict[str, Any
                 pass
             return False
 
-        # Helper: resolve form key for a workitem
         def _resolve_form_key_for_workitem(wi: Any) -> str:
             act_id = _get(wi, 'activity_id') or _get(wi, 'activityId')
             proc_def_id = _get(wi, 'proc_def_id') or _get(wi, 'procDefId') or workitem.get('proc_def_id')
@@ -3427,221 +3639,120 @@ def get_all_input_data(workitem: dict, process_definition: Any) -> Dict[str, Any
                     return form_key
             except Exception:
                 pass
-            # Fallback: activity id as a stable non-numeric key
             return str(act_id) if act_id is not None else 'unknown_form'
 
 
         cur_scope_raw = workitem.get('execution_scope') or workitem.get('executionScope')
-
         try:
-
             cur_scope = int(str(cur_scope_raw)) if cur_scope_raw is not None else None
-
         except Exception:
-
             cur_scope = cur_scope_raw
 
-
-
         def _norm_scope(v):
-
             if v is None or v == "":
-
                 return None
-
             try:
-
                 return int(str(v))
-
             except Exception:
-
                 return str(v)
 
-
-
         def _scope_of(obj):
-
             return _norm_scope(_get(obj, 'execution_scope') or _get(obj, 'executionScope'))
 
-
-
         if cur_scope is not None:
-
             workitems = [wi for wi in workitems if (_scope_of(wi) is None) or (_scope_of(wi) == cur_scope)]
 
-
-
         def _parse_dt(s: str) -> datetime:
-
             try:
-
                 return datetime.fromisoformat(s)
-
             except Exception:
-
                 try:
-
                     return datetime.strptime(s[:19], '%Y-%m-%dT%H:%M:%S')
-
                 except Exception:
-
                     return datetime.min
-
-
-
-        # 최신 워크아이템만 유지 (activity_id 기준)
 
         latest_by_activity: dict[str, Any] = {}
 
         for wi in workitems:
-
             act_id = _get(wi, 'activity_id') or _get(wi, 'activityId')
-
             if not act_id:
-
                 continue
 
             start_date = str(_get(wi, 'start_date') or _get(wi, 'startDate') or '')
-
             prev = latest_by_activity.get(act_id)
 
             if not prev:
-
                 latest_by_activity[act_id] = wi
-
             else:
-
                 prev_sd = str(_get(prev, 'start_date') or _get(prev, 'startDate') or '')
-
                 if _parse_dt(start_date) >= _parse_dt(prev_sd):
-
                     latest_by_activity[act_id] = wi
 
-
-
-        # 정렬(옵션): start_date 기준 오름차순
-
         selected = list(latest_by_activity.values())
-
         selected.sort(key=lambda x: _parse_dt(str(_get(x, 'start_date') or _get(x, 'startDate') or '')))
-
-
 
         outputs: Dict[str, Any] = {}
 
-
-
         def _register_output(key, value):
-
             if key is None:
-
                 return False
 
             key_str = str(key).strip()
-
             if not key_str:
-
                 return False
 
             outputs[key_str] = value
-
             return True
 
-
-
         for wi in selected:
-
             out = _get(wi, 'output')
-
             if out in (None, '', {}):
-
                 continue
 
             if isinstance(out, str):
-
                 try:
-
                     out = json.loads(out)
-
                 except Exception:
-
                     continue
-
-
-
+                
             if isinstance(out, dict):
-
                 registered = False
-
                 try:
-
-                    # Case 1: exactly one key
                     if len(out) == 1:
-
                         only_key, only_val = next(iter(out.items()))
-
                         reg_key = _resolve_form_key_for_workitem(wi) if _is_numeric_key(only_key) else only_key
-
                         registered = _register_output(reg_key, only_val)
 
-                    # Case 2: keys include obvious form-like key
                     if not registered:
-
                         for k, v in out.items():
-
                             if isinstance(v, dict) and ('form' in str(k).lower() or 'Form' in str(k)):
-
                                 reg_key = _resolve_form_key_for_workitem(wi) if _is_numeric_key(k) else k
-
                                 if _register_output(reg_key, v):
-
                                     registered = True
-
                                     break
-
-                    # Case 3: all keys are numeric -> collapse under resolved form key
+                                
                     if not registered:
-
                         keys = list(out.keys())
-
                         if keys and all(_is_numeric_key(k) for k in keys):
-
                             form_key = _resolve_form_key_for_workitem(wi)
-
                             registered = _register_output(form_key, out)
 
-                    # Case 4: fallback to activity id or first key
                     if not registered:
-
                         act_key = _get(wi, 'activity_id') or _get(wi, 'activityId')
-
                         if not act_key and out:
-
                             first_key = next(iter(out.keys()), None)
-
                             act_key = _resolve_form_key_for_workitem(wi) if _is_numeric_key(first_key) else first_key
 
                         _register_output(act_key, out)
-
                 except Exception:
-
                     act_key = _get(wi, 'activity_id') or _get(wi, 'activityId')
-
                     _register_output(act_key, out)
-
             else:
-
                 act_key = _get(wi, 'activity_id') or _get(wi, 'activityId')
-
                 _register_output(act_key, out)
 
-
-
         return outputs
-
     except Exception as e:
-
         print(f"[ERROR] Failed to get all input data for {workitem.get('id')}: {str(e)}")
-
         return {}
 
