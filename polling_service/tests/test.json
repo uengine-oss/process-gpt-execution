@@ -1,0 +1,260 @@
+{
+  "data": [],
+  "roles": [
+    {
+      "name": "기획팀",
+      "default": [
+        "827ac44b-1435-4ad8-ab14-8b28c3f64ef2"
+      ],
+      "endpoint": "",
+      "resolutionRule": "사용자 요청에 의해 임의 생성"
+    },
+    {
+      "name": "특허전문가",
+      "default": [
+        "827ac44b-1435-4ad8-ab14-8b28c3f64ef2"
+      ],
+      "endpoint": "",
+      "resolutionRule": "사용자 요청에 의해 임의 생성"
+    },
+    {
+      "name": "실험에이전트",
+      "default": [
+        "827ac44b-1435-4ad8-ab14-8b28c3f64ef2"
+      ],
+      "endpoint": "",
+      "resolutionRule": "사용자 요청에 의해 임의 생성"
+    }
+  ],
+  "events": [
+    {
+      "id": "start_event",
+      "name": "프로세스 시작",
+      "role": "기획팀",
+      "type": "startEvent",
+      "process": "Process_1",
+      "properties": "{\"description\":\"연구 자료조사 및 구현제 프로세스 시작\"}",
+      "description": "start event"
+    },
+    {
+      "id": "end_event",
+      "name": "프로세스 종료",
+      "role": "실험에이전트",
+      "type": "endEvent",
+      "process": "Process_1",
+      "properties": "{\"description\":\"시작품 구현 완료 시 프로세스 종료\"}",
+      "description": "start event"
+    }
+  ],
+  "version": null,
+  "gateways": [
+    {
+      "id": "gateway",
+      "name": "조사 분기",
+      "role": "기획팀",
+      "type": "parallelGateway",
+      "process": "Process_1",
+      "condition": {},
+      "properties": "{}",
+      "description": "조사 분기 description",
+      "conditionData": [
+        "research_data_survey_and_implementation_auto_deploy_process_input_survey_info_form.survey_detail"
+      ]
+    },
+    {
+      "id": "Gateway_0do2146",
+      "name": "조사 완료",
+      "role": "실험에이전트",
+      "type": "parallelGateway",
+      "process": "Process_1",
+      "condition": {},
+      "properties": "{}",
+      "description": "조사 완료 description"
+    },
+    {
+      "id": "start_event",
+      "name": "프로세스 시작",
+      "role": "기획팀",
+      "type": "startEvent",
+      "srcTrg": null,
+      "process": "Process_1",
+      "condition": {},
+      "properties": "{\"description\":\"연구 자료조사 및 구현제 프로세스 시작\"}",
+      "description": "start event"
+    },
+    {
+      "id": "end_event",
+      "name": "프로세스 종료",
+      "role": "실험에이전트",
+      "type": "endEvent",
+      "srcTrg": null,
+      "process": "Process_1",
+      "condition": {},
+      "properties": "{\"description\":\"시작품 구현 완료 시 프로세스 종료\"}",
+      "description": "start event"
+    },
+    {
+      "id": "start_event",
+      "name": "프로세스 시작",
+      "role": "기획팀",
+      "type": "startEvent",
+      "srcTrg": null,
+      "process": "Process_1",
+      "condition": {},
+      "properties": "{\"description\":\"연구 자료조사 및 구현제 프로세스 시작\"}",
+      "description": "start event"
+    },
+    {
+      "id": "end_event",
+      "name": "프로세스 종료",
+      "role": "실험에이전트",
+      "type": "endEvent",
+      "srcTrg": null,
+      "process": "Process_1",
+      "condition": {},
+      "properties": "{\"description\":\"시작품 구현 완료 시 프로세스 종료\"}",
+      "description": "start event"
+    }
+  ],
+  "sequences": [
+    {
+      "id": "SequenceFlow_start_event_input_survey_info",
+      "source": "start_event",
+      "target": "input_survey_info",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "SequenceFlow_input_survey_info_gateway",
+      "source": "input_survey_info",
+      "target": "gateway",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "SequenceFlow_gateway_patent_survey",
+      "source": "gateway",
+      "target": "patent_survey",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "SequenceFlow_gateway_paper_survey",
+      "source": "gateway",
+      "target": "paper_survey",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "SequenceFlow_implementation_end_event",
+      "source": "implementation",
+      "target": "end_event",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "Flow_0fdv07i",
+      "source": "Gateway_0do2146",
+      "target": "implementation",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "Flow_0p14fr9",
+      "source": "paper_survey",
+      "target": "Gateway_0do2146",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "Flow_1t6nrsp",
+      "source": "patent_survey",
+      "target": "Gateway_0do2146",
+      "condition": "",
+      "properties": "{}"
+    }
+  ],
+  "activities": [
+    {
+      "id": "input_survey_info",
+      "name": "조사 내역 입력",
+      "role": "기획팀",
+      "tool": "formHandler:research_data_survey_and_implementation_auto_deploy_process_input_survey_info_form",
+      "type": "userTask",
+      "process": "Process_1",
+      "duration": 5,
+      "inputData": [],
+      "outputData": [],
+      "properties": "{\"description\":\"연구 조사를 위한 내역을 입력한다.\",\"instruction\":\"조사 대상, 범위, 목표 등 상세 입력\",\"role\":\"기획팀\",\"outputMapping\":[{\"dataFieldId\":\"조사 내역\",\"from\":\"변수명\",\"type\":\"org.uengine.kernel.Evaluate\"}],\"checkpoints\":[\"조사 내용 확인\"]}",
+      "description": "연구 조사를 위한 내역을 입력한다.",
+      "instruction": "조사 내역 입력 instruction",
+      "attachedEvents": null
+    },
+    {
+      "id": "patent_survey",
+      "name": "특허조사",
+      "role": "특허전문가",
+      "tool": "formHandler:research_data_survey_and_implementation_auto_deploy_process_patent_survey_form",
+      "type": "userTask",
+      "process": "Process_1",
+      "duration": 5,
+      "inputData": [
+        "research_data_survey_and_implementation_auto_deploy_process_input_survey_info_form.survey_detail"
+      ],
+      "outputData": [],
+      "properties": "{\"description\":\"조사 내역을 바탕으로 특허 정보를 조사\",\"instruction\":\"관련 특허 데이터베이스 검색\",\"role\":\"특허전문가\",\"inputMapping\":[{\"dataFieldId\":\"조사 내역\",\"to\":\"변수명\",\"type\":\"org.uengine.kernel.Evaluate\"}],\"outputMapping\":[{\"dataFieldId\":\"특허 조사 결과\",\"from\":\"변수명\",\"type\":\"org.uengine.kernel.Evaluate\"}],\"checkpoints\":[\"특허 정보 수집\"]}",
+      "description": "조사 내역을 바탕으로 특허 정보를 조사",
+      "instruction": "특허조사 instruction",
+      "attachedEvents": null
+    },
+    {
+      "id": "implementation",
+      "name": "시작품 구현",
+      "role": "실험에이전트",
+      "tool": "formHandler:research_data_survey_and_implementation_auto_deploy_process_implementation_form",
+      "type": "userTask",
+      "process": "Process_1",
+      "duration": 5,
+      "inputData": [
+        "research_data_survey_and_implementation_auto_deploy_process_input_survey_info_form.survey_detail",
+        "research_data_survey_and_implementation_auto_deploy_process_patent_survey_form.patent_search_result",
+        "research_data_survey_and_implementation_auto_deploy_process_paper_survey_form.research_result"
+      ],
+      "outputData": [],
+      "properties": "{\"description\":\"조사 결과를 바탕으로 시작품을 구현\",\"instruction\":\"특허 및 논문 결과를 종합하여 실험/시작품을 설계 및 제작\",\"role\":\"실험에이전트\",\"inputMapping\":[{\"dataFieldId\":\"특허 조사 결과\",\"to\":\"변수명\",\"type\":\"org.uengine.kernel.Evaluate\"},{\"dataFieldId\":\"논문 조사 결과\",\"to\":\"변수명\",\"type\":\"org.uengine.kernel.Evaluate\"}],\"outputMapping\":[{\"dataFieldId\":\"구현제 결과\",\"from\":\"변수명\",\"type\":\"org.uengine.kernel.Evaluate\"}],\"checkpoints\":[\"시작품 구현 완료\"]}",
+      "description": "조사 결과를 바탕으로 시작품을 구현",
+      "instruction": "시작품 구현 instruction",
+      "attachedEvents": null
+    },
+    {
+      "id": "paper_survey",
+      "name": "논문조사",
+      "role": "실험에이전트",
+      "tool": "formHandler:research_data_survey_and_implementation_auto_deploy_process_paper_survey_form",
+      "type": "userTask",
+      "process": "Process_1",
+      "duration": 5,
+      "inputData": [
+        "research_data_survey_and_implementation_auto_deploy_process_input_survey_info_form.survey_detail"
+      ],
+      "outputData": [],
+      "properties": "{\"description\":\"조사 내역을 바탕으로 논문을 조사\",\"instruction\":\"관련 논문 데이터베이스 검색\",\"role\":\"실험에이전트\",\"inputMapping\":[{\"dataFieldId\":\"조사 내역\",\"to\":\"변수명\",\"type\":\"org.uengine.kernel.Evaluate\"}],\"outputMapping\":[{\"dataFieldId\":\"논문 조사 결과\",\"from\":\"변수명\",\"type\":\"org.uengine.kernel.Evaluate\"}],\"checkpoints\":[\"논문 정보 수집\"]}",
+      "description": "조사 내역을 바탕으로 논문을 조사",
+      "instruction": "논문조사 instruction",
+      "attachedEvents": null
+    }
+  ],
+  "description": "process.description",
+  "participants": {
+    "id": "Participant",
+    "name": "연구 자료조사 및 구현제 자동 배포 프로세스",
+    "processRef": "Process_1"
+  },
+  "subProcesses": [],
+  "shortDescription": {
+    "text": ""
+  },
+  "instanceNamePattern": null,
+  "processDefinitionId": "research_data_survey_and_implementation_auto_deploy_process",
+  "processDefinitionName": "연구 자료조사 및 구현체 자동 배포 프로세스"
+}

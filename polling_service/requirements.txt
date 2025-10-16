@@ -16,3 +16,4 @@ psutil==6.1.0
 langchain-mcp-adapters==0.1.0
 langgraph==0.5.3
 process-gpt-llm-factory==1.0.0
+pytest==8.3.3
