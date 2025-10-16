@@ -21,8 +21,8 @@ def test_loads_process_definition(parent_def):
     assert parent_def is not None
 
 
-def test_find_known_gateway_block(parent_def):
-    target_id = "Gateway_0do2146"
+@pytest.mark.parametrize("target_id", ["Gateway_0do2146", "start_event"])
+def test_find_known_gateway_block(parent_def, target_id):
     gateway = parent_def.find_gateway_by_id(target_id)
     assert gateway is not None, f"Gateway not found: {target_id}"
     assert getattr(gateway, "id", None) == target_id
