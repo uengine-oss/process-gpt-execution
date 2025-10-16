@@ -19,13 +19,15 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
+        working-directory: polling_service
         run: |
           python -m pip install -U pip
-          python -m pip install -r polling_service/requirements.txt
+          python -m pip install -r requirements.txt
 
-      - name: Run pytest
+      - name: Run pytest (all tests, verbose)
+        working-directory: polling_service
         run: |
-          pytest -q polling_service/tests/testDefinition.py
+          python -m pytest -vv --tb=long -l -ra tests
 
   build-and-deploy:
     needs: tests
