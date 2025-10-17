@@ -1173,8 +1173,11 @@ def invite_user(input):
             # 기존 사용자인 경우
             user_id = is_user_exist['id']
             
-            # 기존 사용자를 위한 초대 이메일 발송
-            send_existing_user_invitation_email(email, tenant_id)
+            # 기존 사용자를 위한 초대 이메일 발송 (실패해도 사용자 초대는 진행)
+            try:
+                send_existing_user_invitation_email(email, tenant_id)
+            except Exception as email_error:
+                print(f"Warning: Failed to send invitation email, but continuing with user invitation: {email_error}")
             
         else:
             # 신규 사용자인 경우 - Supabase의 초대 메일 사용 (비밀번호 설정 링크 포함)
