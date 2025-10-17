@@ -15,7 +15,7 @@
 ## 실행 방법
 - 로컬 실행
   ```bash
-  pytest -vv --tb=long -l -ra tests
+  python -m pytest -vv --tb=long -l -ra tests
   ```
 - CI 연동
   - `.github/workflows/deploy.yaml`의 `tests` 잡이 이 폴더를 실행하며, 성공 시에만 `build-and-deploy`가 동작합니다.
