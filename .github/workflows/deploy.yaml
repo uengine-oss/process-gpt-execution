@@ -6,7 +6,31 @@ on:
       - main
 
 jobs:
+  tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -U pip
+          python -m pip install -r requirements.txt || true
+          # Install polling_service requirements if present
+          if [ -f polling_service/requirements.txt ]; then python -m pip install -r polling_service/requirements.txt; fi
+
+      - name: Run pytest (root tests, verbose)
+        run: |
+          python -m pytest -vv --tb=long -l -ra tests
+
   build-and-deploy:
+    needs: tests
     runs-on: ubuntu-latest
 
     steps:

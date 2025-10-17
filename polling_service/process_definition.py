@@ -72,6 +72,7 @@ class SubProcess(BaseModel):
 
 class ProcessSequence(BaseModel):
     id: str
+    name: Optional[str] = None
     source: str
     target: str
     condition: Optional[str] = None
