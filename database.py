@@ -14,6 +14,9 @@ import pytz
 from contextvars import ContextVar
 from dotenv import load_dotenv
 import socket
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 db_config_var = ContextVar('db_config', default={})
 supabase_client_var = ContextVar('supabase', default=None)
@@ -1167,8 +1170,14 @@ def invite_user(input):
             is_user_exist = None
         
         if is_user_exist:
+            # 기존 사용자인 경우
             user_id = is_user_exist['id']
+            
+            # 기존 사용자를 위한 초대 이메일 발송
+            send_existing_user_invitation_email(email, tenant_id)
+            
         else:
+            # 신규 사용자인 경우 - Supabase의 초대 메일 사용 (비밀번호 설정 링크 포함)
             redirect_url = f"https://{tenant_id}.process-gpt.io/auth/initial-setting"
             response = supabase.auth.admin.invite_user_by_email(
                 email,
@@ -1339,6 +1348,117 @@ def check_tenant_owner(tenant_id: str, uid: str) -> bool:
             return False
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+def send_existing_user_invitation_email(email: str, tenant_id: str) -> bool:
+    """
+    기존 사용자를 다른 테넌트에 초대하는 이메일을 발송하는 함수
+    """
+    try:
+        # SMTP 설정
+        smtp_server = os.getenv("SMTP_SERVER")
+        smtp_port = os.getenv("SMTP_PORT")
+        smtp_username = os.getenv("SMTP_USERNAME")
+        smtp_password = os.getenv("SMTP_PASSWORD")
+        
+        if not all([smtp_server, smtp_port, smtp_username, smtp_password]):
+            print("SMTP configuration is incomplete")
+            return False
+        
+        # 테넌트 URL 생성
+        if tenant_id == "localhost":
+            tenant_url = "http://localhost:8088"
+        else:
+            tenant_url = f"https://{tenant_id}.process-gpt.io"
+        
+        # 이메일 템플릿
+        html_template = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Process GPT 테넌트 초대</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f8fafc;">
+    <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+        
+        <!-- Header -->
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 600;">
+                🎉 새로운 테넌트에 초대되었습니다
+            </h1>
+        </div>
+        
+        <!-- Content -->
+        <div style="padding: 40px 30px;">
+            <h2 style="color: #2d3748; margin: 0 0 20px 0; font-size: 22px; font-weight: 600;">
+                {tenant_id}
+            </h2>
+            
+            <p style="color: #4a5568; line-height: 1.6; margin: 0 0 30px 0; font-size: 16px;">
+                <strong>{tenant_id}</strong> 테넌트에 초대되었습니다.<br>
+                아래 버튼을 클릭하여 테넌트에 접속하실 수 있습니다.
+            </p>
+            
+            <!-- CTA Button -->
+            <div style="text-align: center; margin: 40px 0;">
+                <a href="{tenant_url}" 
+                   style="display: inline-block; 
+                          background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); 
+                          color: #ffffff; 
+                          text-decoration: none; 
+                          padding: 16px 32px; 
+                          border-radius: 8px; 
+                          font-weight: 600; 
+                          font-size: 16px;
+                          box-shadow: 0 4px 14px 0 rgba(79, 70, 229, 0.4);
+                          transition: all 0.3s ease;">
+                    🚀 테넌트 접속하기
+                </a>
+            </div>
+            
+            <div style="background-color: #f7fafc; padding: 20px; border-radius: 8px; border-left: 4px solid #4f46e5;">
+                <p style="color: #2d3748; margin: 0; font-size: 14px; line-height: 1.5;">
+                    <strong>💡 안내사항:</strong><br>
+                    • 기존 계정으로 로그인하시면 됩니다<br>
+                    • 문의사항이 있으시면 관리자(help@uengine.org)에게 연락해주세요
+                </p>
+            </div>
+        </div>
+        
+        <!-- Footer -->
+        <div style="background-color: #f8fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
+            <p style="color: #718096; margin: 0; font-size: 14px;">
+                Process GPT Team<br>
+                <span style="color: #a0aec0;">이 이메일은 자동으로 발송되었습니다.</span>
+            </p>
+        </div>
+        
+    </div>
+</body>
+</html>
+        """
+        
+        # 이메일 메시지 생성
+        msg = MIMEMultipart()
+        msg['From'] = 'noreply@process-gpt.io'
+        msg["Reply-To"] = "help@uengine.org"
+        msg['To'] = email
+        msg['Subject'] = f'[Process GPT] {tenant_id} 테넌트에 초대되었습니다'
+        msg.attach(MIMEText(html_template, 'html', 'utf-8'))
+        
+        # SMTP를 통해 이메일 발송
+        with smtplib.SMTP(smtp_server, int(smtp_port)) as server:
+            server.starttls()
+            server.login(smtp_username, smtp_password)
+            server.send_message(msg)
+        
+        print(f"Invitation email sent to {email} for tenant {tenant_id}")
+        return True
+        
+    except Exception as e:
+        print(f"Failed to send invitation email: {e}")
+        return False
 
 
 def upsert_process_instance_source(source_data: dict):
