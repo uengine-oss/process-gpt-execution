@@ -27,3 +27,11 @@ def test_find_known_gateway_block(parent_def, target_id):
     assert gateway is not None, f"Gateway not found: {target_id}"
     assert getattr(gateway, "id", None) == target_id
 
+
+def test_loads_test_subprocess_definition():
+    path = Path(__file__).resolve().parent / "testSubprocess.json"
+    assert path.exists(), f"Test data JSON not found: {path}"
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    obj = load_process_definition(data)
+    assert obj is not None

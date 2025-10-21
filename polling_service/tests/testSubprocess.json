@@ -1,0 +1,420 @@
+{
+    "data": [],
+    "roles": [
+      {
+        "name": "디자이너",
+        "default": "",
+        "endpoint": ""
+      },
+      {
+        "name": "담당영업",
+        "default": "",
+        "endpoint": ""
+      }
+    ],
+    "events": [
+      {
+        "id": "Event_14j6t25",
+        "role": "디자이너",
+        "type": "startEvent",
+        "process": "Process_1oscmbn",
+        "properties": "{}",
+        "description": "start event"
+      },
+      {
+        "id": "Event_1bxw4d2",
+        "role": "디자이너",
+        "type": "endEvent",
+        "process": "Process_1oscmbn",
+        "properties": "{}",
+        "description": "start event"
+      },
+      {
+        "id": "Event_1ttnk4r",
+        "name": "VIP 뉴스레터 작성 시작",
+        "role": "디자이너",
+        "type": "startEvent",
+        "process": "Activity_08aib4b",
+        "properties": "{}",
+        "description": "start event"
+      },
+      {
+        "id": "Event_19liwrk",
+        "name": "VIP 뉴스레터 작성 종료",
+        "role": "디자이너",
+        "type": "endEvent",
+        "process": "Activity_08aib4b",
+        "properties": "{\"parameters\":[],\"checkpoints\":[],\"dataInput\":{\"name\":\"\"}}",
+        "description": "start event"
+      }
+    ],
+    "version": null,
+    "gateways": [
+      {
+        "id": "Gateway_1xw3wmh",
+        "name": "Gateway",
+        "role": "담당영업",
+        "type": "exclusiveGateway",
+        "process": "Activity_08aib4b",
+        "condition": "",
+        "properties": "{}",
+        "description": "Gateway description",
+        "conditionData": [
+          "vip_newsletter_process_activity_0hrng6y_form.approval_status"
+        ]
+      }
+    ],
+    "sequences": [
+      {
+        "id": "Flow_1mtgmyv",
+        "source": "Event_14j6t25",
+        "target": "Activity_0ot7kwf",
+        "condition": "",
+        "properties": "{}"
+      },
+      {
+        "id": "Flow_1x53tpo",
+        "source": "Activity_0ot7kwf",
+        "target": "Activity_1en8e0l",
+        "condition": "",
+        "properties": "{}"
+      },
+      {
+        "id": "Flow_1yfk5wt",
+        "source": "Activity_1en8e0l",
+        "target": "Activity_08aib4b",
+        "condition": "",
+        "properties": "{}"
+      },
+      {
+        "id": "Flow_1vddwar",
+        "source": "Activity_08aib4b",
+        "target": "Activity_1bzewxr",
+        "condition": "",
+        "properties": "{}"
+      },
+      {
+        "id": "Flow_1fpafph",
+        "source": "Activity_1bzewxr",
+        "target": "Event_1bxw4d2",
+        "condition": "",
+        "properties": "{}"
+      },
+      {
+        "id": "Flow_12osyax",
+        "source": "Event_1ttnk4r",
+        "target": "Activity_10pn15v",
+        "condition": "",
+        "properties": "{}"
+      },
+      {
+        "id": "Flow_0a6gf2r",
+        "source": "Activity_10pn15v",
+        "target": "Activity_0hrng6y",
+        "condition": "",
+        "properties": "{}"
+      },
+      {
+        "id": "Flow_02lwxun",
+        "source": "Activity_0hrng6y",
+        "target": "Gateway_1xw3wmh",
+        "condition": "",
+        "properties": "{}"
+      },
+      {
+        "id": "Flow_1gq2six",
+        "name": "재 작성 시",
+        "source": "Gateway_1xw3wmh",
+        "target": "Activity_10pn15v",
+        "condition": "",
+        "properties": "{\"condition\":\"재 작성 시\",\"conditionMode\":\"function\",\"examples\":{\"good_examples\":[{\"when\":\"문서가 재 작성된 경우\",\"then\":\"이전 작성 내용을 대체하여 새로운 내용으로 문서를 저장한다\",\"valid_at\":\"2025-09-15T07:40:49.463Z\"}],\"bad_examples\":[{\"when\":\"문서가 최초로 작성된 경우\",\"then\":\"기존 내용 없이 새로운 문서로 저장한다\",\"invalid_at\":\"2025-09-15T07:40:49.463Z\"}]},\"io_examples\":[{\"input\":{\"approval_status\":[\"rewrite\"]},\"output\":true},{\"input\":{\"approval_status\":[\"approved\",\"rewrite\"]},\"output\":true},{\"input\":{\"approval_status\":[\"approved\"]},\"output\":false},{\"input\":{\"approval_status\":[]},\"output\":false}],\"conditionFunction\":\"\\\"rewrite\\\" in approval_status\"}"
+      },
+      {
+        "id": "Flow_0thzfd7",
+        "name": "결재 완료 시",
+        "source": "Gateway_1xw3wmh",
+        "target": "Activity_1rzgb75",
+        "condition": "",
+        "properties": "{\"condition\":\"결재 완료 시\",\"conditionMode\":\"function\",\"examples\":{\"good_examples\":[{\"when\":\"결재 상태가 '완료'로 변경됨\",\"then\":\"다음 단계(예: 발주서 발행, 지급 처리 등)로 진행한다\",\"valid_at\":\"2025-09-15T04:02:58.185Z\"}],\"bad_examples\":[{\"when\":\"결재 상태가 '대기' 또는 '진행중'임\",\"then\":\"다음 단계로 진행하지 않고 결재 완료를 대기한다\",\"invalid_at\":\"2025-09-15T04:02:58.185Z\"}]},\"conditionFunction\":\"\\\"approved\\\" in approval_status\",\"io_examples\":[{\"input\":{\"approval_status\":[\"approved\"]},\"output\":true},{\"input\":{\"approval_status\":[\"approved\",\"rewrite\"]},\"output\":true},{\"input\":{\"approval_status\":[\"rewrite\"]},\"output\":false},{\"input\":{\"approval_status\":[]},\"output\":false}]}"
+      },
+      {
+        "id": "Flow_1nuq6rk",
+        "source": "Activity_1rzgb75",
+        "target": "Event_19liwrk",
+        "condition": "",
+        "properties": "{}"
+      }
+    ],
+    "activities": [
+      {
+        "id": "Activity_0ot7kwf",
+        "name": "뉴스레터 초안 작성",
+        "role": "디자이너",
+        "tool": "formHandler:activity_0ot7kwf_form",
+        "type": "userTask",
+        "process": "Process_1oscmbn",
+        "duration": 5,
+        "inputData": [],
+        "description": "",
+        "instruction": "",
+        "attachedEvents": null
+      },
+      {
+        "id": "Activity_1en8e0l",
+        "name": "VIP 관심사 정리",
+        "role": "디자이너",
+        "tool": "formHandler:activity_1en8e0l_form",
+        "type": "userTask",
+        "process": "Process_1oscmbn",
+        "duration": 5,
+        "inputData": [
+          "vip_newsletter_process_activity_0ot7kwf_form.newsletter_report"
+        ],
+        "description": "",
+        "instruction": "",
+        "attachedEvents": null
+      },
+      {
+        "id": "Activity_1bzewxr",
+        "name": "VIP 뉴스레터 발송 결과 확인",
+        "role": "디자이너",
+        "tool": "formHandler:activity_1bzewxr_form",
+        "type": "userTask",
+        "process": "Process_1oscmbn",
+        "duration": 5,
+        "inputData": [
+          "vip_newsletter_process_activity_0ot7kwf_form.newsletter_report",
+          "vip_newsletter_process_activity_1en8e0l_form.name",
+          "vip_newsletter_process_activity_1en8e0l_form.interest",
+          "vip_newsletter_process_activity_1en8e0l_form.relation_with_sales",
+          "vip_newsletter_process_activity_1en8e0l_form.email",
+          "vip_newsletter_process_activity_1en8e0l_form.tech_level",
+          "vip_newsletter_process_activity_1en8e0l_form.sale_person",
+          "vip_newsletter_process_activity_10pn15v_form.vip_newsletter_write",
+          "vip_newsletter_process_activity_0hrng6y_form.approval_status",
+          "vip_newsletter_process_activity_1rzgb75_form.email"
+        ],
+        "description": "",
+        "instruction": "",
+        "attachedEvents": null
+      },
+      {
+        "id": "Activity_10pn15v",
+        "name": "VIP 관심사 기반 뉴스레터 작성",
+        "role": "디자이너",
+        "tool": "formHandler:activity_10pn15v_form",
+        "type": "userTask",
+        "process": "Activity_08aib4b",
+        "duration": 5,
+        "inputData": [
+          "vip_newsletter_process_activity_0ot7kwf_form.newsletter_report",
+          "vip_newsletter_process_activity_1en8e0l_form.name",
+          "vip_newsletter_process_activity_1en8e0l_form.interest",
+          "vip_newsletter_process_activity_1en8e0l_form.relation_with_sales",
+          "vip_newsletter_process_activity_1en8e0l_form.email",
+          "vip_newsletter_process_activity_1en8e0l_form.tech_level",
+          "vip_newsletter_process_activity_1en8e0l_form.sale_person"
+        ],
+        "description": "",
+        "instruction": "",
+        "attachedEvents": null
+      },
+      {
+        "id": "Activity_0hrng6y",
+        "name": "VIP 작성 뉴스레터 리뷰",
+        "role": "담당영업",
+        "tool": "formHandler:activity_0hrng6y_form",
+        "type": "userTask",
+        "process": "Activity_08aib4b",
+        "duration": 5,
+        "inputData": [
+          "vip_newsletter_process_activity_0ot7kwf_form.newsletter_report",
+          "vip_newsletter_process_activity_1en8e0l_form.name",
+          "vip_newsletter_process_activity_1en8e0l_form.interest",
+          "vip_newsletter_process_activity_1en8e0l_form.relation_with_sales",
+          "vip_newsletter_process_activity_1en8e0l_form.email",
+          "vip_newsletter_process_activity_1en8e0l_form.tech_level",
+          "vip_newsletter_process_activity_1en8e0l_form.sale_person",
+          "vip_newsletter_process_activity_10pn15v_form.vip_newsletter_write"
+        ],
+        "description": "",
+        "instruction": "",
+        "attachedEvents": null
+      },
+      {
+        "id": "Activity_1rzgb75",
+        "name": "VIP 작성 뉴스레터 발송",
+        "role": "디자이너",
+        "tool": "formHandler:activity_1rzgb75_form",
+        "type": "userTask",
+        "process": "Activity_08aib4b",
+        "duration": 5,
+        "inputData": [
+          "vip_newsletter_process_activity_0ot7kwf_form.newsletter_report",
+          "vip_newsletter_process_activity_1en8e0l_form.name",
+          "vip_newsletter_process_activity_1en8e0l_form.interest",
+          "vip_newsletter_process_activity_1en8e0l_form.relation_with_sales",
+          "vip_newsletter_process_activity_1en8e0l_form.email",
+          "vip_newsletter_process_activity_1en8e0l_form.tech_level",
+          "vip_newsletter_process_activity_1en8e0l_form.sale_person",
+          "vip_newsletter_process_activity_10pn15v_form.vip_newsletter_write",
+          "vip_newsletter_process_activity_0hrng6y_form.approval_status"
+        ],
+        "description": "",
+        "instruction": "",
+        "attachedEvents": null
+      }
+    ],
+    "description": "process.description",
+    "participants": {
+      "id": "Participant_09k5scl",
+      "name": "VIP 뉴스레터",
+      "processRef": "Process_1oscmbn",
+      "bpmn:extensionElements": {
+        "uengine:properties": {
+          "uengine:json": "{}"
+        }
+      }
+    },
+    "subProcesses": [
+      {
+        "id": "Activity_08aib4b",
+        "name": "VIP 정보 자식 수 만큼 실행",
+        "role": "디자이너",
+        "type": "subProcess",
+        "process": "Process_1oscmbn",
+        "children": {
+          "data": [],
+          "roles": [],
+          "events": [
+            {
+              "id": "Event_1ttnk4r",
+              "name": "VIP 뉴스레터 작성 시작",
+              "role": "디자이너",
+              "type": "startEvent",
+              "process": "Activity_08aib4b",
+              "properties": "{}",
+              "description": "start event"
+            },
+            {
+              "id": "Event_19liwrk",
+              "name": "VIP 뉴스레터 작성 종료",
+              "role": "디자이너",
+              "type": "endEvent",
+              "process": "Activity_08aib4b",
+              "properties": "{\"parameters\":[],\"checkpoints\":[],\"dataInput\":{\"name\":\"\"}}",
+              "description": "start event"
+            }
+          ],
+          "gateways": [
+            {
+              "id": "Gateway_1xw3wmh",
+              "name": "Gateway",
+              "role": "담당영업",
+              "type": "exclusiveGateway",
+              "process": "Activity_08aib4b",
+              "condition": "",
+              "properties": "{}",
+              "description": "Gateway description"
+            }
+          ],
+          "sequences": [
+            {
+              "id": "Flow_12osyax",
+              "source": "Event_1ttnk4r",
+              "target": "Activity_10pn15v",
+              "condition": "",
+              "properties": "{}"
+            },
+            {
+              "id": "Flow_0a6gf2r",
+              "source": "Activity_10pn15v",
+              "target": "Activity_0hrng6y",
+              "condition": "",
+              "properties": "{}"
+            },
+            {
+              "id": "Flow_02lwxun",
+              "source": "Activity_0hrng6y",
+              "target": "Gateway_1xw3wmh",
+              "condition": "",
+              "properties": "{}"
+            },
+            {
+              "id": "Flow_1gq2six",
+              "name": "재 작성 시",
+              "source": "Gateway_1xw3wmh",
+              "target": "Activity_10pn15v",
+              "condition": "",
+              "properties": "{\"condition\":\"재 작성 시\",\"conditionMode\":\"function\",\"examples\":{\"good_examples\":[{\"when\":\"문서가 재 작성된 경우\",\"then\":\"이전 작성 내용을 대체하여 새로운 내용으로 문서를 저장한다\",\"valid_at\":\"2025-09-15T07:40:49.463Z\"}],\"bad_examples\":[{\"when\":\"문서가 최초로 작성된 경우\",\"then\":\"기존 내용 없이 새로운 문서로 저장한다\",\"invalid_at\":\"2025-09-15T07:40:49.463Z\"}]},\"io_examples\":[{\"input\":{\"approval_status\":[\"rewrite\"]},\"output\":true},{\"input\":{\"approval_status\":[\"approved\",\"rewrite\"]},\"output\":true},{\"input\":{\"approval_status\":[\"approved\"]},\"output\":false},{\"input\":{\"approval_status\":[]},\"output\":false}],\"conditionFunction\":\"\\\"rewrite\\\" in approval_status\"}"
+            },
+            {
+              "id": "Flow_0thzfd7",
+              "name": "결재 완료 시",
+              "source": "Gateway_1xw3wmh",
+              "target": "Activity_1rzgb75",
+              "condition": "",
+              "properties": "{\"condition\":\"결재 완료 시\",\"conditionMode\":\"function\",\"examples\":{\"good_examples\":[{\"when\":\"결재 상태가 '완료'로 변경됨\",\"then\":\"다음 단계(예: 발주서 발행, 지급 처리 등)로 진행한다\",\"valid_at\":\"2025-09-15T04:02:58.185Z\"}],\"bad_examples\":[{\"when\":\"결재 상태가 '대기' 또는 '진행중'임\",\"then\":\"다음 단계로 진행하지 않고 결재 완료를 대기한다\",\"invalid_at\":\"2025-09-15T04:02:58.185Z\"}]},\"conditionFunction\":\"\\\"approved\\\" in approval_status\",\"io_examples\":[{\"input\":{\"approval_status\":[\"approved\"]},\"output\":true},{\"input\":{\"approval_status\":[\"approved\",\"rewrite\"]},\"output\":true},{\"input\":{\"approval_status\":[\"rewrite\"]},\"output\":false},{\"input\":{\"approval_status\":[]},\"output\":false}]}"
+            },
+            {
+              "id": "Flow_1nuq6rk",
+              "source": "Activity_1rzgb75",
+              "target": "Event_19liwrk",
+              "condition": "",
+              "properties": "{}"
+            }
+          ],
+          "activities": [
+            {
+              "id": "Activity_10pn15v",
+              "name": "VIP 관심사 기반 뉴스레터 작성",
+              "role": "디자이너",
+              "tool": "formHandler:activity_10pn15v_form",
+              "type": "userTask",
+              "process": "Activity_08aib4b",
+              "duration": 5,
+              "description": "",
+              "instruction": "",
+              "attachedEvents": null
+            },
+            {
+              "id": "Activity_0hrng6y",
+              "name": "VIP 작성 뉴스레터 리뷰",
+              "role": "담당영업",
+              "tool": "formHandler:activity_0hrng6y_form",
+              "type": "userTask",
+              "process": "Activity_08aib4b",
+              "duration": 5,
+              "description": "",
+              "instruction": "",
+              "attachedEvents": null
+            },
+            {
+              "id": "Activity_1rzgb75",
+              "name": "VIP 작성 뉴스레터 발송",
+              "role": "디자이너",
+              "tool": "formHandler:activity_1rzgb75_form",
+              "type": "userTask",
+              "process": "Activity_08aib4b",
+              "duration": 5,
+              "description": "",
+              "instruction": "",
+              "attachedEvents": null
+            }
+          ],
+          "subProcesses": [],
+          "processDefinitionId": "vip_newsletter_process",
+          "processDefinitionName": "VIP 뉴스레터 발송 프로세스"
+        },
+        "duration": 5,
+        "properties": "{\"finalizeFunction\":\"vip_newsletter_process_activity_1en8e0l_form:vip_info_section\",\"forEachVariable\":\"VIP 정보 자식 수 만큼 실행\",\"finalize_io_examples\":[],\"forEachVariableMode\":\"text\",\"determinationCode\":\"vip_newsletter_process_activity_1en8e0l_form:vip_info_section\"}",
+        "attachedEvents": null
+      }
+    ],
+    "shortDescription": {
+      "text": ""
+    },
+    "instanceNamePattern": null,
+    "processDefinitionId": "vip_newsletter_process",
+    "processDefinitionName": "VIP 뉴스레터 발송 프로세스"
+  }
