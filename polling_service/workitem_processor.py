@@ -2773,16 +2773,22 @@ def resolve_next_activity_payloads(
         return (gw_type or None)
 
     def _sequence_condition_state(seq_id: str | None) -> Optional[bool]:
-        if not seq_id or not isinstance(sequence_condition_data, dict):
-            return None
+        # Treat missing or empty condition data as True per policy: "empty counts as true"
+        if not isinstance(sequence_condition_data, dict):
+            return True
+        if not seq_id:
+            return True
         sc = sequence_condition_data.get(seq_id)
-        if isinstance(sc, dict) and "conditionEval" in sc:
+        if not isinstance(sc, dict):
+            return True
+        if "conditionEval" in sc:
             try:
                 return True if sc.get("conditionEval") else False
             except Exception:
-                return None
-        # Unknown when no explicit evaluation present
-        return None
+                # If evaluation value is malformed, consider it False (explicit but invalid)
+                return False
+        # No explicit evaluation -> treat as True
+        return True
 
     def _sequence_condition_allows(seq_id: str | None) -> bool:
         if not seq_id or not isinstance(sequence_condition_data, dict):
