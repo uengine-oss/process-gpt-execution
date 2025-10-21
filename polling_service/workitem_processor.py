@@ -2839,7 +2839,7 @@ def resolve_next_activity_payloads(
                 if len(true_seqs) == 1:
                     chosen = true_seqs
                 elif len(true_seqs) > 1:
-                    # Use priority if available; otherwise exclude all (no selection)
+                    # Use priority if available; if equal and no default, deterministically pick first
                     def _priority(seq_obj: Any) -> tuple[int, int]:
                         props = _parse_seq_properties(seq_obj)
                         prio = props.get("priority")
@@ -2857,12 +2857,8 @@ def resolve_next_activity_payloads(
 
                     # Sort ascending (lower number => higher priority)
                     sorted_true = sorted(true_seqs, key=_priority)
-                    # If all priorities are equal (no real priority), and no default, exclude all
-                    pri_values = { _priority(s)[0] for s in sorted_true }
-                    if len(pri_values) == 1 and default_seq is None:
-                        chosen = []
-                    else:
-                        chosen = [sorted_true[0]]
+                    # Deterministic selection even if all priorities are equal and no default
+                    chosen = [sorted_true[0]]
                 else:
                     # No explicit True
                     if default_seq is not None:
