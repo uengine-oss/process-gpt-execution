@@ -594,7 +594,7 @@ async def handle_get_feedback_diff(request: Request):
 
 
 ############# start of rework complete #############
-async def create_new_workitem(workitem) -> dict:
+async def create_new_workitem(workitem, status='TODO') -> dict:
     today = datetime.now(pytz.timezone('Asia/Seoul'))
     due_date = today + timedelta(days=workitem.duration) if workitem.duration else None
     new_workitem = {
@@ -607,7 +607,7 @@ async def create_new_workitem(workitem) -> dict:
         "activity_name": workitem.activity_name,
         "start_date": today.isoformat(),
         "due_date": due_date.isoformat() if due_date else None,
-        "status": 'TODO',
+        "status": status,
         "assignees": workitem.assignees,
         "reference_ids": workitem.reference_ids,
         "duration": workitem.duration,
@@ -729,15 +729,17 @@ async def handle_rework_complete(request: Request):
         body = await request.json()
         activities = body.get('activities')
         instance_id = body.get('instanceId')
+        start_activity_id = body.get('activityId')
         
         result = {}
         for activity in activities:
             activity_id = activity.get('id')
+            status = 'IN_PROGRESS' if activity_id == start_activity_id else 'TODO'
             workitem = fetch_workitem_by_proc_inst_and_activity(instance_id, activity_id)
             if workitem is None:
                 raise HTTPException(status_code=400, detail="No workitem found")
 
-            new_workitem = await create_new_workitem(workitem)
+            new_workitem = await create_new_workitem(workitem, status)
             db_result = upsert_workitem(new_workitem)
             await handle_compensation(workitem, new_workitem)
             if db_result and hasattr(db_result, 'data') and db_result.data:
