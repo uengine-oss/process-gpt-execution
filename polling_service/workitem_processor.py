@@ -1674,6 +1674,13 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
     """
     For next activities that are subprocesses, infer multiInstanceCount and multiInstanceReason
     from provided output/previous_outputs with a minimal prompt. Defaults to 1 and [] when unknown.
+
+    Collection path precedence for deriving multi instances:
+    1) determinationCode
+    2) foreachVariable (numeric)
+    3) foreachVariable (natural-language/path)
+    4) name
+    비어있거나 해석 불가하면 다음 순서로 계속 시도합니다.
     """
     try:
         if not isinstance(next_activity_payloads, list) or not next_activity_payloads:
@@ -1700,41 +1707,79 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
         if not candidates:
             return next_activity_payloads
 
-        # Deterministic handling when foreachVariable is present on subprocess definition
-        def _extract_foreach_variable(sd: Any) -> str | None:
+        # Extract ordered collection hints: determinationCode -> foreachVariable(numeric) -> foreachVariable(nl) -> name
+        # Returns list of (hint_type, value)
+        def _extract_collection_hints(sd: Any) -> list[tuple[str, str]]:
             if sd is None:
-                return None
-            # Try direct attributes with common casings
-            for key in ("foreachVariable", "forEachVariable", "foreach_variable", "for_each_variable"):
-                fv = _get(sd, key)
-                if isinstance(fv, str) and fv.strip():
-                    return fv.strip()
-            # Try properties/uengineProperties
-            props = _get(sd, "properties") or _get(sd, "uengineProperties")
-            props_json = None
-            if isinstance(props, str):
-                try:
-                    props_json = json.loads(props)
-                except Exception:
-                    # Fallback: regex search case-insensitively in raw JSON string
+                return []
+
+            def _from_props(keys: tuple[str, ...]) -> str | None:
+                props = _get(sd, "properties") or _get(sd, "uengineProperties")
+                props_json = None
+                if isinstance(props, str):
                     try:
-                        m = re.search(r'"(forEachVariable|foreachVariable)"\s*:\s*"([^"]+)"', props, re.IGNORECASE)
-                        if m:
-                            return m.group(2).strip()
+                        props_json = json.loads(props)
                     except Exception:
-                        pass
-            elif isinstance(props, dict):
-                props_json = props
-            if isinstance(props_json, dict):
-                for k, v in props_json.items():
-                    if isinstance(k, str) and k.replace("_", "").lower() in ("foreachvariable", "foreachvariable"):
+                        # Try regex extraction for common keys
+                        try:
+                            # determinationCode
+                            m = re.search(r'"(determinationCode)"\s*:\s*"([^"]+)"', props, re.IGNORECASE)
+                            if m:
+                                return m.group(2).strip()
+                            # foreachVariable variants
+                            m = re.search(r'"(forEachVariable|foreachVariable)"\s*:\s*"([^"]+)"', props, re.IGNORECASE)
+                            if m:
+                                return m.group(2).strip()
+                        except Exception:
+                            pass
+                elif isinstance(props, dict):
+                    props_json = props
+                if isinstance(props_json, dict):
+                    for k in keys:
+                        v = props_json.get(k)
                         if isinstance(v, str) and v.strip():
                             return v.strip()
-                for key in ("foreachVariable", "forEachVariable", "foreach_variable", "for_each_variable"):
-                    v = props_json.get(key)
-                    if isinstance(v, str) and v.strip():
-                        return v.strip()
-            return None
+                return None
+
+            hints: list[tuple[str, str]] = []
+
+            # 1) determinationCode (primary)
+            det = _get(sd, "determinationCode")
+            if isinstance(det, str) and det.strip():
+                hints.append(("determinationCode", det.strip()))
+            else:
+                det_props = _from_props(("determinationCode",))
+                if isinstance(det_props, str) and det_props.strip():
+                    hints.append(("determinationCode", det_props.strip()))
+
+            # 2) foreachVariable numeric, 3) foreachVariable nl
+            fv_val: str | None = None
+            for key in ("foreachVariable", "forEachVariable", "foreach_variable", "for_each_variable"):
+                v = _get(sd, key)
+                if isinstance(v, str) and v.strip():
+                    fv_val = v.strip()
+                    break
+            if not fv_val:
+                fv_props = _from_props(("foreachVariable", "forEachVariable", "foreach_variable", "for_each_variable"))
+                if isinstance(fv_props, str) and fv_props.strip():
+                    fv_val = fv_props.strip()
+            if fv_val:
+                # try numeric first
+                try:
+                    cnt_val = int(str(fv_val))
+                except Exception:
+                    cnt_val = None
+                if isinstance(cnt_val, int) and cnt_val > 0:
+                    hints.append(("foreach_numeric", str(cnt_val)))
+                else:
+                    hints.append(("foreach_nl", fv_val))
+
+            # 4) name (last)
+            nm = _get(sd, "name")
+            if isinstance(nm, str) and nm.strip():
+                hints.append(("name", nm.strip()))
+
+            return hints
 
         def _traverse_path(root: Any, path: str) -> Any:
             cur = root
@@ -1828,35 +1873,51 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
                 except Exception:
                     return _clip_value(item)
 
-        foreach_map: dict[str, str] = {}
+        collection_hint_map: dict[str, list[tuple[str, str]]] = {}
         for p in candidates:
             sp_id = p.get("nextActivityId")
             sd = _find_sub(sp_id)
-            fv = _extract_foreach_variable(sd)
-            if isinstance(fv, str) and fv.strip():
-                foreach_map[sp_id] = fv.strip()
+            hints = _extract_collection_hints(sd)
+            if hints:
+                collection_hint_map[sp_id] = hints
 
         handled_ids: set[str] = set()
         for p in candidates:
             sp_id = p.get("nextActivityId")
-            fv = foreach_map.get(sp_id)
-            if not fv:
+            hints = collection_hint_map.get(sp_id) or []
+            if not hints:
                 continue
-            collection = _resolve_collection_from_foreach(fv, chain_input_next)
-            if isinstance(collection, list) and collection:
-                cnt = len(collection)
-                reasons = [_summarize_reason(elem) for elem in collection]
-                if len(reasons) < cnt:
-                    reasons += [""] * (cnt - len(reasons))
-                elif len(reasons) > cnt:
-                    reasons = reasons[:cnt]
-                p["multiInstanceCount"] = str(cnt)
-                p["multiInstanceReason"] = reasons
-                handled_ids.add(sp_id)
-            elif isinstance(collection, list):
-                p["multiInstanceCount"] = "1"
-                p["multiInstanceReason"] = [""]
-                handled_ids.add(sp_id)
+            resolved = False
+            # Try hints in order; accept only if non-empty when path-based
+            for hint_type, hint_val in hints:
+                if hint_type == "foreach_numeric":
+                    try:
+                        cnt = int(str(hint_val))
+                    except Exception:
+                        cnt = 0
+                    if cnt > 0:
+                        p["multiInstanceCount"] = str(cnt)
+                        p["multiInstanceReason"] = [""] * cnt
+                        handled_ids.add(sp_id)
+                        resolved = True
+                        break
+                    continue
+
+                collection = _resolve_collection_from_foreach(hint_val, chain_input_next)
+                if isinstance(collection, list) and len(collection) > 0:
+                    cnt = len(collection)
+                    reasons = [_summarize_reason(elem) for elem in collection]
+                    if len(reasons) < cnt:
+                        reasons += [""] * (cnt - len(reasons))
+                    elif len(reasons) > cnt:
+                        reasons = reasons[:cnt]
+                    p["multiInstanceCount"] = str(cnt)
+                    p["multiInstanceReason"] = reasons
+                    handled_ids.add(sp_id)
+                    resolved = True
+                    break
+            if resolved:
+                continue
 
         if handled_ids and all((p.get("nextActivityId") in handled_ids) for p in candidates):
             return next_activity_payloads
@@ -2751,16 +2812,22 @@ def resolve_next_activity_payloads(
         return (gw_type or None)
 
     def _sequence_condition_state(seq_id: str | None) -> Optional[bool]:
-        if not seq_id or not isinstance(sequence_condition_data, dict):
-            return None
+        # Treat missing or empty condition data as True per policy: "empty counts as true"
+        if not isinstance(sequence_condition_data, dict):
+            return True
+        if not seq_id:
+            return True
         sc = sequence_condition_data.get(seq_id)
-        if isinstance(sc, dict) and "conditionEval" in sc:
+        if not isinstance(sc, dict):
+            return True
+        if "conditionEval" in sc:
             try:
                 return True if sc.get("conditionEval") else False
             except Exception:
-                return None
-        # Unknown when no explicit evaluation present
-        return None
+                # If evaluation value is malformed, consider it False (explicit but invalid)
+                return False
+        # No explicit evaluation -> treat as True
+        return True
 
     def _sequence_condition_allows(seq_id: str | None) -> bool:
         if not seq_id or not isinstance(sequence_condition_data, dict):
@@ -2811,7 +2878,7 @@ def resolve_next_activity_payloads(
                 if len(true_seqs) == 1:
                     chosen = true_seqs
                 elif len(true_seqs) > 1:
-                    # Use priority if available; otherwise exclude all (no selection)
+                    # Use priority if available; if equal and no default, deterministically pick first
                     def _priority(seq_obj: Any) -> tuple[int, int]:
                         props = _parse_seq_properties(seq_obj)
                         prio = props.get("priority")
@@ -2829,12 +2896,8 @@ def resolve_next_activity_payloads(
 
                     # Sort ascending (lower number => higher priority)
                     sorted_true = sorted(true_seqs, key=_priority)
-                    # If all priorities are equal (no real priority), and no default, exclude all
-                    pri_values = { _priority(s)[0] for s in sorted_true }
-                    if len(pri_values) == 1 and default_seq is None:
-                        chosen = []
-                    else:
-                        chosen = [sorted_true[0]]
+                    # Deterministic selection even if all priorities are equal and no default
+                    chosen = [sorted_true[0]]
                 else:
                     # No explicit True
                     if default_seq is not None:

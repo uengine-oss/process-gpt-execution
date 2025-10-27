@@ -1,0 +1,341 @@
+{
+  "data": [],
+  "roles": [
+    {
+      "name": "고객 대응팀",
+      "default": [
+        "827ac44b-1435-4ad8-ab14-8b28c3f64ef2"
+      ],
+      "endpoint": ""
+    },
+    {
+      "name": "영업 담당자",
+      "default": [
+        "827ac44b-1435-4ad8-ab14-8b28c3f64ef2"
+      ],
+      "endpoint": ""
+    },
+    {
+      "name": "영업팀장",
+      "default": [
+        "827ac44b-1435-4ad8-ab14-8b28c3f64ef2"
+      ],
+      "endpoint": ""
+    },
+    {
+      "name": "고객",
+      "default": "827ac44b-1435-4ad8-ab14-8b28c3f64ef2",
+      "endpoint": ""
+    }
+  ],
+  "events": [
+    {
+      "id": "Event_11wqbo0",
+      "role": "고객",
+      "type": "startEvent",
+      "process": "Process_1oscmbn",
+      "properties": "{}",
+      "description": "start event"
+    },
+    {
+      "id": "Event_14eii90",
+      "name": "제출",
+      "role": "고객",
+      "type": "endEvent",
+      "process": "Process_1oscmbn",
+      "properties": "{\"parameters\":[],\"checkpoints\":[],\"dataInput\":{\"name\":\"\"}}",
+      "description": "start event"
+    }
+  ],
+  "version": null,
+  "gateways": [
+    {
+      "id": "Gateway_14nrixd",
+      "name": "Gateway",
+      "role": "영업팀장",
+      "type": "exclusiveGateway",
+      "process": "Process_1oscmbn",
+      "condition": {},
+      "properties": "{}",
+      "description": "Gateway description",
+      "conditionData": []
+    },
+    {
+      "id": "Gateway_1x586s7",
+      "name": "Gateway",
+      "role": "고객 대응팀",
+      "type": "exclusiveGateway",
+      "process": "Process_1oscmbn",
+      "condition": {},
+      "properties": "{}",
+      "description": "Gateway description",
+      "conditionData": []
+    },
+    {
+      "id": "Gateway_1bwgkit",
+      "name": "Gateway",
+      "role": "영업 담당자",
+      "type": "inclusiveGateway",
+      "process": "Process_1oscmbn",
+      "condition": {},
+      "properties": "{}",
+      "description": "Gateway description",
+      "conditionData": []
+    },
+    {
+      "id": "Event_11wqbo0",
+      "name": "",
+      "role": "고객",
+      "type": "startEvent",
+      "srcTrg": null,
+      "process": "Process_1oscmbn",
+      "condition": {},
+      "properties": "{}",
+      "description": "start event"
+    },
+    {
+      "id": "Event_14eii90",
+      "name": "제출",
+      "role": "고객",
+      "type": "endEvent",
+      "srcTrg": null,
+      "process": "Process_1oscmbn",
+      "condition": {},
+      "properties": "{\"parameters\":[],\"checkpoints\":[],\"dataInput\":{\"name\":\"\"}}",
+      "description": "start event"
+    }
+  ],
+  "sequences": [
+    {
+      "id": "Flow_0os0lcj",
+      "source": "Event_11wqbo0",
+      "target": "Activity_0s75s3d",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "Flow_029jkyx",
+      "source": "Activity_0s75s3d",
+      "target": "Gateway_1x586s7",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "Flow_0f8ddly",
+      "source": "Activity_161as8h",
+      "target": "Gateway_14nrixd",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "Flow_0p0alo6",
+      "name": "승인",
+      "source": "Gateway_14nrixd",
+      "target": "Event_14eii90",
+      "condition": "",
+      "properties": "{\"condition\":\"영업 담당자가 작성한 질의 사항 응답, 견적서, 제안서를 승인할 경우, 고객에게 바로 내용을 전달함.\",\"conditionMode\":\"text\"}"
+    },
+    {
+      "id": "Flow_11zg1uq",
+      "name": "제안서 요청",
+      "source": "Gateway_1x586s7",
+      "target": "Activity_0wmbn0q",
+      "condition": "",
+      "properties": "{\"condition\":\"요청사항입력의 요청사항을 분석해서 제안서 요청에 해당하는 경우\",\"conditionMode\":\"text\"}"
+    },
+    {
+      "id": "Flow_190lcim",
+      "name": "견적서 요청",
+      "source": "Gateway_1x586s7",
+      "target": "Activity_1l2ci7f",
+      "condition": "",
+      "properties": "{\"condition\":\"요청사항입력의 요청사항을 분석해서 견적서 요청에 해당하는 경우\",\"conditionMode\":\"text\"}"
+    },
+    {
+      "id": "Flow_0j0b5h6",
+      "name": "단순 질의",
+      "source": "Gateway_1x586s7",
+      "target": "Activity_0rwrgae",
+      "condition": "",
+      "properties": "{\"condition\":\"요청사항입력의 요청사항을 분석해서 단순 질문에 해당하는 경우\",\"conditionMode\":\"text\"}"
+    },
+    {
+      "id": "Flow_13vl4n8",
+      "source": "Activity_0rwrgae",
+      "target": "Gateway_1bwgkit",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "Flow_116bo13",
+      "source": "Activity_1l2ci7f",
+      "target": "Gateway_1bwgkit",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "Flow_1al2s8t",
+      "source": "Activity_0wmbn0q",
+      "target": "Gateway_1bwgkit",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "Flow_1p9hj0l",
+      "source": "Gateway_1bwgkit",
+      "target": "Activity_161as8h",
+      "condition": "",
+      "properties": "{}"
+    },
+    {
+      "id": "Flow_1qe5ale",
+      "name": "반려",
+      "source": "Gateway_14nrixd",
+      "target": "Gateway_1x586s7",
+      "condition": "",
+      "properties": "{\"condition\":\"검토 내용이 반려일 경우\",\"conditionMode\":\"text\"}"
+    }
+  ],
+  "activities": [
+    {
+      "id": "Activity_0s75s3d",
+      "name": "요청사항입력",
+      "role": "고객",
+      "tool": "formHandler:activity_0s75s3d_form",
+      "type": "userTask",
+      "process": "Process_1oscmbn",
+      "duration": 5,
+      "agentMode": "none",
+      "inputData": [],
+      "attachments": [],
+      "checkpoints": [],
+      "description": "요청사항입력",
+      "instruction": "고객이 요청사항을 입력합니다",
+      "orchestration": "none",
+      "attachedEvents": null
+    },
+    {
+      "id": "Activity_0wmbn0q",
+      "name": "제안서 작성",
+      "role": "영업 담당자",
+      "tool": "formHandler:activity_0wmbn0q_form",
+      "type": "userTask",
+      "process": "Process_1oscmbn",
+      "duration": 5,
+      "agentMode": "complete",
+      "inputData": [
+        "activity_0s75s3d_form.customer_name",
+        "activity_0s75s3d_form.customer_phone",
+        "activity_0s75s3d_form.customer email",
+        "activity_0s75s3d_form.request_title",
+        "activity_0s75s3d_form.request_detail",
+        "activity_161as8h_form.approval_status",
+        "activity_161as8h_form.rejection_reason",
+        "customer_request_response_activity_1mvqs8n_form.request_category",
+        "customer_request_response_activity_1mvqs8n_form.request_content"
+      ],
+      "attachments": [],
+      "checkpoints": [],
+      "description": "제안서를 작성",
+      "instruction": "고객이 제안서를 요청하면 요청에 맞는 제안서를 작성\n검토 단계에서 반려를 결정하면 반려 사유를 반영하여 내용 다시 작성함.",
+      "orchestration": "crewai-deep-research",
+      "attachedEvents": null
+    },
+    {
+      "id": "Activity_161as8h",
+      "name": "검토",
+      "role": "영업팀장",
+      "tool": "formHandler:activity_161as8h_form",
+      "type": "userTask",
+      "process": "Process_1oscmbn",
+      "duration": 5,
+      "agentMode": "none",
+      "inputData": [
+        "activity_0rwrgae_form.customer_name",
+        "activity_0rwrgae_form.customer_email",
+        "activity_0rwrgae_form.inquiry_date",
+        "activity_0rwrgae_form.inquiry_content",
+        "activity_0rwrgae_form.response_content",
+        "activity_1l2ci7f_form.estimate_report_markdown",
+        "activity_0wmbn0q_form.proposal_content"
+      ],
+      "attachments": [],
+      "checkpoints": [],
+      "description": "영업 담당자의 활동을 검토함",
+      "instruction": "영업 담당자가 작성한 질의 사항에 대한  응답, 견적서, 제안서를 검토한다. 수정 사항이 없으면 승인 후 고객에게 내용 제출, 수정 사항이 있다면 담당자에게 반려하고 반려 사유을 줘서 반영하여 작성하게 함. ",
+      "orchestration": "none",
+      "attachedEvents": null
+    },
+    {
+      "id": "Activity_1l2ci7f",
+      "name": "견적서 작성",
+      "role": "영업 담당자",
+      "tool": "formHandler:activity_1l2ci7f_form",
+      "type": "userTask",
+      "process": "Process_1oscmbn",
+      "duration": 5,
+      "agentMode": "complete",
+      "inputData": [
+        "activity_0s75s3d_form.customer_name",
+        "activity_0s75s3d_form.customer_phone",
+        "activity_0s75s3d_form.customer_email",
+        "activity_0s75s3d_form.request_title",
+        "activity_0s75s3d_form.request_detail",
+        "activity_161as8h_form.approval_status",
+        "activity_161as8h_form.rejection_reason",
+        "customer_request_response_activity_1mvqs8n_form.request_category",
+        "customer_request_response_activity_1mvqs8n_form.request_content"
+      ],
+      "attachments": [],
+      "checkpoints": [],
+      "description": "견적서를 작성",
+      "instruction": "고객의 견적서를 요청하면, 고객의 요청에 맞는 견적서를 작성\n검토 단계에서 반려를 결정하면 반려 사유를 반영하여 내용 다시 작성함.",
+      "orchestration": "crewai-deep-research",
+      "attachedEvents": null
+    },
+    {
+      "id": "Activity_0rwrgae",
+      "name": "질의 사항 응답",
+      "role": "영업 담당자",
+      "tool": "formHandler:activity_0rwrgae_form",
+      "type": "userTask",
+      "process": "Process_1oscmbn",
+      "duration": 5,
+      "agentMode": "none",
+      "inputData": [
+        "activity_0s75s3d_form.customer_name",
+        "activity_0s75s3d_form.customer_phone",
+        "activity_0s75s3d_form.customer_email",
+        "activity_0s75s3d_form.request_title",
+        "activity_0s75s3d_form.request_detail",
+        "activity_161as8h_form.approval_status",
+        "activity_161as8h_form.rejection_reason",
+        "customer_request_response_activity_1mvqs8n_form.request_category",
+        "customer_request_response_activity_1mvqs8n_form.request_content"
+      ],
+      "attachments": [],
+      "checkpoints": [],
+      "description": "질의 사항 응답",
+      "instruction": "고객이 입력한 요청사항이 단순 질의일 경우 질의 사항에 대한 답변을 작성함.\n검토 단계에서 반려를 결정하면 반려 사유를 반영하여 내용 다시 작성함.",
+      "orchestration": "none",
+      "attachedEvents": null
+    }
+  ],
+  "description": "process.description",
+  "participants": {
+    "id": "Participant_0at5z6r",
+    "processRef": "Process_1oscmbn",
+    "bpmn:extensionElements": {
+      "uengine:properties": {
+        "uengine:json": "{}"
+      }
+    }
+  },
+  "subProcesses": [],
+  "shortDescription": {
+    "text": ""
+  },
+  "instanceNamePattern": null,
+  "processDefinitionId": "customer_request_response",
+  "processDefinitionName": "고객 요청 대응_지능적 라우팅"
+}

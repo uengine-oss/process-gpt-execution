@@ -1,6 +1,9 @@
 from typing import Optional
 
+import json
+from pathlib import Path
 import pytest
+from process_definition import load_process_definition
 from block_finder import BlockFinder, FeedbackOptions
 
 
@@ -66,6 +69,48 @@ def _has_cycle(block_finder: BlockFinder) -> bool:
             if indeg[y] == 0:
                 q.append(y)
     return seen < len(nodes)
+
+
+# ------------------------------
+# JSON-driven BlockFinder tests
+# ------------------------------
+@pytest.mark.parametrize("filename", [
+    "exclusiveExclusive.json",
+    "exclusiveInclusive.json",
+    "exclusiveParallel.json",
+    "inclusiveExclusive.json",
+    "inclusiveInclusive.json",
+    "inclusiveParallel.json",
+    "parallelExclusive.json",
+    "parallelInclusive.json",
+    "parallelParallel.json",
+])
+def test_block_finder_on_process_json(filename: str):
+    base_dir = Path(__file__).resolve().parent
+    json_path = base_dir / filename
+    assert json_path.exists(), f"Process JSON not found: {json_path}"
+
+    with json_path.open("r", encoding="utf-8") as f:
+        proc_def_dict = json.load(f)
+    pd = load_process_definition(proc_def_dict)
+
+    bf = BlockFinder(pd)
+    # Target join gateway
+    target_join_id = "Gateway_1bwgkit"
+
+    br = bf.find_block(target_join_id)
+    assert br is not None, f"Block not found for {target_join_id} in {filename}"
+    assert br.end_container_id == target_join_id
+
+    # Basic structural expectations for this process family
+    # - split gateway is Gateway_1x586s7
+    # - three branches converge into Gateway_1bwgkit
+    assert br.branch_count >= 1
+
+    # Members should include the three branch activities before the join
+    members = [n.id for n in bf.get_block_members(target_join_id)]
+    for expected_id in ["Activity_0wmbn0q", "Activity_1l2ci7f", "Activity_0rwrgae"]:
+        assert expected_id in members, f"{expected_id} not found in block members for {filename}"
 
 
 @pytest.fixture
