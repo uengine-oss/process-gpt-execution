@@ -1608,3 +1608,54 @@ def fetch_events_by_proc_inst_id_until_activity(
         print(f"[ERROR] Failed to fetch events by proc_inst_id until activity: {str(e)}")
         return None
 
+
+def fetch_tenant_mcp_config(tenant_id: str) -> Optional[Dict[str, Any]]:
+    """
+    테넌트의 MCP 설정을 조회합니다.
+    
+    Args:
+        tenant_id (str): 테넌트 ID
+        
+    Returns:
+        Optional[Dict[str, Any]]: MCP 설정 정보 또는 None
+    """
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table('tenants').select('mcp').eq('id', tenant_id).execute()
+        
+        if response.data and len(response.data) > 0:
+            mcp_config = response.data[0].get('mcp', {})
+            return mcp_config if mcp_config else None
+        else:
+            print(f"[WARNING] No tenant found with ID: {tenant_id}")
+            return None
+            
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch tenant MCP config: {str(e)}")
+        return None
+
+def fetch_mcp_python_code(proc_def_id: str, activity_id: str, tenant_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        
+        response = supabase.table('mcp_python_code').select('*').eq('proc_def_id', proc_def_id).eq('activity_id', activity_id).eq('tenant_id', tenant_id).order('created_at', desc=True).limit(1).execute()
+        if response.data and len(response.data) > 0:
+            return response.data[0]
+        else:
+            return None
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+def upsert_mcp_python_code(record: Dict[str, Any]):
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+        return supabase.table("mcp_python_code").upsert(record).execute()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
