@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, fetch_workitem_by_id, upsert_process_definition, fetch_assignee_info, upsert_process_instance_source, fetch_process_instance
 from process_definition import load_process_definition
-from compensation_handler import handle_compensation
+from compensation_handler import generate_compensation
 
 import traceback
 import uuid
@@ -741,7 +741,7 @@ async def handle_rework_complete(request: Request):
 
             new_workitem = await create_new_workitem(workitem, status)
             db_result = upsert_workitem(new_workitem)
-            await handle_compensation(workitem, new_workitem)
+            await generate_compensation(workitem, new_workitem)
             if db_result and hasattr(db_result, 'data') and db_result.data:
                 new_workitem_id = db_result.data[0].get('id')
                 result[new_workitem_id] = db_result.data[0]
