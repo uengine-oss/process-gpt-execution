@@ -1776,7 +1776,9 @@ def get_field_value(field_info: str, process_definition: Any, process_instance_i
         split_field_info = field_info.split('.')
         form_id = split_field_info[0]
         field_id = split_field_info[1]
-        activity_id = form_id.replace("_form", "").replace(f"{process_definition_id}_", "")
+        activity_id = next((activity.id for activity in process_definition.activities if activity.tool == form_id), None)
+        if not activity_id:
+            activity_id = form_id.replace("_form", "").replace(f"{process_definition_id}_", "")
 
         def _out(wi: Any) -> Optional[dict]:
             return getattr(wi, "output", None) or (wi.get("output") if isinstance(wi, dict) else None)
