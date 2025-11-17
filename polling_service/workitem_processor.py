@@ -2571,6 +2571,14 @@ def run_completed_determination(completed_json, chain_input_completed):
                         return False, ("DATA_FIELD_NOT_EXIST", f"필드 없음: {left}")
                     good = cmp_values(lv, op.strip(), rv)
                     return (good, None if good else ("PROCEED_CONDITION_NOT_MET", f"{left} {op.strip()} {rv} 불만족"))
+            # 단순 필드명인 경우: ctx.checkpoints 배열에 포함되어 있는지 확인
+            ok, checkpoints_list = dot_get(ctx, "checkpoints")
+            if ok and isinstance(checkpoints_list, list):
+                # checkpoints 배열에 pred가 포함되어 있는지 확인
+                good = txt in checkpoints_list
+                return (good, None if good else ("PROCEED_CONDITION_NOT_MET", f"체크포인트 '{txt}'가 체크되지 않았습니다"))
+            
+            # 기존 로직: 필드 존재 여부와 truthy 값 확인
             ok, lv = dot_get(ctx, txt)
             if not ok:
                 return False, ("DATA_FIELD_NOT_EXIST", f"필드 없음: {txt}")
