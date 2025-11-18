@@ -127,23 +127,13 @@ def add_field_names_by_activity(
 
         # If value is a list of dicts, annotate each dict's fields by key and wrap regardless of mapping
         if isinstance(value, list):
-            transformed_list: list[Any] = []
-            for elem in value:
-                if isinstance(elem, dict):
-                    item_dict = dict(elem)
-                    for inner_key in list(item_dict.keys()):
-                        item_dict = add_field_name_by_key(item_dict, inner_key, ui_definitions)
-                    transformed_list.append(item_dict)
-                else:
-                    transformed_list.append(elem)
+            transformed_list = _annotate_list_elements_with_field_names(value, ui_definitions)
             annotated[k] = {"name": display, "value": transformed_list}
             continue
 
         # If value is a dict, annotate its inner keys and wrap regardless of mapping
         if isinstance(value, dict):
-            item_dict = dict(value)
-            for inner_key in list(item_dict.keys()):
-                item_dict = add_field_name_by_key(item_dict, inner_key, ui_definitions)
+            item_dict = _annotate_dict_with_field_names(value, ui_definitions)
             annotated[k] = {"name": display, "value": item_dict}
             continue
 
@@ -188,23 +178,13 @@ def add_field_name_by_key(
 
         # If list: annotate each dict element's inner keys by scanning ui_definitions
         if isinstance(original_value, list):
-            transformed_list: list[Any] = []
-            for elem in original_value:
-                if isinstance(elem, dict):
-                    item = dict(elem)
-                    for inner_key in list(item.keys()):
-                        item = add_field_name_by_key(item, inner_key, ui_definitions)
-                    transformed_list.append(item)
-                else:
-                    transformed_list.append(elem)
+            transformed_list = _annotate_list_elements_with_field_names(original_value, ui_definitions)
             annotated[field_key] = {"name": display_name, "value": transformed_list}
             return annotated
 
         # If dict: annotate its inner keys, then wrap
         if isinstance(original_value, dict):
-            item = dict(original_value)
-            for inner_key in list(item.keys()):
-                item = add_field_name_by_key(item, inner_key, ui_definitions)
+            item = _annotate_dict_with_field_names(original_value, ui_definitions)
             annotated[field_key] = {"name": display_name, "value": item}
             return annotated
 
@@ -221,6 +201,105 @@ def add_field_name_by_key(
 # ------------------------------------------------------------
 # Helpers: recursive annotation with cycle guard
 # ------------------------------------------------------------
+def _annotate_list_elements_with_field_names(
+    value_list: list[Any],
+    ui_definitions: Optional[List[Any]],
+    _seen: Optional[set[int]] = None,
+    _depth: int = 0,
+    _max_depth: int = 50,
+) -> list[Any]:
+    """
+    Potentially deep recursion helper for list elements used by:
+    - add_field_names_by_activity
+    - add_field_name_by_key
+    """
+    if _seen is None:
+        _seen = set()
+    # depth guard
+    if _depth > _max_depth:
+        return value_list
+    oid = id(value_list)
+    if oid in _seen:
+        return value_list
+    _seen.add(oid)
+
+    transformed_list: list[Any] = []
+    for elem in value_list:
+        if isinstance(elem, dict):
+            item_dict = dict(elem)
+            for inner_key in list(item_dict.keys()):
+                item_dict = add_field_name_by_key(item_dict, inner_key, ui_definitions)
+            transformed_list.append(item_dict)
+        else:
+            transformed_list.append(elem)
+    return transformed_list
+
+
+def _annotate_dict_with_field_names(
+    value_dict: Dict[str, Any],
+    ui_definitions: Optional[List[Any]],
+    _seen: Optional[set[int]] = None,
+    _depth: int = 0,
+    _max_depth: int = 50,
+) -> Dict[str, Any]:
+    """
+    Potentially deep recursion helper for dict values used by:
+    - add_field_names_by_activity
+    - add_field_name_by_key
+    """
+    if _seen is None:
+        _seen = set()
+    if _depth > _max_depth:
+        return value_dict
+    oid = id(value_dict)
+    if oid in _seen:
+        return value_dict
+    _seen.add(oid)
+
+    item_dict = dict(value_dict)
+    for inner_key in list(item_dict.keys()):
+        item_dict = add_field_name_by_key(item_dict, inner_key, ui_definitions)
+    return item_dict
+
+
+def iter_reference_scalars_extractor(
+    d,
+    prefix: str = "",
+    acc: Optional[list] = None,
+    limit: int = 6,
+    _seen: Optional[set[int]] = None,
+    _depth: int = 0,
+    _max_depth: int = 50,
+) -> list:
+    """
+    Extract up to 'limit' scalar references from nested dict/list for logging or reference info.
+    Split out from run_completed_determination to isolate recursion-prone logic.
+    """
+    if acc is None:
+        acc = []
+    if len(acc) >= limit:
+        return acc
+    if _seen is None:
+        _seen = set()
+    if _depth > _max_depth:
+        return acc
+    if isinstance(d, dict):
+        oid = id(d)
+        if oid in _seen:
+            return acc
+        _seen.add(oid)
+        for k, v in d.items():
+            if len(acc) >= limit:
+                break
+            key = f"{prefix}{k}" if not prefix else f"{prefix}.{k}"
+            if isinstance(v, (str, int, float, bool)) or v is None:
+                acc.append({"key": key, "value": v})
+            elif isinstance(v, dict):
+                iter_reference_scalars_extractor(v, key, acc, limit, _seen=_seen, _depth=_depth + 1, _max_depth=_max_depth)
+            elif isinstance(v, list) and v and isinstance(v[0], (str, int, float, bool)):
+                acc.append({"key": key, "value": v[:5]})
+    return acc
+
 def collect_ui_field_keys(ui_defs: Optional[List[Any]]) -> set[str]:
     """
     Collect all field keys from given UI definitions' fields_json.
@@ -2608,19 +2687,7 @@ def run_completed_determination(completed_json, chain_input_completed):
         return outs
 
     def iter_reference_scalars(d, prefix="", acc=None, limit=6):
-        if acc is None: acc = []
-        if len(acc) >= limit: return acc
-        if isinstance(d, dict):
-            for k, v in d.items():
-                if len(acc) >= limit: break
-                key = f"{prefix}{k}" if not prefix else f"{prefix}.{k}"
-                if isinstance(v, (str, int, float, bool)) or v is None:
-                    acc.append({"key": key, "value": v})
-                elif isinstance(v, dict):
-                    iter_reference_scalars(v, key, acc, limit)
-                elif isinstance(v, list) and v and isinstance(v[0], (str, int, float, bool)):
-                    acc.append({"key": key, "value": v[:5]})
-        return acc
+        return iter_reference_scalars_extractor(d, prefix=prefix, acc=acc, limit=limit)
 
     def normalize_gateway_type(g):
         t = (g.get("type") or g.get("gatewayType") or "").lower()

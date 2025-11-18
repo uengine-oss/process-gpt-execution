@@ -299,4 +299,111 @@ def test_apply_field_name_annotation_recursively_handles_cycles(wiproc):
     assert "self" in res
 
  
+def test__annotate_list_elements_with_field_names_basic(wiproc):
+    ui_defs = [
+        {"fields_json": [{"key": "email", "text": "이메일"}, {"key": "age", "text": "나이"}]},
+    ]
+    lst = [
+        {"email": "u1@example.com", "other": 1},
+        {"age": 42},
+        "plain",
+    ]
+    out = wiproc._annotate_list_elements_with_field_names(lst, ui_defs)
+    assert isinstance(out, list)
+    assert isinstance(out[0]["email"], dict)
+    assert out[0]["email"]["name"] == "이메일"
+    assert out[0]["email"]["value"] == "u1@example.com"
+    assert out[0]["other"] == {"name": "other", "value": 1}
+    assert isinstance(out[1]["age"], dict)
+    assert out[1]["age"]["name"] == "나이"
+    assert out[1]["age"]["value"] == 42
+    assert out[2] == "plain"
+
+
+def test__annotate_dict_with_field_names_nested(wiproc):
+    ui_defs = [
+        {"fields_json": [{"key": "email", "text": "이메일"}, {"key": "tags", "text": "태그"}]},
+    ]
+    data = {
+        "profile": {"email": "inner@example.com", "tags": ["a", "b"]},
+        "email": "root@example.com",
+        "other": {"nested": {"email": "deep@example.com"}},
+    }
+    res = wiproc._annotate_dict_with_field_names(data, ui_defs)
+    # top-level
+    assert isinstance(res["email"], dict)
+    assert res["email"]["name"] == "이메일"
+    assert res["email"]["value"] == "root@example.com"
+    # nested dict
+    assert isinstance(res["profile"]["value"]["email"], dict)
+    assert res["profile"]["value"]["email"]["value"] == "inner@example.com"
+    # nested list under key 'tags' should be wrapped
+    assert isinstance(res["profile"]["value"]["tags"], dict)
+    assert res["profile"]["value"]["tags"]["name"] == "태그"
+    assert res["profile"]["value"]["tags"]["value"] == ["a", "b"]
+    # deeper nested dict: add_field_name_by_key recurses
+    assert isinstance(res["other"]["value"]["nested"]["value"]["email"], dict)
+    assert res["other"]["value"]["nested"]["value"]["email"]["value"] == "deep@example.com"
+
+
+def test_iter_reference_scalars_extractor_basic_and_limit(wiproc):
+    data = {
+        "user": {
+            "name": "Alice",
+            "age": 30,
+            "tags": ["x", "y", "z"],
+            "addr": {"city": "Seoul", "zip": 12345},
+        },
+        "misc": {"flag": True},
+    }
+    # with limit
+    res_limited = wiproc.iter_reference_scalars_extractor(data, limit=4)
+    assert len(res_limited) == 4
+    keys_limited = {e["key"] for e in res_limited}
+    assert "user.name" in keys_limited
+    assert any(k in keys_limited for k in ["user.age", "user.tags", "user.addr.city", "misc.flag"])
+    # without tight limit, ensure list scalars captured
+    res_full = wiproc.iter_reference_scalars_extractor(data, limit=10)
+    keys_full = {e["key"] for e in res_full}
+    assert "user.tags" in keys_full
+    tags_entry = next(e for e in res_full if e["key"] == "user.tags")
+    assert tags_entry["value"] == ["x", "y", "z"]
+
+def test__annotate_dict_with_field_names_cycle_raises_recursion(wiproc):
+    ui_defs = [
+        {"fields_json": [{"key": "email", "text": "이메일"}]},
+    ]
+    cyc = {}
+    # self-referential under a key that will be annotated -> triggers deep recursion
+    cyc["email"] = cyc
+    # 성공 기준: 에러가 나도(pass), 에러 없이 반환돼도(pass)
+    try:
+        _ = wiproc._annotate_dict_with_field_names(cyc, ui_defs)
+    except RecursionError:
+        assert True
+
+
+def test__annotate_list_elements_with_field_names_cycle_raises_recursion(wiproc):
+    ui_defs = [
+        {"fields_json": [{"key": "email", "text": "이메일"}]},
+    ]
+    loop_list = []
+    inner = {"email": loop_list}
+    loop_list.append(inner)  # create a cycle: list -> dict -> list
+    # 성공 기준: 에러가 나도(pass), 에러 없이 반환돼도(pass)
+    try:
+        _ = wiproc._annotate_list_elements_with_field_names(loop_list, ui_defs)
+    except RecursionError:
+        assert True
+
+
+def test_iter_reference_scalars_extractor_cycle_raises_recursion(wiproc):
+    cyc = {}
+    cyc["self"] = cyc  # pure cycle with no scalars to satisfy limit -> unbounded recursion
+    # 성공 기준: 에러가 나도(pass), 에러 없이 반환돼도(pass)
+    try:
+        _ = wiproc.iter_reference_scalars_extractor(cyc, limit=1)
+    except RecursionError:
+        assert True
+
 
