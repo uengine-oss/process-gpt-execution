@@ -238,5 +238,65 @@ def test_resolve_next_activity_payloads_exclusive_branch(wiproc):
     assert ids == ["B1"]
 
 
+def test_collect_ui_field_keys_basic(wiproc):
+    ui_defs = [
+        {"fields_json": [{"key": "email", "text": "이메일"}, {"key": "age", "text": "나이"}]},
+        {"fields_json": [{"key": "address", "text": "주소"}]},
+    ]
+    keys = wiproc.collect_ui_field_keys(ui_defs)
+    assert isinstance(keys, set)
+    assert keys == {"email", "age", "address"}
+
+
+def test_apply_field_name_annotation_recursively_wraps_and_recurses(wiproc):
+    ui_defs = [
+        {"fields_json": [{"key": "email", "text": "이메일"}, {"key": "age", "text": "나이"}]},
+    ]
+    data = {
+        "email": "a@test.com",
+        "profile": {
+            "email": "b@test.com",
+            "list": [
+                {"email": "c@test.com"},
+                {"other": "x"},
+            ],
+        },
+        "age": 20,
+        "misc": ["nochange"],
+    }
+    result = wiproc.apply_field_name_annotation_recursively(data, ui_defs)
+    # top-level wrap
+    assert isinstance(result.get("email"), dict)
+    assert result["email"]["name"] == "이메일"
+    assert result["email"]["value"] == "a@test.com"
+    # nested dict wrap
+    assert isinstance(result["profile"]["email"], dict)
+    assert result["profile"]["email"]["name"] == "이메일"
+    assert result["profile"]["email"]["value"] == "b@test.com"
+    # list element dict wrap
+    assert isinstance(result["profile"]["list"][0]["email"], dict)
+    assert result["profile"]["list"][0]["email"]["name"] == "이메일"
+    assert result["profile"]["list"][0]["email"]["value"] == "c@test.com"
+    # non-matching elements unchanged
+    assert result["profile"]["list"][1]["other"] == "x"
+    # numeric value wrapped when key matches
+    assert isinstance(result["age"], dict)
+    assert result["age"]["name"] == "나이"
+    assert result["age"]["value"] == 20
+    # non-matching types/values unchanged
+    assert result["misc"] == ["nochange"]
+
+
+def test_apply_field_name_annotation_recursively_handles_cycles(wiproc):
+    ui_defs = [
+        {"fields_json": [{"key": "email", "text": "이메일"}]},
+    ]
+    obj = {}
+    obj["self"] = obj  # introduce a cycle
+    res = wiproc.apply_field_name_annotation_recursively(obj, ui_defs)
+    # Should not raise or infinitely recurse; result is dict with same shape
+    assert isinstance(res, dict)
+    assert "self" in res
+
  
 

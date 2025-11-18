@@ -218,6 +218,72 @@ def add_field_name_by_key(
 
     return annotated
 
+# ------------------------------------------------------------
+# Helpers: recursive annotation with cycle guard
+# ------------------------------------------------------------
+def collect_ui_field_keys(ui_defs: Optional[List[Any]]) -> set[str]:
+    """
+    Collect all field keys from given UI definitions' fields_json.
+    Returns a set of string keys. Tolerates malformed inputs.
+    """
+    keys: set[str] = set()
+    try:
+        for ui in ui_defs or []:
+            mapping = _build_field_text_map_from_ui_definition(ui)
+            for k in mapping.keys():
+                if isinstance(k, str):
+                    keys.add(k)
+    except Exception:
+        # Best-effort; ignore failures
+        pass
+    return keys
+
+
+def apply_field_name_annotation_recursively(
+    obj: Any,
+    ui_definitions: Optional[List[Any]],
+    field_keys: Optional[set[str]] = None,
+    _seen: Optional[set[int]] = None,
+) -> Any:
+    """
+    Recursively annotate objects using UI field names while guarding against circular references.
+    - Wraps matching keys via add_field_name_by_key
+    - Traverses dicts and lists
+    - Uses object id-based visited set to prevent infinite recursion on cyclic graphs
+    """
+    if field_keys is None:
+        field_keys = collect_ui_field_keys(ui_definitions)
+    if _seen is None:
+        _seen = set()
+
+    # Primitive short-circuit
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+
+    oid = id(obj)
+    if oid in _seen:
+        # Already visited; return as-is to avoid cycles
+        return obj
+    _seen.add(oid)
+
+    if isinstance(obj, dict):
+        annotated: dict[str, Any] = dict(obj)
+        # First, wrap known field keys present at this level
+        for fk in field_keys:
+            if fk in annotated:
+                annotated = add_field_name_by_key(annotated, fk, ui_definitions)
+        # Then recurse into children
+        for k, v in list(annotated.items()):
+            if isinstance(v, (dict, list)):
+                annotated[k] = apply_field_name_annotation_recursively(v, ui_definitions, field_keys, _seen)
+        return annotated
+
+    if isinstance(obj, list):
+        return [apply_field_name_annotation_recursively(v, ui_definitions, field_keys, _seen) for v in obj]
+
+    # Fallback: return original for unsupported types
+    return obj
+
 # LLM 객체 생성 (공통 팩토리 사용)
 model = create_llm(model="gpt-4o", streaming=True, temperature=0)
 
@@ -1404,37 +1470,9 @@ def _set_condition_eval(sequence_condition_data, seq_id, condition_met, reason=N
 
 
 async def _evaluate_nl_conditions(model, parser, all_workitem_input_data, workitem_input_data, nl_condition_sequences, sequence_condition_data, ui_definitions):
-    def _collect_ui_field_keys(ui_defs: Optional[List[Any]]) -> set[str]:
-        keys: set[str] = set()
-        try:
-            for ui in ui_defs or []:
-                m = _build_field_text_map_from_ui_definition(ui)
-                for k in m.keys():
-                    if isinstance(k, str):
-                        keys.add(k)
-        except Exception:
-            pass
-        return keys
-
-    def _apply_helper_recursively(obj: Any, field_keys: set[str]) -> Any:
-        if isinstance(obj, dict):
-            annotated = dict(obj)
-            # First, apply helper on keys that exist at this level
-            for fk in field_keys:
-                if fk in annotated:
-                    annotated = add_field_name_by_key(annotated, fk, ui_definitions)
-            # Then recurse into values
-            for k, v in list(annotated.items()):
-                if isinstance(v, (dict, list)):
-                    annotated[k] = _apply_helper_recursively(v, field_keys)
-            return annotated
-        if isinstance(obj, list):
-            return [_apply_helper_recursively(v, field_keys) for v in obj]
-        return obj
-
-    ui_field_keys = _collect_ui_field_keys(ui_definitions)
-    all_workitem_input_data = _apply_helper_recursively(all_workitem_input_data, ui_field_keys)
-    workitem_input_data = _apply_helper_recursively(workitem_input_data, ui_field_keys)
+    ui_field_keys = collect_ui_field_keys(ui_definitions)
+    all_workitem_input_data = apply_field_name_annotation_recursively(all_workitem_input_data, ui_definitions, ui_field_keys)
+    workitem_input_data = apply_field_name_annotation_recursively(workitem_input_data, ui_definitions, ui_field_keys)
     def _normalize(obj):
         if isinstance(obj, dict):
             return {str(k): _normalize(v) for k, v in obj.items()}
@@ -1977,35 +2015,9 @@ async def check_subprocess_expression(next_activity_payloads: list[dict], chain_
                             except Exception:
                                 pass
 
-                def _collect_ui_field_keys(ui_defs: Optional[List[Any]]) -> set[str]:
-                    keys: set[str] = set()
-                    try:
-                        for ui in ui_defs or []:
-                            m = _build_field_text_map_from_ui_definition(ui)
-                            for k in m.keys():
-                                if isinstance(k, str):
-                                    keys.add(k)
-                    except Exception:
-                        pass
-                    return keys
-
-                def _apply_helper_recursively(obj: Any, field_keys: set[str]) -> Any:
-                    if isinstance(obj, dict):
-                        annotated = dict(obj)
-                        for fk in field_keys:
-                            if fk in annotated:
-                                annotated = add_field_name_by_key(annotated, fk, ui_definitions)
-                        for k, v in list(annotated.items()):
-                            if isinstance(v, (dict, list)):
-                                annotated[k] = _apply_helper_recursively(v, field_keys)
-                        return annotated
-                    if isinstance(obj, list):
-                        return [_apply_helper_recursively(v, field_keys) for v in obj]
-                    return obj
-
-                ui_field_keys = _collect_ui_field_keys(ui_definitions)
-                runtime_output = _apply_helper_recursively(runtime_output, ui_field_keys)
-                runtime_previous_outputs = _apply_helper_recursively(runtime_previous_outputs, ui_field_keys)
+                ui_field_keys = collect_ui_field_keys(ui_definitions)
+                runtime_output = apply_field_name_annotation_recursively(runtime_output, ui_definitions, ui_field_keys)
+                runtime_previous_outputs = apply_field_name_annotation_recursively(runtime_previous_outputs, ui_definitions, ui_field_keys)
         except Exception:
             # Best-effort enrichment; ignore failures
             pass
