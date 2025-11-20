@@ -407,3 +407,104 @@ def test_iter_reference_scalars_extractor_cycle_raises_recursion(wiproc):
         assert True
 
 
+def test_apply_field_name_annotation_recursively_vip_newsletter_sample(wiproc):
+    # ui_definitions with a blank key and typical fields, modeled as dicts
+    ui_defs = [
+        {
+            "id": "vip_newsletter_process_activity_0ot7kwf_form",
+            "activity_id": "Activity_0ot7kwf",
+            "fields_json": [
+                {"key": "newsletter_report", "text": "뉴스레터 내용"},
+            ],
+        },
+        {
+            "id": "vip_newsletter_process_activity_1rzgb75_form",
+            "activity_id": "Activity_1rzgb75",
+            "fields_json": [
+                {"key": "recipient_name", "text": "이름"},
+                {"key": "recipient_email", "text": "이메일"},
+            ],
+        },
+        {
+            "id": "vip_newsletter_process_activity_1bzewxr_form",
+            "activity_id": "Activity_1bzewxr",
+            "fields_json": [
+                {"key": "", "text": ""},
+                {"key": "result_check", "text": "결과확인"},
+            ],
+        },
+        {
+            "id": "vip_newsletter_process_activity_10pn15v_form",
+            "activity_id": "Activity_10pn15v",
+            "fields_json": [
+                {"key": "newsletter_report", "text": "관심사 기반 뉴스레터"},
+            ],
+        },
+        {
+            "id": "vip_newsletter_process_activity_0hrng6y_form",
+            "activity_id": "Activity_0hrng6y",
+            "fields_json": [
+                {"key": "review_status", "text": "결재 여부"},
+                {"key": "review_opinion", "text": "재작성 의견"},
+            ],
+        },
+        {
+            "id": "vip_newsletter_process_activity_1en8e0l_form",
+            "activity_id": "Activity_1en8e0l",
+            "fields_json": [
+                {"key": "name", "text": "이름"},
+                {"key": "interest", "text": "관심사"},
+                {"key": "skill_level", "text": "기술이해도 수준"},
+                {"key": "sales_manager", "text": "담당 영업"},
+                {"key": "sales_manager_relation", "text": "담당 영업과의 관계"},
+                {"key": "sales_manager_email", "text": "담당 영업 이메일 주소"},
+            ],
+        },
+    ]
+
+    all_workitem_input_data = {
+        "vip_newsletter_process_activity_0ot7kwf_form": {"newsletter_report": ""},
+        "vip_newsletter_process_activity_1en8e0l_form": {
+            "name": "김지훈",
+            "interest": "데이터 분석, 트렌드 리포트 구독",
+            "skill_level": "medium",
+            "sales_manager": "박민수",
+            "sales_manager_email": "minsu.park@salescorp.kr",
+            "sales_manager_relation": "10년 이상 비즈니스 거래, 신뢰가 두터움",
+        },
+        "vip_newsletter_process_activity_0hrng6y_form": {
+            "review_status": ["approved"],
+            "review_opinion": "",
+        },
+        "vip_newsletter_process_activity_10pn15v_form": {
+            "newsletter_report": "# VIP 고객 개요 및 관심사 분석 ..."
+        },
+    }
+
+    # Should not raise RecursionError and should annotate known fields
+    try:
+        ui_field_keys = wiproc.collect_ui_field_keys(ui_defs)
+        result = wiproc.apply_field_name_annotation_recursively(
+            all_workitem_input_data, ui_defs, ui_field_keys
+        )
+    except RecursionError:
+        pytest.fail("RecursionError raised during annotation of VIP newsletter sample data")
+
+    # Top-level keys preserved
+    assert set(result.keys()) == set(all_workitem_input_data.keys())
+
+    # Known keys are wrapped with {name, value}
+    rep = result["vip_newsletter_process_activity_10pn15v_form"]["newsletter_report"]
+    assert isinstance(rep, dict)
+    assert "name" in rep and "value" in rep
+
+    rs = result["vip_newsletter_process_activity_0hrng6y_form"]["review_status"]
+    assert isinstance(rs, dict)
+    assert rs["name"] == "결재 여부"
+    assert rs["value"] == ["approved"]
+
+    # 'name' field may be reserved for wrapper; ensure at least other fields got wrapped
+    sm_email = result["vip_newsletter_process_activity_1en8e0l_form"]["sales_manager_email"]
+    assert isinstance(sm_email, dict)
+    assert sm_email["name"] == "담당 영업 이메일 주소"
+    assert sm_email["value"] == "minsu.park@salescorp.kr"

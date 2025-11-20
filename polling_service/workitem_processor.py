@@ -176,6 +176,18 @@ def add_field_name_by_key(
         original_value = annotated[field_key]
         display_name = display_text if display_text else field_key
 
+        # Already wrapped: update name and recursively annotate only its "value"
+        if isinstance(original_value, dict) and ("name" in original_value and "value" in original_value):
+            wrapped = dict(original_value)
+            wrapped["name"] = display_name
+            inner = wrapped.get("value")
+            if isinstance(inner, list):
+                wrapped["value"] = _annotate_list_elements_with_field_names(inner, ui_definitions)
+            elif isinstance(inner, dict):
+                wrapped["value"] = _annotate_dict_with_field_names(inner, ui_definitions)
+            annotated[field_key] = wrapped
+            return annotated
+
         # If list: annotate each dict element's inner keys by scanning ui_definitions
         if isinstance(original_value, list):
             transformed_list = _annotate_list_elements_with_field_names(original_value, ui_definitions)
@@ -188,13 +200,8 @@ def add_field_name_by_key(
             annotated[field_key] = {"name": display_name, "value": item}
             return annotated
 
-        # Scalar: simple wrap or update name if already wrapped
-        if isinstance(original_value, dict) and "name" in original_value and "value" in original_value:
-            wrapped = dict(original_value)
-            wrapped["name"] = display_name
-            annotated[field_key] = wrapped
-        else:
-            annotated[field_key] = {"name": display_name, "value": original_value}
+        # Scalar: simple wrap
+        annotated[field_key] = {"name": display_name, "value": original_value}
 
     return annotated
 
@@ -307,10 +314,11 @@ def collect_ui_field_keys(ui_defs: Optional[List[Any]]) -> set[str]:
     """
     keys: set[str] = set()
     try:
+        RESERVED = {"", "name", "value"}
         for ui in ui_defs or []:
             mapping = _build_field_text_map_from_ui_definition(ui)
             for k in mapping.keys():
-                if isinstance(k, str):
+                if isinstance(k, str) and (k not in RESERVED):
                     keys.add(k)
     except Exception:
         # Best-effort; ignore failures
@@ -346,13 +354,24 @@ def apply_field_name_annotation_recursively(
     _seen.add(oid)
 
     if isinstance(obj, dict):
+        RESERVED = {"name", "value"}
         annotated: dict[str, Any] = dict(obj)
-        # First, wrap known field keys present at this level
+        # If already wrapped node, recurse only into its "value"
+        if "name" in annotated and "value" in annotated:
+            v = annotated.get("value")
+            if isinstance(v, (dict, list)):
+                annotated["value"] = apply_field_name_annotation_recursively(v, ui_definitions, field_keys, _seen)
+            return annotated
+        # First, wrap known field keys present at this level (skip reserved)
         for fk in field_keys:
+            if fk in RESERVED or fk == "":
+                continue
             if fk in annotated:
                 annotated = add_field_name_by_key(annotated, fk, ui_definitions)
-        # Then recurse into children
+        # Then recurse into children (skip reserved keys)
         for k, v in list(annotated.items()):
+            if k in RESERVED:
+                continue
             if isinstance(v, (dict, list)):
                 annotated[k] = apply_field_name_annotation_recursively(v, ui_definitions, field_keys, _seen)
         return annotated
