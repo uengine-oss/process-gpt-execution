@@ -1703,8 +1703,24 @@ async def check_event_expression(next_activity_payloads: list[dict], chain_input
             e = _find_event(ev_id)
             if not e:
                 return False
+            # 1) direct 'type' contains 'timer'
             t = str(_get(e, "type") or "").lower()
-            return "timer" in t
+            if "timer" in t:
+                return True
+            # 2) BPMN definition type
+            dt = str(_get(e, "definitionType") or "").lower()
+            if "timer" in dt:
+                return True
+            # 3) properties include explicit expression
+            props = _get(e, "properties")
+            if isinstance(props, str):
+                try:
+                    props = json.loads(props)
+                except Exception:
+                    props = None
+            if isinstance(props, dict) and props.get("expression"):
+                return True
+            return False
 
         # Select candidates
         candidates = [p for p in next_activity_payloads or []
@@ -1716,19 +1732,51 @@ async def check_event_expression(next_activity_payloads: list[dict], chain_input
         if not candidates:
             return next_activity_payloads
 
-        candidate_events = []
+        candidate_events = []  # unresolved candidates for LLM
+        resolved_expressions: dict[str, dict] = {}  # ev_id -> {"expression": str, "dueDate": str}
+
         for p in candidates:
             ev_id = p.get("nextActivityId")
             ev = _find_event(ev_id)
             if ev is None:
-                candidate_events.append({"id": ev_id})
+                # No metadata; fall back later with name from payload if any
+                candidate_events.append({"id": ev_id, "nlText": p.get("nextActivityName") or ""})
             else:
+                # Parse properties (may be JSON string)
+                props = _get(ev, "properties")
+                if isinstance(props, str):
+                    try:
+                        props = json.loads(props)
+                    except Exception:
+                        props = None
+                # Precedence: expression > expressionNL > name
+                explicit_expr = None
+                if isinstance(props, dict):
+                    explicit_expr = props.get("expression") or None
+                # Some models may carry expression under 'condition'
+                if not explicit_expr:
+                    cond = _get(ev, "condition")
+                    if isinstance(cond, dict):
+                        explicit_expr = cond.get("expression") or cond.get("cron")
+                    elif isinstance(cond, str) and cond.strip():
+                        explicit_expr = cond.strip()
+                if isinstance(explicit_expr, str) and explicit_expr.strip():
+                    resolved_expressions[_get(ev, "id")] = {
+                        "expression": explicit_expr.strip(),
+                        "dueDate": ""
+                    }
+                    continue
+                # If no explicit expression, prefer expressionNL; else fall back to name/description
+                nl_text = None
+                if isinstance(props, dict):
+                    nl_text = props.get("expressionNL")
+                if not isinstance(nl_text, str) or not nl_text.strip():
+                    nl_text = _get(ev, "name") or _get(ev, "description") or (p.get("nextActivityName") or "")
                 candidate_events.append({
                     "id": _get(ev, "id"),
                     "name": _get(ev, "name"),
                     "type": _get(ev, "type"),
-                    "condition": _get(ev, "condition"),
-                    "properties": _get(ev, "properties"),
+                    "nlText": nl_text or ""
                 })
 
         runtime_context = {
@@ -1737,15 +1785,28 @@ async def check_event_expression(next_activity_payloads: list[dict], chain_input
             "previous_outputs": chain_input_next.get("previous_outputs") or {},
         }
 
+        # If every candidate is already resolved via explicit expression, just apply and return
+        if not candidate_events and resolved_expressions:
+            for p in next_activity_payloads:
+                ev_id = p.get("nextActivityId")
+                if ev_id and ev_id in resolved_expressions:
+                    expr = resolved_expressions[ev_id].get("expression")
+                    due  = resolved_expressions[ev_id].get("dueDate")
+                    if expr:
+                        p["expression"] = expr
+                    if due:
+                        p["dueDate"] = due
+            return next_activity_payloads
+
         chain_input_text = {
             "instruction": (
-                "You are a BPMN timer event planner. For each candidate timer event, "
-                "derive a concise cron expression (preferred) or an absolute dueDate (YYYY-MM-DD). "
-                "Use only runtimeContext and candidateEvents. If not derivable, leave fields empty."
+                "당신은 BPMN 타이머 이벤트 플래너입니다. 각 후보의 자연어(nlText)를 "
+                "간결한 cron 표현식(우선) 또는 YYYY-MM-DD 형식의 dueDate로 변환하세요. "
+                "runtimeContext만 사용하며, 해석 불가하면 비워두세요."
             ),
             "outputFormat": {"timers": [{"id": "...", "expression": "", "dueDate": ""}]},
             "runtimeContext": runtime_context,
-            "candidateEvents": candidate_events,
+            "nlCandidates": candidate_events,
         }
 
         prompt_tmpl = PromptTemplate.from_template('{chain_input_text}')
@@ -1765,6 +1826,16 @@ async def check_event_expression(next_activity_payloads: list[dict], chain_input
                 parsed = parser.parse(response_text)
             except Exception as parse_error:
                 print(f"[WARN] check_event_expression parse failed: {parse_error}")
+                # Even if LLM parsing failed, apply any resolved expressions
+                for p in next_activity_payloads:
+                    ev_id = p.get("nextActivityId")
+                    if ev_id and ev_id in resolved_expressions:
+                        expr = resolved_expressions[ev_id].get("expression")
+                        due  = resolved_expressions[ev_id].get("dueDate")
+                        if expr:
+                            p["expression"] = expr
+                        if due:
+                            p["dueDate"] = due
                 return next_activity_payloads
 
         timers = None
@@ -1775,6 +1846,16 @@ async def check_event_expression(next_activity_payloads: list[dict], chain_input
                     timers = val
                     break
         if not isinstance(timers, list):
+            # Apply pre-resolved expressions only
+            for p in next_activity_payloads:
+                ev_id = p.get("nextActivityId")
+                if ev_id and ev_id in resolved_expressions:
+                    expr = resolved_expressions[ev_id].get("expression")
+                    due  = resolved_expressions[ev_id].get("dueDate")
+                    if expr:
+                        p["expression"] = expr
+                    if due:
+                        p["dueDate"] = due
             return next_activity_payloads
 
         timer_map: dict[str, dict] = {}
@@ -1791,6 +1872,16 @@ async def check_event_expression(next_activity_payloads: list[dict], chain_input
 
         for p in next_activity_payloads:
             ev_id = p.get("nextActivityId")
+            # Apply explicit expressions first
+            if ev_id and ev_id in resolved_expressions:
+                expr = resolved_expressions[ev_id].get("expression")
+                due  = resolved_expressions[ev_id].get("dueDate")
+                if expr:
+                    p["expression"] = expr
+                if due:
+                    p["dueDate"] = due
+                continue
+            # Otherwise, apply LLM-derived timers if available
             if ev_id and ev_id in timer_map:
                 expr = timer_map[ev_id].get("expression")
                 due  = timer_map[ev_id].get("dueDate")
