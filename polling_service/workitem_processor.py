@@ -3202,6 +3202,112 @@ def resolve_next_activity_payloads(
 
     return next_activity_payloads
 
+def inject_boundary_events_as_next(
+    next_activity_payloads: list[dict[str, Any]],
+    attached_activities: list[dict],
+    process_definition: Any | None = None,
+    events: list[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    다음 액티비티 후보에 boundary(Attached) 이벤트를 포함시킨다.
+    - 이미 존재하는 nextActivityId는 중복 추가하지 않는다.
+    - 이벤트 payload는 type='event'로 추가하고, condition에서 expression을 유도한다.
+    - nextUserEmail은 시스템 이벤트로 간주하여 'system'으로 설정한다.
+    """
+    try:
+        if not isinstance(next_activity_payloads, list):
+            next_activity_payloads = []
+        if not isinstance(attached_activities, list) or not attached_activities:
+            return next_activity_payloads
+
+        existing_ids: set[str] = set()
+        for p in next_activity_payloads:
+            try:
+                nid = p.get("nextActivityId")
+                if isinstance(nid, str) and nid:
+                    existing_ids.add(nid)
+            except Exception:
+                continue
+
+        def _get(obj, key):
+            if isinstance(obj, dict):
+                return obj.get(key)
+            return getattr(obj, key, None)
+
+        def _extract_expression(ev) -> str | None:
+            cond = _get(ev, "condition")
+            if isinstance(cond, dict):
+                expr = cond.get("expression") or cond.get("cron")
+                if isinstance(expr, str) and expr.strip():
+                    return expr.strip()
+            elif isinstance(cond, str) and cond.strip():
+                return cond.strip()
+            return None
+
+        def _find_event_by_id(eid: str):
+            if not eid:
+                return None
+            # Prefer process_definition API
+            try:
+                if process_definition:
+                    ev = process_definition.find_event_by_id(eid)
+                    if ev:
+                        return ev
+            except Exception:
+                pass
+            # Fallback to provided events list
+            try:
+                if isinstance(events, list):
+                    for e in events:
+                        if _get(e, "id") == eid:
+                            return e
+            except Exception:
+                pass
+            return None
+
+        for item in attached_activities:
+            try:
+                events = _get(item, "attached_events") or []
+                for ev in events:
+                    # attached_events가 문자열 ID일 수 있음
+                    if isinstance(ev, (str, int)):
+                        ev_id = str(ev)
+                        ev_obj = _find_event_by_id(ev_id)
+                    else:
+                        ev_id = _get(ev, "id")
+                        ev_obj = ev
+
+                    if not ev_id or ev_id in existing_ids:
+                        continue
+                    # boundary 성격 판별: 객체가 있으면 type에서 판단, 없으면 attached 목록이므로 boundary로 간주
+                    ev_type_text = str(_get(ev_obj, "type") or "").lower() if ev_obj is not None else "boundary"
+                    if "boundary" not in ev_type_text:
+                        # attached 목록이지만 타입이 명시적으로 boundary가 아닐 경우만 스킵
+                        # (대부분 attached는 boundary이므로, 타입 정보 없으면 포함)
+                        if ev_obj is not None:
+                            continue
+
+                    ev_name = _get(ev_obj, "name") or ev_id
+                    description = _get(ev_obj, "description") or ""
+                    expression_value = _extract_expression(ev_obj) if ev_obj is not None else None
+                    payload = {
+                        "nextActivityId": ev_id,
+                        "nextActivityName": ev_name,
+                        "nextUserEmail": "system",
+                        "result": "IN_PROGRESS",
+                        "description": description,
+                        "type": "event",
+                        "expression": expression_value,
+                    }
+                    next_activity_payloads.append(payload)
+                    existing_ids.add(ev_id)
+            except Exception:
+                continue
+
+        return next_activity_payloads
+    except Exception:
+        return next_activity_payloads
+
 async def handle_workitem(workitem):
     is_first, is_last = get_workitem_position(workitem)
 
@@ -3416,6 +3522,7 @@ async def handle_workitem(workitem):
                 )
 
 
+
                 chain_input_next = {
                     "activities": process_definition.activities,
                     "gateways": process_definition_json.get('gateways', []),
@@ -3440,6 +3547,13 @@ async def handle_workitem(workitem):
                     "attached_activities": attached_activities,
                     "sequence_conditions": sequence_condition_data
                 }
+                
+                next_activity_payloads = inject_boundary_events_as_next(
+                    next_activity_payloads,
+                    attached_activities,
+                    process_definition,
+                    process_definition_json.get('events', [])
+                )
                 
                 next_activity_payloads = await check_event_expression(next_activity_payloads, chain_input_next)
             
