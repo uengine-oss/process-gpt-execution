@@ -1332,6 +1332,12 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     if instruction:
                         query += f"[Instruction]\n{instruction}\n\n"
 
+                # tool 결정: activity type에 'task'가 포함되고 tool이 비어있으면 'defaultForm' 사용
+                activity_tool = safeget(activity, 'tool', '')
+                activity_type = safeget(activity, 'type', '').lower()
+                if not activity_tool and 'task' in activity_type:
+                    activity_tool = 'formHandler:defaultForm'
+
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     reference_ids=reference_ids if prev_activities else [],
@@ -1342,7 +1348,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     user_id=user_id,
                     username=username,
                     status=status,
-                    tool=safeget(activity, 'tool', ''),
+                    tool=activity_tool,
                     start_date=start_date,
                     due_date=due_date,
                     tenant_id=tenant_id,

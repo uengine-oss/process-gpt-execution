@@ -35,7 +35,8 @@ async def safe_handle_workitem(workitem):
                     task_type = activity.get('type')
                     break
             
-            if task_type == 'userTask' or task_type == 'scriptTask':
+            # if task_type == 'userTask' or task_type == 'scriptTask':
+            if task_type in ('userTask', 'scriptTask', 'manualTask'):
                 await handle_workitem(workitem)
             elif task_type == 'serviceTask':
                 await handle_service_workitem(workitem)
