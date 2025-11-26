@@ -5,7 +5,8 @@ from typing import Set
 from database import (
     setting_database, fetch_workitem_with_submitted_status, 
     fetch_workitem_with_agent, upsert_workitem, cleanup_stale_consumers,
-    fetch_process_definition, fetch_workitem_with_pending_status
+    fetch_process_definition, fetch_workitem_with_pending_status,
+    fetch_process_instance, upsert_process_instance
 )
 from workitem_processor import handle_workitem, handle_service_workitem, handle_pending_workitem
 
@@ -54,6 +55,11 @@ async def safe_handle_workitem(workitem):
             if workitem['retry'] >= 3:
                 workitem['status'] = "DONE"
                 workitem['log'] = f"[Error] Error in safe_handle_workitem for workitem {workitem['id']}: {str(e)}"
+                process_instance = fetch_process_instance(workitem['proc_inst_id'], workitem['tenant_id'])
+                if process_instance and process_instance.status == "NEW":
+                    process_instance.status = "RUNNING"
+                    upsert_process_instance(process_instance, workitem['tenant_id'])
+                    print(f"[INFO] Updated instance {workitem['proc_inst_id']} status to RUNNING due to workitem failure")
             else:
                 workitem['log'] = f"실행하는 중 오류가 발생했습니다. 다시 시도하겠습니다. (시도 {workitem['retry']}/3)"
             upsert_workitem(workitem, workitem['tenant_id'])
