@@ -22,7 +22,8 @@ SUMMARIZATION_THRESHOLD = 5000
 
 # Upstage API 설정
 UPSTAGE_API_KEY = os.getenv("UPSTAGE_API_KEY")
-UPSTAGE_DOCUMENT_PARSE_URL = "https://api.upstage.ai/v1/document-ai/document-parse"
+UPSTAGE_DOCUMENT_PARSE_URL = "https://api.upstage.ai/v1/document-digitization"
+UPSTAGE_MODEL = "document-parse"
 
 
 async def parse_document_with_upstage(file_path: str, file_url: Optional[str] = None) -> Optional[str]:
@@ -45,49 +46,104 @@ async def parse_document_with_upstage(file_path: str, file_url: Optional[str] = 
             "Authorization": f"Bearer {UPSTAGE_API_KEY}"
         }
         
+        # file_path가 URL인지 확인
+        is_url = file_path and (file_path.startswith('http://') or file_path.startswith('https://'))
+        
         async with httpx.AsyncClient(timeout=300.0) as client:
-            if file_path and os.path.exists(file_path):
+            if file_path and not is_url and os.path.exists(file_path):
                 # 로컬 파일 업로드
+                logger.info(f"[INFO] 로컬 파일 업로드: {file_path}")
                 with open(file_path, 'rb') as f:
-                    files = {'document': f}
+                    files = {'document': (os.path.basename(file_path), f, 'application/octet-stream')}
+                    data = {
+                        'ocr': 'force',
+                        'model': UPSTAGE_MODEL
+                    }
                     response = await client.post(
                         UPSTAGE_DOCUMENT_PARSE_URL,
                         headers=headers,
-                        files=files
+                        files=files,
+                        data=data
                     )
-            elif file_url:
-                # URL로 파싱
-                data = {'document': file_url}
-                response = await client.post(
-                    UPSTAGE_DOCUMENT_PARSE_URL,
-                    headers=headers,
-                    data=data
-                )
+            elif is_url or file_url:
+                # URL로 파싱 (file_path가 URL이거나 file_url이 있는 경우)
+                target_url = file_path if is_url else file_url
+                logger.info(f"[INFO] URL로 파싱: {target_url}")
+                
+                # URL 파일 다운로드 후 업로드
+                file_response = await client.get(target_url)
+                if file_response.status_code == 200:
+                    file_name = os.path.basename(target_url.split('?')[0])
+                    files = {'document': (file_name, file_response.content, 'application/octet-stream')}
+                    data = {
+                        'ocr': 'force',
+                        'model': UPSTAGE_MODEL
+                    }
+                    response = await client.post(
+                        UPSTAGE_DOCUMENT_PARSE_URL,
+                        headers=headers,
+                        files=files,
+                        data=data
+                    )
+                else:
+                    logger.error(f"[ERROR] URL 파일 다운로드 실패: {file_response.status_code}")
+                    return None
             else:
                 logger.error("[ERROR] 파일 경로 또는 URL이 제공되지 않았습니다.")
                 return None
             
             if response.status_code == 200:
                 result = response.json()
-                # Upstage API는 content 필드에 파싱된 텍스트를 반환
-                content = result.get('content', {})
+                logger.info(f"[DEBUG] Upstage API 응답: {result.keys() if isinstance(result, dict) else type(result)}")
                 
-                # 텍스트 추출
-                if isinstance(content, dict):
-                    text = content.get('text', '')
-                elif isinstance(content, str):
-                    text = content
-                else:
-                    # elements 배열에서 텍스트 추출
+                # Upstage Document Digitization API 응답 형식
+                text_parts = []
+                
+                # 1. content.html에서 HTML 태그 제거하고 텍스트 추출
+                if 'content' in result:
+                    content = result.get('content', {})
+                    if isinstance(content, dict):
+                        # HTML이 있으면 파싱
+                        if 'html' in content:
+                            import re
+                            html_text = content['html']
+                            # HTML 태그 제거
+                            text_without_tags = re.sub(r'<[^>]+>', ' ', html_text)
+                            # 연속된 공백 및 줄바꿈 정리
+                            text_without_tags = re.sub(r'\s+', ' ', text_without_tags)
+                            text_parts.append(text_without_tags.strip())
+                        # text가 있으면 직접 사용
+                        elif 'text' in content:
+                            text_parts.append(content['text'])
+                    elif isinstance(content, str):
+                        text_parts.append(content)
+                
+                # 2. elements 배열에서 텍스트 추출 (보조)
+                if not text_parts and 'elements' in result:
                     elements = result.get('elements', [])
-                    text_parts = []
                     for element in elements:
-                        if element.get('category') in ['paragraph', 'text', 'title', 'table']:
-                            text_parts.append(element.get('text', ''))
-                    text = '\n'.join(text_parts)
+                        if 'text' in element:
+                            text_parts.append(element['text'])
                 
-                logger.info(f"[INFO] 문서 파싱 성공: {len(text)} 문자")
-                return text
+                # 3. pages 배열에서 텍스트 추출 (다른 API 버전)
+                if not text_parts and 'pages' in result:
+                    pages = result.get('pages', [])
+                    for page in pages:
+                        if 'text' in page:
+                            text_parts.append(page['text'])
+                        elif 'elements' in page:
+                            for element in page['elements']:
+                                if 'text' in element:
+                                    text_parts.append(element['text'])
+                
+                text = '\n'.join(text_parts)
+                
+                if text:
+                    logger.info(f"[INFO] 문서 파싱 성공: {len(text)} 문자")
+                    return text
+                else:
+                    logger.warning(f"[WARNING] 파싱된 텍스트가 없습니다. 응답 키: {list(result.keys())}")
+                    return None
             else:
                 logger.error(f"[ERROR] Upstage API 오류: {response.status_code} - {response.text}")
                 return None
@@ -171,19 +227,27 @@ async def process_document_file(
     문서 파일을 파싱하고 필요시 요약하여 텍스트 반환
     
     Args:
-        file_path: 로컬 파일 경로
-        file_url: 파일 URL (Supabase storage 등)
+        file_path: 로컬 파일 경로 또는 URL (Supabase storage URL 포함)
+        file_url: 파일 URL (file_path가 로컬 경로일 때만 사용)
         file_name: 파일 이름 (확장자 확인용)
     
     Returns:
         처리된 텍스트 또는 None
     """
     try:
+        # file_path가 URL인지 확인
+        is_file_path_url = file_path and (file_path.startswith('http://') or file_path.startswith('https://'))
+        
         # 파일 확장자 확인
         if file_name:
             ext = os.path.splitext(file_name.lower())[1]
         elif file_path:
-            ext = os.path.splitext(file_path.lower())[1]
+            # URL에서 확장자 추출 (쿼리 파라미터 제거)
+            if is_file_path_url:
+                path_part = file_path.split('?')[0]
+                ext = os.path.splitext(path_part.lower())[1]
+            else:
+                ext = os.path.splitext(file_path.lower())[1]
         elif file_url:
             ext = os.path.splitext(file_url.lower())[1].split('?')[0]  # URL 쿼리 파라미터 제거
         else:
@@ -195,7 +259,9 @@ async def process_document_file(
             logger.info(f"[INFO] 지원하지 않는 파일 형식: {ext}")
             return None
         
-        logger.info(f"[INFO] 문서 파일 처리 시작: {file_name or file_path or file_url}")
+        display_name = file_name or file_path or file_url
+        logger.info(f"[INFO] 문서 파일 처리 시작: {display_name}")
+        logger.info(f"[INFO] 파일 타입: {'URL' if is_file_path_url else '로컬 경로'}, 확장자: {ext}")
         
         # 1. Upstage로 문서 파싱
         parsed_text = await parse_document_with_upstage(file_path, file_url)
@@ -256,16 +322,32 @@ async def extract_file_info(field_value: Any) -> Optional[Dict[str, str]]:
     """
     try:
         if isinstance(field_value, dict):
+            # dict에서 파일 정보 추출
+            file_name = field_value.get('name') or field_value.get('fileName') or field_value.get('file_name')
+            file_path = field_value.get('path') or field_value.get('filePath')
+            file_url = field_value.get('url') or field_value.get('fileUrl') or field_value.get('file_url')
+            
+            # path가 URL인 경우 file_path로 사용 (Supabase storage URL 등)
+            if file_path and (file_path.startswith('http://') or file_path.startswith('https://')):
+                logger.info(f"[INFO] path 필드가 URL입니다: {file_path}")
+                return {
+                    'file_name': file_name or os.path.basename(file_path.split('?')[0]),
+                    'file_path': file_path,  # URL을 file_path로 전달
+                    'file_url': file_url
+                }
+            
             return {
-                'file_name': field_value.get('name') or field_value.get('fileName') or field_value.get('file_name'),
-                'file_path': field_value.get('path') or field_value.get('filePath'),
-                'file_url': field_value.get('url') or field_value.get('fileUrl') or field_value.get('file_url')
+                'file_name': file_name,
+                'file_path': file_path,
+                'file_url': file_url
             }
         elif isinstance(field_value, str):
+            # 문자열인 경우
+            is_url = field_value.startswith('http://') or field_value.startswith('https://')
             return {
-                'file_name': os.path.basename(field_value),
-                'file_path': field_value if not field_value.startswith('http') else None,
-                'file_url': field_value if field_value.startswith('http') else None
+                'file_name': os.path.basename(field_value.split('?')[0]),
+                'file_path': field_value if is_url else field_value,  # URL도 file_path로 전달
+                'file_url': field_value if is_url else None
             }
         
         return None

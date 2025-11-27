@@ -2009,22 +2009,34 @@ async def get_input_data_with_file_parsing(workitem: dict, process_definition: A
         # 기본 입력 데이터 가져오기
         input_data = get_input_data(workitem, process_definition)
         
+        print(f"[DEBUG] get_input_data_with_file_parsing - workitem: {workitem.get('id')}")
+        print(f"[DEBUG] input_data: {input_data}")
+        
         if not input_data:
+            print(f"[WARNING] No input_data found")
             return None
         
         # 파일 필드 검색 및 처리
         parsed_files = {}
         
         for form_id, form_fields in input_data.items():
+            print(f"[DEBUG] Processing form: {form_id}, fields: {type(form_fields)}")
+            
             if not isinstance(form_fields, dict):
                 continue
                 
             for field_name, field_value in form_fields.items():
+                print(f"[DEBUG] Processing field: {field_name}, value type: {type(field_value)}")
+                print(f"[DEBUG] Field value: {field_value}")
+                
                 # 리스트인 경우 각 항목 확인
                 if isinstance(field_value, list):
                     for idx, item in enumerate(field_value):
-                        if is_document_file(item):
+                        is_doc = is_document_file(item)
+                        print(f"[DEBUG] List item {idx} is_document_file: {is_doc}")
+                        if is_doc:
                             file_info = await extract_file_info(item)
+                            print(f"[DEBUG] Extracted file_info: {file_info}")
                             if file_info:
                                 parsed_text = await process_document_file(
                                     file_path=file_info.get('file_path'),
@@ -2040,29 +2052,40 @@ async def get_input_data_with_file_parsing(workitem: dict, process_definition: A
                                     print(f"[INFO] 파일 파싱 완료: {file_info.get('file_name')}")
                 
                 # 단일 값인 경우
-                elif is_document_file(field_value):
-                    file_info = await extract_file_info(field_value)
-                    if file_info:
-                        parsed_text = await process_document_file(
-                            file_path=file_info.get('file_path'),
-                            file_url=file_info.get('file_url'),
-                            file_name=file_info.get('file_name')
-                        )
-                        if parsed_text:
-                            file_key = f"{form_id}.{field_name}"
-                            parsed_files[file_key] = {
-                                'file_name': file_info.get('file_name'),
-                                'parsed_content': parsed_text
-                            }
-                            print(f"[INFO] 파일 파싱 완료: {file_info.get('file_name')}")
+                else:
+                    is_doc = is_document_file(field_value)
+                    print(f"[DEBUG] Field is_document_file: {is_doc}")
+                    if is_doc:
+                        file_info = await extract_file_info(field_value)
+                        print(f"[DEBUG] Extracted file_info: {file_info}")
+                        if file_info:
+                            parsed_text = await process_document_file(
+                                file_path=file_info.get('file_path'),
+                                file_url=file_info.get('file_url'),
+                                file_name=file_info.get('file_name')
+                            )
+                            print(f"[DEBUG] Parsed text length: {len(parsed_text) if parsed_text else 0}")
+                            if parsed_text:
+                                file_key = f"{form_id}.{field_name}"
+                                parsed_files[file_key] = {
+                                    'file_name': file_info.get('file_name'),
+                                    'parsed_content': parsed_text
+                                }
+                                print(f"[INFO] 파일 파싱 완료: {file_info.get('file_name')}, 길이: {len(parsed_text)}")
         
         # 파싱된 파일 정보를 input_data에 추가
+        print(f"[DEBUG] Total parsed files: {len(parsed_files)}")
         if parsed_files:
             input_data['_parsed_documents'] = parsed_files
+            print(f"[INFO] _parsed_documents 추가됨: {list(parsed_files.keys())}")
+        else:
+            print(f"[WARNING] No files were parsed")
         
         return input_data
 
     except Exception as e:
         print(f"[ERROR] Failed to get input data with file parsing for {workitem.get('id')}: {str(e)}")
+        import traceback
+        traceback.print_exc()
         # 에러 발생시 기본 입력 데이터라도 반환
         return get_input_data(workitem, process_definition)
