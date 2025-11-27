@@ -4,7 +4,7 @@ from langchain.output_parsers.json import SimpleJsonOutputParser
 from llm_factory import create_llm
 from datetime import datetime, timedelta
 
-from database import fetch_process_definition, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, fetch_workitem_by_id, upsert_process_definition, fetch_assignee_info, upsert_process_instance_source, fetch_process_instance
+from database import fetch_process_definition_by_version, fetch_organization_chart, upsert_workitem, fetch_workitem_by_proc_inst_and_activity, insert_process_instance, fetch_workitem_by_id, upsert_process_definition, fetch_assignee_info, upsert_process_instance_source, fetch_process_instance
 from process_definition import load_process_definition
 from compensation_handler import generate_compensation
 
@@ -67,7 +67,9 @@ async def create_process_instance(process_definition, process_instance_id, is_in
             "participants": participants,
             "status": "RUNNING" if is_initiate else "NEW",
             "role_bindings": role_bindings,
-            "start_date": datetime.now(pytz.timezone('Asia/Seoul')).isoformat()
+            "start_date": datetime.now(pytz.timezone('Asia/Seoul')).isoformat(),
+            "version_tag": getattr(process_definition, 'version_tag', None),
+            "version": getattr(process_definition, 'version', None),
         }
         insert_process_instance(process_instance_data)
     except Exception as e:
@@ -81,8 +83,10 @@ async def submit_workitem(input: dict):
     activity_id = input.get('activity_id')
     project_id = input.get('project_id')
     task_id = input.get('task_id')
+    version_tag = input.get('version_tag')
+    version = input.get('version')
     
-    process_definition_json = fetch_process_definition(process_definition_id)
+    process_definition_json = fetch_process_definition_by_version(process_definition_id, version_tag, version)
     process_definition = load_process_definition(process_definition_json)
     
     if task_id is not None:
@@ -170,6 +174,8 @@ async def submit_workitem(input: dict):
         workitem_data['due_date'] = workitem_data['due_date'].isoformat()
         workitem_data['retry'] = 0
         workitem_data['consumer'] = None
+        workitem_data['version_tag'] = version_tag
+        workitem_data['version'] = version
         
         revert_from = input.get('revert_from')
         if revert_from:
@@ -214,7 +220,9 @@ async def submit_workitem(input: dict):
             "description": description,
             "query": query,
             "project_id": project_id,
-            "root_proc_inst_id": process_instance_id
+            "root_proc_inst_id": process_instance_id,
+            "version_tag": version_tag,
+            "version": version
         }
     
     upsert_workitem(workitem_data)
@@ -264,9 +272,15 @@ async def handle_role_binding(request: Request):
         my_uuid = input.get('uuid')
         
         process_definition_id = input.get('proc_def_id')
+        version_tag = input.get('version_tag')
+        version = input.get('version')
         
         if process_definition_id:
-            process_definition = fetch_process_definition(process_definition_id)
+            process_definition = fetch_process_definition_by_version(
+                process_definition_id,
+                version_tag,
+                version,
+            )
             roles = process_definition.get('roles')
             if roles and isinstance(roles, list) and len(roles) > 0:
                 for role in roles:
@@ -319,7 +333,13 @@ async def handle_role_binding(request: Request):
 ############# start of initiate #############
 async def initiate_workitem(input: dict):
     process_definition_id = input.get('process_definition_id')
-    process_definition_json = fetch_process_definition(process_definition_id)
+    version_tag = input.get('version_tag')
+    version = input.get('version')
+    process_definition_json = fetch_process_definition_by_version(
+        process_definition_id,
+        version_tag,
+        version,
+    )
     process_definition = load_process_definition(process_definition_json)
     project_id = input.get('project_id')
     
@@ -430,14 +450,33 @@ feedback_chain = (
 async def handle_get_feedback(request: Request):
     try:
         body = await request.json()
-        
+
         process_definition_id = body.get('processDefinitionId')
-        process_definition_json = fetch_process_definition(process_definition_id)
-        process_definition = load_process_definition(process_definition_json)
-        
         activity_id = body.get('activityId')
         task_id = body.get('taskId')
         workitem = fetch_workitem_by_id(task_id)
+
+        # workitem 기반으로 버전/테넌트 정보 보완
+        if workitem and not process_definition_id:
+            process_definition_id = workitem.proc_def_id
+
+        version_tag = body.get('version_tag')
+        version = body.get('version')
+        tenant_id = getattr(workitem, "tenant_id", None) if workitem else None
+        arcv_id = None
+        if workitem and not version_tag and not version:
+            process_instance = fetch_process_instance(workitem.proc_inst_id)
+            if process_instance and getattr(process_instance, "proc_def_version", None):
+                arcv_id = process_instance.proc_def_version
+
+        process_definition_json = fetch_process_definition_by_version(
+            process_definition_id,
+            version_tag,
+            version,
+            tenant_id,
+            arcv_id,
+        )
+        process_definition = load_process_definition(process_definition_json)
         
         chain_input = {
             "process_definition": process_definition,
@@ -554,8 +593,26 @@ async def handle_get_feedback_diff(request: Request):
         
         task_id = body.get('taskId')
         workitem = fetch_workitem_by_id(task_id)
+        if not workitem:
+            raise HTTPException(status_code=400, detail="No workitem found")
+
         process_definition_id = workitem.proc_def_id
-        process_definition_json = fetch_process_definition(process_definition_id)
+        version_tag = body.get('version_tag')
+        version = body.get('version')
+        tenant_id = workitem.tenant_id
+        arcv_id = None
+        if not version_tag and not version:
+            process_instance = fetch_process_instance(workitem.proc_inst_id)
+            if process_instance and getattr(process_instance, "proc_def_version", None):
+                arcv_id = process_instance.proc_def_version
+
+        process_definition_json = fetch_process_definition_by_version(
+            process_definition_id,
+            version_tag,
+            version,
+            tenant_id,
+            arcv_id,
+        )
         process_definition = load_process_definition(process_definition_json)
         
         activity_id = workitem.activity_id
@@ -628,8 +685,17 @@ async def get_reference_workitems(workitem):
     try:
         reference_workitems = [workitem]
         
-        # 프로세스 정의 가져오기
-        process_definition_json = fetch_process_definition(workitem.proc_def_id)
+        # 프로세스 정의 가져오기 (인스턴스에 저장된 버전 우선)
+        process_instance = fetch_process_instance(workitem.proc_inst_id)
+        arcv_id = None
+        if process_instance and getattr(process_instance, "proc_def_version", None):
+            arcv_id = process_instance.proc_def_version
+
+        process_definition_json = fetch_process_definition_by_version(
+            workitem.proc_def_id,
+            tenant_id=workitem.tenant_id,
+            arcv_id=arcv_id,
+        )
         if not process_definition_json:
             return reference_workitems
             
@@ -676,7 +742,16 @@ async def get_reference_workitems(workitem):
 async def get_all_next_workitems(workitem):
     try:
         process_definition_id = workitem.proc_def_id
-        process_definition_json = fetch_process_definition(process_definition_id)
+        process_instance = fetch_process_instance(workitem.proc_inst_id)
+        arcv_id = None
+        if process_instance and getattr(process_instance, "proc_def_version", None):
+            arcv_id = process_instance.proc_def_version
+
+        process_definition_json = fetch_process_definition_by_version(
+            process_definition_id,
+            tenant_id=workitem.tenant_id,
+            arcv_id=arcv_id,
+        )
         process_definition = load_process_definition(process_definition_json)
 
         next_activities = process_definition.find_all_following_activities(workitem.activity_id)

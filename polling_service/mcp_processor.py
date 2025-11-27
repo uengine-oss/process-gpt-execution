@@ -3,7 +3,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
 import os
 from dotenv import load_dotenv
-from database import fetch_tenant_mcp_config, fetch_process_definition, fetch_workitem_by_proc_inst_and_activity
+from database import fetch_tenant_mcp_config, fetch_process_definition_by_version, fetch_workitem_by_proc_inst_and_activity, fetch_process_instance
 from process_definition import load_process_definition
 from langchain.tools import StructuredTool
 from pydantic import BaseModel
@@ -137,8 +137,26 @@ class MCPProcessor:
                 tools = [tools]
 
             await self.initialize_mcp_client(tenant_id, agent_info)
-            
-            process_definition_json = fetch_process_definition(workitem.get('proc_def_id'), tenant_id)
+
+            proc_def_id = workitem.get('proc_def_id')
+            version_tag = workitem.get('version_tag')
+            version = workitem.get('version')
+            arcv_id = None
+            if not version_tag and not version and workitem.get('proc_inst_id'):
+                try:
+                    process_instance = fetch_process_instance(workitem.get('proc_inst_id'), tenant_id)
+                    if process_instance and getattr(process_instance, "proc_def_version", None):
+                        arcv_id = process_instance.proc_def_version
+                except Exception as e:
+                    print(f"[WARN] Failed to fetch process instance for MCP version: {e}")
+
+            process_definition_json = fetch_process_definition_by_version(
+                proc_def_id,
+                version_tag,
+                version,
+                tenant_id,
+                arcv_id,
+            )
             process_definition = load_process_definition(process_definition_json)
             activity = process_definition.find_activity_by_id(workitem.get('activity_id'))
             if not activity:

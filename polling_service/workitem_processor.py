@@ -19,7 +19,7 @@ import time
 import ast
 
 from database import (
-    fetch_process_definition, fetch_process_instance, fetch_ui_definition,
+    fetch_process_definition_by_version, fetch_process_instance, fetch_ui_definition,
     fetch_ui_definition_by_activity_id, fetch_ui_definitions_by_def_id, fetch_user_info, fetch_assignee_info, 
     fetch_workitem_by_proc_inst_and_activity, upsert_process_instance, 
     upsert_completed_workitem, upsert_next_workitems, upsert_chat_message, 
@@ -1278,7 +1278,23 @@ def get_workitem_position(workitem: dict) -> Tuple[bool, bool]:
     
     try:
         # 프로세스 정의 조회
-        process_definition_json = fetch_process_definition(proc_def_id, tenant_id)
+        # 1순위: 워크아이템에 저장된 version_tag / version
+        version_tag = workitem.get('version_tag')
+        version = workitem.get('version')
+
+        # 2순위: 인스턴스에 저장된 proc_def_version(arcv_id)
+        process_instance = fetch_process_instance(proc_inst_id, tenant_id)
+        arcv_id = None
+        if process_instance and getattr(process_instance, "proc_def_version", None):
+            arcv_id = process_instance.proc_def_version
+
+        process_definition_json = fetch_process_definition_by_version(
+            proc_def_id,
+            version_tag,
+            version,
+            tenant_id,
+            arcv_id,
+        )
         process_definition = load_process_definition(process_definition_json)
         
         # 첫 번째 액티비티 확인 (startEvent와 연결된 액티비티)
@@ -3320,7 +3336,23 @@ async def handle_workitem(workitem):
     process_instance_id = workitem['proc_inst_id']
     tenant_id = workitem['tenant_id']
 
-    process_definition_json = fetch_process_definition(process_definition_id, tenant_id)
+    # 1순위: 워크아이템에 저장된 버전 정보
+    version_tag = workitem.get('version_tag')
+    version = workitem.get('version')
+
+    # 2순위: 인스턴스에 저장된 proc_def_version(arcv_id)
+    process_instance = fetch_process_instance(process_instance_id, tenant_id)
+    arcv_id = None
+    if process_instance and getattr(process_instance, "proc_def_version", None):
+        arcv_id = process_instance.proc_def_version
+
+    process_definition_json = fetch_process_definition_by_version(
+        process_definition_id,
+        version_tag,
+        version,
+        tenant_id,
+        arcv_id,
+    )
     process_definition = load_process_definition(process_definition_json)
 
     if workitem['user_id'] != "external_customer":
@@ -3777,7 +3809,23 @@ async def handle_pending_workitem(workitem):
             print(f"[DEBUG] handle_pending_workitem: parent workitem is not PENDING (id={wid})")
             return
 
-        process_definition_json = fetch_process_definition(proc_def_id, tenant_id)
+        # 1순위: 워크아이템에 저장된 버전 정보
+        version_tag = workitem.get('version_tag')
+        version = workitem.get('version')
+
+        # 2순위: 인스턴스에 저장된 proc_def_version(arcv_id)
+        process_instance = fetch_process_instance(workitem.get('proc_inst_id'), tenant_id)
+        arcv_id = None
+        if process_instance and getattr(process_instance, "proc_def_version", None):
+            arcv_id = process_instance.proc_def_version
+
+        process_definition_json = fetch_process_definition_by_version(
+            proc_def_id,
+            version_tag,
+            version,
+            tenant_id,
+            arcv_id,
+        )
         process_definition = load_process_definition(process_definition_json)
         activity = process_definition.find_activity_by_id(workitem.get('activity_id'))
         if not activity:

@@ -285,6 +285,109 @@ def fetch_process_definition(def_id, tenant_id: Optional[str] = None):
         raise HTTPException(status_code=404, detail=f"No process definition found with ID {def_id}: {e}")
 
 
+def fetch_process_definition_by_version(
+    def_id: str,
+    version_tag: Optional[str] = None,
+    version: Optional[Union[str, int]] = None,
+    tenant_id: Optional[str] = None,
+    arcv_id: Optional[str] = None,
+):
+    """
+    version_tag / version 기준으로 프로세스 정의를 조회하는 헬퍼.
+
+    - version_tag == "major": proc_def_version(버전 아카이브 뷰/테이블)에서 조회
+      * version 이 주어지면 해당 version 레코드 우선 조회
+      * 없으면 최신 version(내림차순) 사용
+    - version_tag == "minor" 또는 None/기타: 현재 proc_def 테이블에서 조회
+
+    가능한 경우 기존 헬퍼(fetch_process_definition, fetch_process_definition_latest_version)를 재사용합니다.
+    """
+    tag = (version_tag or "").lower()
+
+    if arcv_id:
+        try:
+            versions = fetch_process_definition_version_by_arcv_id(def_id, arcv_id, tenant_id)
+            if versions and len(versions) > 0:
+                row = versions[0]
+                definition = row.get("definition", None)
+                if isinstance(definition, dict):
+                    if "version" not in definition:
+                        definition["version"] = row.get("version")
+                    if "version_tag" not in definition:
+                        definition["version_tag"] = "major"
+                return definition
+        except Exception:
+            # arcv_id 조회 실패 시 아래 공통 로직으로 폴백
+            pass
+
+    # minor 이거나 태그가 없으면 현재 정의에서 조회 (기존 동작 유지)
+    if tag != "major":
+        definition = fetch_process_definition(def_id, tenant_id)
+        # definition에 요청 기반 버전 메타 정보 주입
+        if isinstance(definition, dict):
+            if "version" not in definition:
+                definition["version"] = version
+            if "version_tag" not in definition:
+                # 태그가 없으면 minor 취급
+                definition["version_tag"] = version_tag or "minor"
+        return definition
+
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        # 1) version 이 명시된 경우: 해당 버전 우선 조회
+        if version is not None:
+            response = (
+                supabase.table("proc_def_version")
+                .select("*")
+                .eq("proc_def_id", def_id.lower())
+                .eq("tenant_id", tenant_id)
+                .eq("version", str(version))
+                .execute()
+            )
+            if response.data and len(response.data) > 0:
+                row = response.data[0]
+                definition = row.get("definition", None)
+                if isinstance(definition, dict):
+                    if "version" not in definition:
+                        definition["version"] = row.get("version")
+                    if "version_tag" not in definition:
+                        definition["version_tag"] = "major"
+                return definition
+
+        # 2) 명시된 버전이 없거나, 해당 버전이 없으면 최신 버전 사용
+        latest = fetch_process_definition_latest_version(def_id, tenant_id)
+        if latest:
+            definition = latest.get("definition", None)
+            if isinstance(definition, dict):
+                if "version" not in definition:
+                    definition["version"] = latest.get("version")
+                if "version_tag" not in definition:
+                    definition["version_tag"] = "major"
+            return definition
+
+        # 3) 아카이브에도 없으면 기본 정의로 폴백
+        definition = fetch_process_definition(def_id, tenant_id)
+        if isinstance(definition, dict):
+            if "version" not in definition:
+                definition["version"] = version
+            if "version_tag" not in definition:
+                definition["version_tag"] = "major"
+        return definition
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No process definition found with ID {def_id} for version_tag={version_tag}, version={version}: {e}",
+        )
+
+
 def upsert_process_definition(definition: dict, tenant_id: Optional[str] = None):
     try:
         supabase = supabase_client_var.get()
@@ -323,7 +426,7 @@ def fetch_process_definition_versions(def_id, tenant_id: Optional[str] = None):
             tenant_id = subdomain
 
 
-        response = supabase.table('proc_def_arcv').select('*').eq('proc_def_id', def_id.lower()).eq('tenant_id', tenant_id).execute()
+        response = supabase.table('proc_def_version').select('*').eq('proc_def_id', def_id.lower()).eq('tenant_id', tenant_id).execute()
         
         return response.data
     except Exception as e:
@@ -361,7 +464,7 @@ def fetch_process_definition_latest_version(def_id, tenant_id: Optional[str] = N
             tenant_id = subdomain
 
 
-        response = supabase.table('proc_def_arcv').select('*').eq('proc_def_id', def_id.lower()).eq('tenant_id', tenant_id).order('version', desc=True).execute()
+        response = supabase.table('proc_def_version').select('*').eq('proc_def_id', def_id.lower()).eq('tenant_id', tenant_id).order('version', desc=True).execute()
         
         if response.data:
             return response.data[0]
@@ -452,7 +555,13 @@ class ProcessInstance(BaseModel):
         super().__init__(**data)
         def_id = self.get_def_id()
         tenant_id = self.tenant_id
-        self.process_definition = load_process_definition(fetch_process_definition(def_id, tenant_id))  # Load ProcessDefinition
+        # proc_def_version(arcv_id)가 있으면 해당 버전 정의를 우선 사용
+        definition_json = fetch_process_definition_by_version(
+            def_id,
+            tenant_id=tenant_id,
+            arcv_id=self.proc_def_version,
+        )
+        self.process_definition = load_process_definition(definition_json)  # Load ProcessDefinition
 
 
     def get_def_id(self):
@@ -889,7 +998,6 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
                 workitem_dict["end_date"] = workitem.end_date.isoformat() if workitem.end_date else None
                 workitem_dict["due_date"] = workitem.due_date.isoformat() if workitem.due_date else None
-
 
                 supabase = supabase_client_var.get()
                 if supabase is None:
@@ -1538,8 +1646,17 @@ def fetch_events_by_proc_inst_id_until_activity(
         if not tenant_id:
             tenant_id = subdomain
         
-        # 1. 프로세스 정의 가져오기
-        process_definition_json = fetch_process_definition(proc_def_id, tenant_id)
+        # 1. 프로세스 정의 가져오기 (인스턴스에 저장된 버전 우선 사용)
+        instance = fetch_process_instance(proc_inst_id, tenant_id)
+        arcv_id = None
+        if instance and getattr(instance, "proc_def_version", None):
+            arcv_id = instance.proc_def_version
+
+        process_definition_json = fetch_process_definition_by_version(
+            proc_def_id,
+            tenant_id=tenant_id,
+            arcv_id=arcv_id,
+        )
         if not process_definition_json:
             print(f"[ERROR] Process definition not found for {proc_def_id}")
             return []

@@ -1,6 +1,6 @@
 from supabase import create_client, Client
 from pydantic import BaseModel, validator
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import SupabaseVectorStore
 from process_definition import ProcessDefinition, load_process_definition, UIDefinition
@@ -20,6 +20,7 @@ import json
 
 supabase_client_var = ContextVar('supabase', default=None)
 subdomain_var = ContextVar('subdomain', default='localhost')
+CONSUMER_FILTER = os.getenv("WORKITEM_CONSUMER")
 
 
 def setting_database():
@@ -29,6 +30,20 @@ def setting_database():
         supabase_url = os.getenv("SUPABASE_URL")
         supabase_key = os.getenv("SUPABASE_KEY")
         supabase: Client = create_client(supabase_url, supabase_key)
+        # Optional: attach Authorization header from env for PostgREST if provided
+        extra_auth = os.getenv("SUPABASE_AUTHORIZATION")
+        if extra_auth:
+            try:
+                # Always set raw Authorization header as-is (including Bearer ...)
+                try:
+                    supabase.postgrest.headers["Authorization"] = extra_auth
+                except Exception:
+                    try:
+                        supabase.postgrest.client.headers["Authorization"] = extra_auth  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"[WARN] Failed to apply SUPABASE_AUTHORIZATION header: {e}")
         supabase_client_var.set(supabase)
         
         print(f"[INFO] Supabase client configured successfully")
@@ -109,6 +124,141 @@ def fetch_process_definition(def_id, tenant_id: Optional[str] = None):
         raise HTTPException(status_code=404, detail=f"No process definition found with ID {def_id}: {e}")
 
 
+def fetch_process_definition_version_by_arcv_id(def_id, arcv_id, tenant_id: Optional[str] = None):
+    """
+    proc_def_arcv / proc_def_version 에 저장된 특정 arcv_id 버전의 프로세스 정의를 조회합니다.
+    """
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        # 루트 모듈과 동일하게 proc_def_arcv 기준으로 조회
+        response = (
+            supabase.table("proc_def_arcv")
+            .select("*")
+            .eq("proc_def_id", def_id.lower())
+            .eq("arcv_id", arcv_id)
+            .eq("tenant_id", tenant_id)
+            .execute()
+        )
+
+        return response.data
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No process definition version found with ID {def_id} and version {arcv_id}: {e}",
+        )
+
+
+def fetch_process_definition_by_version(
+    def_id: str,
+    version_tag: Optional[str] = None,
+    version: Optional[Union[str, int]] = None,
+    tenant_id: Optional[str] = None,
+    arcv_id: Optional[str] = None,
+):
+    """
+    version_tag / version / arcv_id 기준으로 프로세스 정의를 조회하는 헬퍼.
+
+    - arcv_id 가 주어지면: 해당 아카이브 버전(definition) 우선 조회
+    - version_tag == "major": proc_def_version(버전 뷰/테이블)에서 조회
+      * version 이 주어지면 해당 version 레코드 우선 조회
+      * 없으면 최신 version(내림차순) 사용
+    - 그 외(minor/None): 현재 proc_def 테이블에서 조회
+    """
+    tag = (version_tag or "").lower()
+
+    # 0) arcv_id가 주어진 경우: 특정 아카이브 버전 우선 조회
+    if arcv_id:
+        try:
+            versions = fetch_process_definition_version_by_arcv_id(def_id, arcv_id, tenant_id)
+            if versions and len(versions) > 0:
+                row = versions[0]
+                definition = row.get("definition", None)
+                # definition에 버전 메타 정보 주입
+                if isinstance(definition, dict):
+                    if "version" not in definition:
+                        definition["version"] = row.get("version")
+                    if "version_tag" not in definition:
+                        definition["version_tag"] = "major"
+                return definition
+        except Exception:
+            # arcv_id 조회 실패 시 아래 공통 로직으로 폴백
+            pass
+
+    # minor 이거나 태그가 없으면 현재 정의에서 조회
+    if tag != "major":
+        definition = fetch_process_definition(def_id, tenant_id)
+        # definition에 요청 기반 버전 메타 정보 주입
+        if isinstance(definition, dict):
+            if "version" not in definition:
+                definition["version"] = version
+            if "version_tag" not in definition:
+                definition["version_tag"] = version_tag or "minor"
+        return definition
+
+    # major 태그: proc_def_version/최신 버전 기준
+    try:
+        supabase = supabase_client_var.get()
+        if supabase is None:
+            raise Exception("Supabase client is not configured for this request")
+
+        subdomain = subdomain_var.get()
+        if not tenant_id:
+            tenant_id = subdomain
+
+        # 1) version 이 명시된 경우: 해당 버전 우선 조회
+        if version is not None:
+            response = (
+                supabase.table("proc_def_version")
+                .select("*")
+                .eq("proc_def_id", def_id.lower())
+                .eq("tenant_id", tenant_id)
+                .eq("version", str(version))
+                .execute()
+            )
+            if response.data and len(response.data) > 0:
+                row = response.data[0]
+                definition = row.get("definition", None)
+                if isinstance(definition, dict):
+                    if "version" not in definition:
+                        definition["version"] = row.get("version")
+                    if "version_tag" not in definition:
+                        definition["version_tag"] = "major"
+                return definition
+
+        # 2) 명시된 버전이 없거나, 해당 버전이 없으면 최신 버전 사용
+        latest = fetch_process_definition_latest_version(def_id, tenant_id)
+        if latest:
+            definition = latest.get("definition", None)
+            if isinstance(definition, dict):
+                if "version" not in definition:
+                    definition["version"] = latest.get("version")
+                if "version_tag" not in definition:
+                    definition["version_tag"] = "major"
+            return definition
+
+        # 3) 아카이브/버전 뷰에도 없으면 기본 정의로 폴백
+        definition = fetch_process_definition(def_id, tenant_id)
+        if isinstance(definition, dict):
+            if "version" not in definition:
+                definition["version"] = version
+            if "version_tag" not in definition:
+                definition["version_tag"] = "major"
+        return definition
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No process definition found with ID {def_id} for version_tag={version_tag}, version={version}: {e}",
+        )
+
+
 def fetch_process_definition_latest_version(def_id, tenant_id: Optional[str] = None):
     try:
         supabase = supabase_client_var.get()
@@ -121,7 +271,7 @@ def fetch_process_definition_latest_version(def_id, tenant_id: Optional[str] = N
             tenant_id = subdomain
 
 
-        response = supabase.table('proc_def_arcv').select('*').eq('proc_def_id', def_id.lower()).eq('tenant_id', tenant_id).order('version', desc=True).execute()
+        response = supabase.table('proc_def_version').select('*').eq('proc_def_id', def_id.lower()).eq('tenant_id', tenant_id).order('version', desc=True).execute()
         
         if response.data and len(response.data) > 0:
             return response.data[0]
@@ -214,7 +364,13 @@ class ProcessInstance(BaseModel):
         super().__init__(**data)
         def_id = self.get_def_id()
         tenant_id = self.tenant_id
-        self.process_definition = load_process_definition(fetch_process_definition(def_id, tenant_id))  # Load ProcessDefinition
+        # proc_def_version(arcv_id)가 있으면 해당 버전 정의를 우선 사용
+        definition_json = fetch_process_definition_by_version(
+            def_id,
+            tenant_id=tenant_id,
+            arcv_id=self.proc_def_version,
+        )
+        self.process_definition = load_process_definition(definition_json)  # Load ProcessDefinition
 
 
     def get_def_id(self):
@@ -262,6 +418,8 @@ class WorkItem(BaseModel):
     rework_count: Optional[int] = 0
     project_id: Optional[str] = None
     query: Optional[str] = None
+    version_tag: Optional[str] = None
+    version: Optional[str] = None
     
     @validator('start_date', 'end_date', 'due_date', pre=True)
     def parse_datetime(cls, value):
@@ -630,12 +788,22 @@ def fetch_workitem_with_submitted_status(limit=10) -> Optional[List[dict]]:
             raise Exception("Supabase client is not configured for this request")
         
         # Supabase Client API를 사용하여 워크아이템 조회 및 업데이트
-        # 먼저 SUBMITTED 상태이고 consumer가 NULL인 워크아이템들을 조회
+        # 먼저 SUBMITTED 상태이고 consumer가 NULL(필터 미설정) 또는 CONSUMER_FILTER(필터 설정)인 워크아이템들을 조회
         env = os.getenv("ENV")
         if env == 'dev':
-            response = supabase.table('todolist').select('*').eq('status', 'SUBMITTED').is_('consumer', 'null').eq('tenant_id', 'uengine').limit(limit).execute()
+            q = supabase.table('todolist').select('*').eq('status', 'SUBMITTED').eq('tenant_id', 'uengine')
+            if CONSUMER_FILTER:
+                q = q.eq('consumer', CONSUMER_FILTER)
+            else:
+                q = q.is_('consumer', 'null')
+            response = q.limit(limit).execute()
         else:
-            response = supabase.table('todolist').select('*').eq('status', 'SUBMITTED').is_('consumer', 'null').neq('tenant_id', 'uengine').limit(limit).execute()
+            q = supabase.table('todolist').select('*').eq('status', 'SUBMITTED').neq('tenant_id', 'uengine')
+            if CONSUMER_FILTER:
+                q = q.eq('consumer', CONSUMER_FILTER)
+            else:
+                q = q.is_('consumer', 'null')
+            response = q.limit(limit).execute()
         
         if not response.data:
             return None
@@ -651,10 +819,15 @@ def fetch_workitem_with_submitted_status(limit=10) -> Optional[List[dict]]:
             try:
                 # 배치 업데이트 시도
                 current_time = datetime.now().isoformat()
-                batch_update_response = supabase.table('todolist').update({
+                q_upd = supabase.table('todolist').update({
                     'consumer': pod_id,
                     'updated_at': current_time
-                }).in_('id', workitem_ids).eq('status', 'SUBMITTED').is_('consumer', 'null').execute()
+                }).in_('id', workitem_ids).eq('status', 'SUBMITTED')
+                if CONSUMER_FILTER:
+                    q_upd = q_upd.eq('consumer', CONSUMER_FILTER)
+                else:
+                    q_upd = q_upd.is_('consumer', 'null')
+                batch_update_response = q_upd.execute()
                 
                 if batch_update_response.data:
                     updated_workitems = batch_update_response.data
@@ -668,10 +841,15 @@ def fetch_workitem_with_submitted_status(limit=10) -> Optional[List[dict]]:
                 # 배치 업데이트가 실패하면 개별 업데이트로 폴백
                 for workitem in response.data:
                     try:
-                        update_response = supabase.table('todolist').update({
+                        q_one = supabase.table('todolist').update({
                             'consumer': pod_id,
                             'updated_at': datetime.now().isoformat()
-                        }).eq('id', workitem['id']).eq('status', 'SUBMITTED').is_('consumer', 'null').execute()
+                        }).eq('id', workitem['id']).eq('status', 'SUBMITTED')
+                        if CONSUMER_FILTER:
+                            q_one = q_one.eq('consumer', CONSUMER_FILTER)
+                        else:
+                            q_one = q_one.is_('consumer', 'null')
+                        update_response = q_one.execute()
                         
                         if update_response.data:
                             updated_workitems.append(update_response.data[0])
@@ -699,9 +877,19 @@ def fetch_workitem_with_agent(limit=5) -> Optional[List[dict]]:
         # Supabase Client API를 사용하여 에이전트 워크아이템 조회 및 업데이트
         env = os.getenv("ENV")
         if env == 'dev':
-            response = supabase.table('todolist').select('*').eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').is_('consumer', 'null').eq('tenant_id', 'uengine').limit(limit).execute()
+            q = supabase.table('todolist').select('*').eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').eq('tenant_id', 'uengine')
+            if CONSUMER_FILTER:
+                q = q.eq('consumer', CONSUMER_FILTER)
+            else:
+                q = q.is_('consumer', 'null')
+            response = q.limit(limit).execute()
         else:
-            response = supabase.table('todolist').select('*').eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').is_('consumer', 'null').neq('tenant_id', 'uengine').limit(limit).execute()
+            q = supabase.table('todolist').select('*').eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').neq('tenant_id', 'uengine')
+            if CONSUMER_FILTER:
+                q = q.eq('consumer', CONSUMER_FILTER)
+            else:
+                q = q.is_('consumer', 'null')
+            response = q.limit(limit).execute()
         
         if not response.data:
             return None
@@ -712,10 +900,15 @@ def fetch_workitem_with_agent(limit=5) -> Optional[List[dict]]:
         for workitem in response.data:
             try:
                 # 조건부 업데이트: consumer가 여전히 NULL인 경우에만 업데이트
-                update_response = supabase.table('todolist').update({
+                q_one = supabase.table('todolist').update({
                     'consumer': pod_id,
                     'updated_at': datetime.now().isoformat()
-                }).eq('id', workitem['id']).eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').is_('consumer', 'null').execute()
+                }).eq('id', workitem['id']).eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A')
+                if CONSUMER_FILTER:
+                    q_one = q_one.eq('consumer', CONSUMER_FILTER)
+                else:
+                    q_one = q_one.is_('consumer', 'null')
+                update_response = q_one.execute()
                 
                 if update_response.data:
                     updated_workitems.append(update_response.data[0])
@@ -741,9 +934,19 @@ def fetch_workitem_with_pending_status(limit=5) -> Optional[List[dict]]:
         
         env = os.getenv("ENV")
         if env == 'dev':
-            response = supabase.table('todolist').select('*').eq('status', 'PENDING').is_('consumer', 'null').eq('tenant_id', 'uengine').limit(limit).execute()
+            q = supabase.table('todolist').select('*').eq('status', 'PENDING').eq('tenant_id', 'uengine')
+            if CONSUMER_FILTER:
+                q = q.eq('consumer', CONSUMER_FILTER)
+            else:
+                q = q.is_('consumer', 'null')
+            response = q.limit(limit).execute()
         else:
-            response = supabase.table('todolist').select('*').eq('status', 'PENDING').is_('consumer', 'null').neq('tenant_id', 'uengine').limit(limit).execute()
+            q = supabase.table('todolist').select('*').eq('status', 'PENDING').neq('tenant_id', 'uengine')
+            if CONSUMER_FILTER:
+                q = q.eq('consumer', CONSUMER_FILTER)
+            else:
+                q = q.is_('consumer', 'null')
+            response = q.limit(limit).execute()
         
         
         if not response.data:
@@ -770,9 +973,13 @@ def cleanup_stale_consumers():
         thirty_minutes_ago = (datetime.now() - timedelta(minutes=30)).isoformat()
         
         # 오래된 consumer를 NULL로 업데이트
-        response = supabase.table('todolist').update({
+        q = supabase.table('todolist').update({
             'consumer': None
-        }).eq('status', 'SUBMITTED').not_.is_('consumer', 'null').lt('updated_at', thirty_minutes_ago).execute()
+        }).eq('status', 'SUBMITTED').not_.is_('consumer', 'null').lt('updated_at', thirty_minutes_ago)
+        # CONSUMER_FILTER는 NULL 취급 → 정리 대상에서 제외
+        if CONSUMER_FILTER:
+            q = q.neq('consumer', CONSUMER_FILTER)
+        response = q.execute()
         
         if response.data:
             updated_count = len(response.data)
@@ -939,7 +1146,9 @@ def upsert_completed_workitem(process_instance_data, process_result_data, proces
                     agent_mode=safeget(activity, 'agentMode', None),
                     log=log,
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
-                    execution_scope=execution_scope
+                    execution_scope=execution_scope,
+                    version_tag=getattr(process_definition, "version_tag", None),
+                    version=getattr(process_definition, "version", None),
                 )
             
             
@@ -1071,7 +1280,9 @@ def upsert_cancelled_workitem(process_instance_data, process_result_data, proces
                     agent_orch=agent_orch,
                     agent_mode=safeget(activity, 'agentMode', None),
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
-                    execution_scope=execution_scope
+                    execution_scope=execution_scope,
+                    version_tag=getattr(process_definition, "version_tag", None),
+                    version=getattr(process_definition, "version", None),
                 )
                 
             workitem_dict = workitem.model_dump()
@@ -1185,7 +1396,9 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     query=query,
                     agent_orch=agent_orch,
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
-                    execution_scope=execution_scope
+                    execution_scope=execution_scope,
+                    version_tag=getattr(process_definition, "version_tag", None),
+                    version=getattr(process_definition, "version", None),
                 )
         
         try:
@@ -1353,7 +1566,9 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     query=query,
                     agent_orch=agent_orch,
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
-                    execution_scope=execution_scope
+                    execution_scope=execution_scope,
+                    version_tag=getattr(process_definition, "version_tag", None),
+                    version=getattr(process_definition, "version", None),
                 )
                 workitem_dict = workitem.model_dump()
                 workitem_dict["start_date"] = workitem.start_date.isoformat() if workitem.start_date else None
