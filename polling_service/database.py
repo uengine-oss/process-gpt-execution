@@ -16,6 +16,7 @@ import socket
 import os
 import uuid
 import json
+import asyncio
 
 
 supabase_client_var = ContextVar('supabase', default=None)
@@ -1124,8 +1125,25 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                 if workitem.agent_mode == 'COMPLETE' and (workitem.agent_orch == 'none' or workitem.agent_orch == None):
                     workitem.agent_orch = 'crewai-deep-research'
             
-            # 입력 데이터 추가
-            input_data = get_input_data(workitem.model_dump(), process_definition)
+            # 입력 데이터 추가 (파일 파싱 포함)
+            try:
+                # 비동기 함수를 동기 컨텍스트에서 실행
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # 이미 실행 중인 이벤트 루프가 있으면 새 태스크로 실행
+                    import nest_asyncio
+                    nest_asyncio.apply()
+                    input_data = loop.run_until_complete(
+                        get_input_data_with_file_parsing(workitem.model_dump(), process_definition)
+                    )
+                else:
+                    input_data = asyncio.run(
+                        get_input_data_with_file_parsing(workitem.model_dump(), process_definition)
+                    )
+            except Exception as e:
+                print(f"[WARNING] 파일 파싱 중 오류 발생, 기본 방식으로 전환: {str(e)}")
+                input_data = get_input_data(workitem.model_dump(), process_definition)
+            
             if input_data:
                 try:
                     input_data_str = json.dumps(input_data, ensure_ascii=False)
@@ -1187,6 +1205,38 @@ def upsert_next_workitems(process_instance_data, process_result_data, process_de
                     root_proc_inst_id=process_instance_data['root_proc_inst_id'],
                     execution_scope=execution_scope
                 )
+                
+                # 새로 생성된 workitem에도 입력 데이터 추가 (파일 파싱 포함)
+                try:
+                    # 비동기 함수를 동기 컨텍스트에서 실행
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # 이미 실행 중인 이벤트 루프가 있으면 새 태스크로 실행
+                        import nest_asyncio
+                        nest_asyncio.apply()
+                        input_data = loop.run_until_complete(
+                            get_input_data_with_file_parsing(workitem.model_dump(), process_definition)
+                        )
+                    else:
+                        input_data = asyncio.run(
+                            get_input_data_with_file_parsing(workitem.model_dump(), process_definition)
+                        )
+                except Exception as e:
+                    print(f"[WARNING] 파일 파싱 중 오류 발생, 기본 방식으로 전환: {str(e)}")
+                    input_data = get_input_data(workitem.model_dump(), process_definition)
+                
+                if input_data:
+                    try:
+                        input_data_str = json.dumps(input_data, ensure_ascii=False)
+                    except Exception:
+                        input_data_str = str(input_data)
+                    
+                    if workitem.query and '[InputData]' in workitem.query:
+                        workitem.query = workitem.query.split('[InputData]')[0] + f"[InputData]\n{input_data_str}"
+                    else:
+                        workitem.query = f"{workitem.query}\n[InputData]\n{input_data_str}"
+                    
+                    print(f"[INFO] 새 workitem에 입력 데이터 추가 완료 (파일 파싱 포함): {workitem.id}")
         
         try:
             if workitem:
@@ -1332,6 +1382,12 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     if instruction:
                         query += f"[Instruction]\n{instruction}\n\n"
 
+                # tool 결정: activity type에 'task'가 포함되고 tool이 비어있으면 'defaultForm' 사용
+                activity_tool = safeget(activity, 'tool', '')
+                activity_type = safeget(activity, 'type', '').lower()
+                if not activity_tool and 'task' in activity_type:
+                    activity_tool = 'formHandler:defaultForm'
+
                 workitem = WorkItem(
                     id=f"{str(uuid.uuid4())}",
                     reference_ids=reference_ids if prev_activities else [],
@@ -1342,7 +1398,7 @@ def upsert_todo_workitems(process_instance_data, process_result_data, process_de
                     user_id=user_id,
                     username=username,
                     status=status,
-                    tool=safeget(activity, 'tool', ''),
+                    tool=activity_tool,
                     start_date=start_date,
                     due_date=due_date,
                     tenant_id=tenant_id,
@@ -1936,3 +1992,100 @@ def get_input_data(workitem: dict, process_definition: Any):
     except Exception as e:
         print(f"[ERROR] Failed to get selected info for {workitem.get('id')}: {str(e)}")
         return None
+
+
+async def get_input_data_with_file_parsing(workitem: dict, process_definition: Any):
+    """
+    워크아이템 실행에 필요한 입력 데이터 추출 (파일 파싱 포함)
+    문서 파일이 첨부된 경우 Upstage AI로 파싱 후 요약하여 추가
+    """
+    try:
+        from document_parser import (
+            is_document_file, 
+            extract_file_info, 
+            process_document_file
+        )
+        
+        # 기본 입력 데이터 가져오기
+        input_data = get_input_data(workitem, process_definition)
+        
+        print(f"[DEBUG] get_input_data_with_file_parsing - workitem: {workitem.get('id')}")
+        print(f"[DEBUG] input_data: {input_data}")
+        
+        if not input_data:
+            print(f"[WARNING] No input_data found")
+            return None
+        
+        # 파일 필드 검색 및 처리
+        parsed_files = {}
+        
+        for form_id, form_fields in input_data.items():
+            print(f"[DEBUG] Processing form: {form_id}, fields: {type(form_fields)}")
+            
+            if not isinstance(form_fields, dict):
+                continue
+                
+            for field_name, field_value in form_fields.items():
+                print(f"[DEBUG] Processing field: {field_name}, value type: {type(field_value)}")
+                print(f"[DEBUG] Field value: {field_value}")
+                
+                # 리스트인 경우 각 항목 확인
+                if isinstance(field_value, list):
+                    for idx, item in enumerate(field_value):
+                        is_doc = is_document_file(item)
+                        print(f"[DEBUG] List item {idx} is_document_file: {is_doc}")
+                        if is_doc:
+                            file_info = await extract_file_info(item)
+                            print(f"[DEBUG] Extracted file_info: {file_info}")
+                            if file_info:
+                                parsed_text = await process_document_file(
+                                    file_path=file_info.get('file_path'),
+                                    file_url=file_info.get('file_url'),
+                                    file_name=file_info.get('file_name')
+                                )
+                                if parsed_text:
+                                    file_key = f"{form_id}.{field_name}[{idx}]"
+                                    parsed_files[file_key] = {
+                                        'file_name': file_info.get('file_name'),
+                                        'parsed_content': parsed_text
+                                    }
+                                    print(f"[INFO] 파일 파싱 완료: {file_info.get('file_name')}")
+                
+                # 단일 값인 경우
+                else:
+                    is_doc = is_document_file(field_value)
+                    print(f"[DEBUG] Field is_document_file: {is_doc}")
+                    if is_doc:
+                        file_info = await extract_file_info(field_value)
+                        print(f"[DEBUG] Extracted file_info: {file_info}")
+                        if file_info:
+                            parsed_text = await process_document_file(
+                                file_path=file_info.get('file_path'),
+                                file_url=file_info.get('file_url'),
+                                file_name=file_info.get('file_name')
+                            )
+                            print(f"[DEBUG] Parsed text length: {len(parsed_text) if parsed_text else 0}")
+                            if parsed_text:
+                                file_key = f"{form_id}.{field_name}"
+                                parsed_files[file_key] = {
+                                    'file_name': file_info.get('file_name'),
+                                    'parsed_content': parsed_text
+                                }
+                                print(f"[INFO] 파일 파싱 완료: {file_info.get('file_name')}, 길이: {len(parsed_text)}")
+        
+        # 파싱된 파일 정보를 input_data에 추가
+        print(f"[DEBUG] Total parsed files: {len(parsed_files)}")
+        if parsed_files:
+            input_data['_parsed_documents'] = parsed_files
+            print(f"[INFO] _parsed_documents 추가됨: {list(parsed_files.keys())}")
+        else:
+            print(f"[WARNING] No files were parsed")
+        
+        return input_data
+
+    except Exception as e:
+        print(f"[ERROR] Failed to get input data with file parsing for {workitem.get('id')}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        # 에러 발생시 기본 입력 데이터라도 반환
+        return get_input_data(workitem, process_definition)
