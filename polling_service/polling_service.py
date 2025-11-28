@@ -9,6 +9,7 @@ from database import (
     fetch_process_instance, upsert_process_instance
 )
 from workitem_processor import handle_workitem, handle_service_workitem, handle_pending_workitem
+from file_cleanup_service import file_cleanup_polling_task
 
 # 전역 변수로 현재 실행 중인 태스크들을 추적
 running_tasks: Set[asyncio.Task] = set()
@@ -162,6 +163,10 @@ async def start_polling():
     # cleanup 태스크 시작
     cleanup_task_obj = asyncio.create_task(cleanup_task())
     print("[INFO] Cleanup task started")
+    
+    # 파일 정리 폴링 태스크 시작
+    file_cleanup_task_obj = asyncio.create_task(file_cleanup_polling_task(shutdown_event, polling_interval=300))
+    print("[INFO] File cleanup polling task started")
 
     while not shutdown_event.is_set():
         try:
@@ -186,6 +191,16 @@ async def start_polling():
         print("[INFO] Cleanup task cancelled successfully")
     except Exception as e:
         print(f"[ERROR] Error cancelling cleanup task: {e}")
+    
+    # 파일 정리 태스크 취소
+    print("[INFO] Cancelling file cleanup task...")
+    file_cleanup_task_obj.cancel()
+    try:
+        await file_cleanup_task_obj
+    except asyncio.CancelledError:
+        print("[INFO] File cleanup task cancelled successfully")
+    except Exception as e:
+        print(f"[ERROR] Error cancelling file cleanup task: {e}")
 
 async def graceful_shutdown():
     """Graceful shutdown을 위한 함수"""
