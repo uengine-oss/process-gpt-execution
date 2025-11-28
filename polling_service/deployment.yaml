@@ -78,8 +78,8 @@ spec:
             secretKeyRef:
               key: SMTP_PASSWORD
               name: my-secrets
-        - name: EXECUTION_SERVICE_URL
-          value: http://execution-service:8000
+        - name: COMPLETION_SERVICE_URL
+          value: http://completion-service:8000
         - name: MEMENTO_SERVICE_URL
           value: http://memento-service:8005
         - name: ENV

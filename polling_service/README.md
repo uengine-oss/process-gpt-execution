@@ -69,7 +69,7 @@ python main.py
 - `SMTP_USERNAME`: SMTP 사용자명
 - `SMTP_PASSWORD`: SMTP 비밀번호
 - `MEMENTO_SERVICE_URL`: Memento 서비스 URL (기본값: http://localhost:8005)
-- `EXECUTION_SERVICE_URL`: 실행 서비스 URL (기본값: http://localhost:8000)
+- `COMPLETION_SERVICE_URL`: 실행 서비스 URL (기본값: http://localhost:8000)
 - `LANGSMITH_API_KEY`: LangSmith API 키
 - `LANGSMITH_PROJECT`: LangSmith 프로젝트명
 

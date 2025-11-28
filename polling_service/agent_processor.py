@@ -98,7 +98,7 @@ output_processing_chain = (
     output_processing_prompt | model | parser
 )
 
-EXECUTION_SERVICE_URL = os.getenv("EXECUTION_SERVICE_URL", "http://execution-service:8000")
+COMPLETION_SERVICE_URL = os.getenv("COMPLETION_SERVICE_URL", "http://completion-service:8000")
 
 async def generate_agent_request_text(prev_workitem, current_workitem, tenant_id):
     """Step 1: LLM에게 output과 workitem 정보를 주고 에이전트 요청 텍스트 생성"""
@@ -140,11 +140,11 @@ async def send_request_to_agent(request_text, agent_url, current_workitem, proc_
             "log": f"에이전트에게 메시지를 전송 중 입니다..."
         }, current_workitem.tenant_id)
         
-        # execution-service의 API 엔드포인트 호출
-        logger.info(f"Calling execution service at {EXECUTION_SERVICE_URL}/multi-agent/chat")
+        # completion-service의 API 엔드포인트 호출
+        logger.info(f"Calling completion service at {COMPLETION_SERVICE_URL}/multi-agent/chat")
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                f"{EXECUTION_SERVICE_URL}/multi-agent/chat",
+                f"{COMPLETION_SERVICE_URL}/multi-agent/chat",
                 json={
                     "text": request_text,
                     "type": "a2a",
