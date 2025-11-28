@@ -15,7 +15,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # 지원하는 파일 확장자
-SUPPORTED_EXTENSIONS = {'.pdf', '.xlsx', '.xls', '.docx', '.doc', '.hwp', '.pptx', '.ppt'}
+SUPPORTED_EXTENSIONS = {'.pdf', '.xlsx', '.xls', '.xlsm', '.docx', '.doc', '.hwp', '.hwpx', '.pptx', '.ppt'}
 
 # 요약이 필요한 최소 문자 수 (약 5000자 이상이면 요약)
 SUMMARIZATION_THRESHOLD = 5000
