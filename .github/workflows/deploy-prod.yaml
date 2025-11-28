@@ -19,7 +19,7 @@ jobs:
       - name: Build and push Docker image to GHCR
         run: |
           IMAGE_TAG=$(echo $GITHUB_SHA | cut -c1-7)
-          IMAGE_NAME=ghcr.io/uengine-oss/process-gpt-execution:$IMAGE_TAG
+          IMAGE_NAME=ghcr.io/uengine-oss/process-gpt-completion:$IMAGE_TAG
 
           docker build -t $IMAGE_NAME .
           docker push $IMAGE_NAME
@@ -44,8 +44,8 @@ jobs:
         run: |
           cd gitops-repo
           
-          # Update execution deployment image
-          yq eval '.spec.template.spec.containers[0].image = "'$IMAGE_NAME'"' -i prod/deployments/execution-deployment.yaml
+          # Update completion deployment image
+          yq eval '.spec.template.spec.containers[0].image = "'$IMAGE_NAME'"' -i prod/deployments/completion-deployment.yaml
           
           echo "Updated image to: $IMAGE_NAME"
 
@@ -56,7 +56,7 @@ jobs:
           git config --local user.name "GitHub Action"
           
           git add .
-          git commit -m "Update execution image to $IMAGE_TAG" || exit 0
+          git commit -m "Update completion image to $IMAGE_TAG" || exit 0
           git push
 
       - name: Create deployment summary
