@@ -1,15 +1,18 @@
 import asyncio
 import signal
 from typing import Set
+import os
+import socket
 
 from database import (
     setting_database, fetch_workitem_with_submitted_status, 
     fetch_workitem_with_agent, upsert_workitem, cleanup_stale_consumers,
-    fetch_process_definition, fetch_workitem_with_pending_status,
+    fetch_process_definition_by_version, fetch_workitem_with_pending_status,
     fetch_process_instance, upsert_process_instance
 )
 from workitem_processor import handle_workitem, handle_service_workitem, handle_pending_workitem
 from file_cleanup_service import file_cleanup_polling_task
+CONSUMER_FILTER = os.getenv("WORKITEM_CONSUMER")  # 예: "worker-a"
 
 # 전역 변수로 현재 실행 중인 태스크들을 추적
 running_tasks: Set[asyncio.Task] = set()
@@ -17,6 +20,14 @@ shutdown_event = asyncio.Event()
 
 async def safe_handle_workitem(workitem):
     try:
+        # consumer 제외 규칙: consumer가 "CONSUMER_FILTER와 pod_id를 모두 포함"하면 스킵
+        if CONSUMER_FILTER:
+            current_consumer = str(workitem.get('consumer') or '')
+            pod_id = socket.gethostname()
+            if current_consumer and (CONSUMER_FILTER in current_consumer) and (pod_id in current_consumer):
+                print(f"[INFO] Skipping reserved workitem {workitem.get('id')} (consumer={current_consumer})")
+                return
+
         # 워크아이템 처리 시작 로그
         try:
             upsert_workitem({
@@ -28,7 +39,24 @@ async def safe_handle_workitem(workitem):
         
         if workitem['status'] == "SUBMITTED":
             print(f"[DEBUG] Starting safe_handle_workitem for workitem: {workitem['id']}")
-            process_definition = fetch_process_definition(workitem['proc_def_id'], workitem['tenant_id'])
+            version_tag = workitem.get('version_tag')
+            version = workitem.get('version')
+            tenant_id = workitem['tenant_id']
+            arcv_id = None
+            if not version_tag and not version and workitem.get('proc_inst_id'):
+                try:
+                    process_instance = fetch_process_instance(workitem['proc_inst_id'], tenant_id)
+                    if process_instance and getattr(process_instance, "proc_def_version", None):
+                        arcv_id = process_instance.proc_def_version
+                except Exception as e:
+                    print(f"[WARN] Failed to fetch process instance for version: {e}")
+            process_definition = fetch_process_definition_by_version(
+                workitem['proc_def_id'],
+                version_tag,
+                version,
+                tenant_id,
+                arcv_id,
+            )
             activities = process_definition.get('activities', [])
             
             task_type = 'userTask'
@@ -108,6 +136,14 @@ async def polling_workitem():
         print(f"[INFO] Processing {len(all_workitems)} workitems")
         tasks = []
         for workitem in all_workitems:
+            # consumer 제외 규칙: consumer가 "CONSUMER_FILTER와 pod_id를 모두 포함"하면 스킵
+            if CONSUMER_FILTER:
+                wi_consumer = str(workitem.get('consumer') or '')
+                pod_id = socket.gethostname()
+                if wi_consumer and (CONSUMER_FILTER in wi_consumer) and (pod_id in wi_consumer):
+                    print(f"[DEBUG] Skip reserved workitem {workitem.get('id')} (consumer={wi_consumer})")
+                    continue
+
             # shutdown 이벤트가 설정되었으면 새 태스크를 시작하지 않음
             if shutdown_event.is_set():
                 print("[INFO] Shutdown in progress, skipping new workitems")

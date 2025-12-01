@@ -101,6 +101,8 @@ class ProcessDefinition(BaseModel):
     subProcesses: Optional[List[SubProcess]] = []
     sequences: Optional[List[ProcessSequence]] = []
     gateways: Optional[List[ProcessGateway]] = []
+    version_tag: Optional[str] = None
+    version: Optional[str] = None
 
     def is_starting_activity(self, activity_id: str) -> bool:
         """
