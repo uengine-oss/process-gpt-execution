@@ -128,12 +128,6 @@ def _install_stub_modules():
     smtp_handler_mod.send_email = lambda *_a, **_k: None
     sys.modules["smtp_handler"] = smtp_handler_mod
 
-    agent_processor_mod = types.ModuleType("agent_processor")
-    async def handle_workitem_with_agent(*_a, **_k):
-        return None
-    agent_processor_mod.handle_workitem_with_agent = handle_workitem_with_agent
-    sys.modules["agent_processor"] = agent_processor_mod
-
 
 def _load_wiproc_module():
     _install_stub_modules()
