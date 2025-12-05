@@ -868,63 +868,6 @@ def fetch_workitem_with_submitted_status(limit=10) -> Optional[List[dict]]:
         raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
 
 
-def fetch_workitem_with_agent(limit=5) -> Optional[List[dict]]:
-    try:
-        pod_id = socket.gethostname()
-        supabase = supabase_client_var.get()
-        if supabase is None:
-            raise Exception("Supabase client is not configured for this request")
-        
-        # Supabase Client API를 사용하여 에이전트 워크아이템 조회 및 업데이트
-        env = os.getenv("ENV")
-        if env == 'dev':
-            q = supabase.table('todolist').select('*').eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').eq('tenant_id', 'uengine')
-            if CONSUMER_FILTER:
-                q = q.eq('consumer', CONSUMER_FILTER)
-            else:
-                q = q.is_('consumer', 'null')
-            response = q.limit(limit).execute()
-        else:
-            q = supabase.table('todolist').select('*').eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A').neq('tenant_id', 'uengine')
-            if CONSUMER_FILTER:
-                q = q.eq('consumer', CONSUMER_FILTER)
-            else:
-                q = q.is_('consumer', 'null')
-            response = q.limit(limit).execute()
-        
-        if not response.data:
-            return None
-        
-        # 조회된 워크아이템들의 consumer를 현재 pod_id로 업데이트
-        # 동시성 제어를 위해 조건부 업데이트 사용
-        updated_workitems = []
-        for workitem in response.data:
-            try:
-                # 조건부 업데이트: consumer가 여전히 NULL인 경우에만 업데이트
-                q_one = supabase.table('todolist').update({
-                    'consumer': pod_id,
-                    'updated_at': datetime.now().isoformat()
-                }).eq('id', workitem['id']).eq('status', 'IN_PROGRESS').eq('agent_mode', 'A2A')
-                if CONSUMER_FILTER:
-                    q_one = q_one.eq('consumer', CONSUMER_FILTER)
-                else:
-                    q_one = q_one.is_('consumer', 'null')
-                update_response = q_one.execute()
-                
-                if update_response.data:
-                    updated_workitems.append(update_response.data[0])
-                    print(f"[DEBUG] Successfully claimed agent workitem {workitem['id']} for pod {pod_id}")
-                else:
-                    print(f"[DEBUG] Agent workitem {workitem['id']} was already claimed by another pod")
-            except Exception as e:
-                print(f"[WARNING] Failed to update agent workitem {workitem['id']}: {e}")
-                continue
-        
-        return updated_workitems if updated_workitems else None
-
-    except Exception as e:
-        print(f"[ERROR] DB fetch failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"DB fetch failed: {str(e)}") from e
     
 def fetch_workitem_with_pending_status(limit=5) -> Optional[List[dict]]:
     try:

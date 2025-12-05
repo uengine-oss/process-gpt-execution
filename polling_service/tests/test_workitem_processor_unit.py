@@ -124,14 +124,6 @@ def _install_stub_modules():
     smtp_handler_mod.send_email = send_email
     sys.modules["smtp_handler"] = smtp_handler_mod
 
-    # agent_processor
-    agent_processor_mod = types.ModuleType("agent_processor")
-
-    async def handle_workitem_with_agent(*_args, **_kwargs):
-        return None
-
-    agent_processor_mod.handle_workitem_with_agent = handle_workitem_with_agent
-    sys.modules["agent_processor"] = agent_processor_mod
 
 
 def _load_workitem_processor_module():

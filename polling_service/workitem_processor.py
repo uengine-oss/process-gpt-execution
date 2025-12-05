@@ -31,7 +31,6 @@ from database import (
 from process_definition import load_process_definition
 from code_executor import execute_python_code
 from smtp_handler import generate_email_template, send_email
-from agent_processor import handle_workitem_with_agent
 from mcp_processor import mcp_processor
 
 

@@ -6,7 +6,7 @@ import socket
 
 from database import (
     setting_database, fetch_workitem_with_submitted_status, 
-    fetch_workitem_with_agent, upsert_workitem, cleanup_stale_consumers,
+    upsert_workitem, cleanup_stale_consumers,
     fetch_process_definition_by_version, fetch_workitem_with_pending_status,
     fetch_process_instance, upsert_process_instance
 )
